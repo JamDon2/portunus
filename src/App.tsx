@@ -16,9 +16,11 @@ interface SearchResult {
 function ResultIcon({
   icon_path,
   title,
+  kind,
 }: {
   icon_path?: string;
   title: string;
+  kind: string;
 }) {
   const [failed, setFailed] = useState(false);
 
@@ -30,6 +32,23 @@ function ResultIcon({
         alt=""
         onError={() => setFailed(true)}
       />
+    );
+  }
+
+  if (kind === "calc") {
+    return (
+      <div className="result-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
+          <rect x="4" y="2" width="16" height="20" rx="2" />
+          <rect x="7" y="5" width="10" height="4" rx="1" />
+          <circle cx="8" cy="14" r="1" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="14" r="1" fill="currentColor" stroke="none" />
+          <circle cx="16" cy="14" r="1" fill="currentColor" stroke="none" />
+          <circle cx="8" cy="18" r="1" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="18" r="1" fill="currentColor" stroke="none" />
+          <circle cx="16" cy="18" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      </div>
     );
   }
 
@@ -154,7 +173,7 @@ function App() {
                 className={`result-item${i === selectedIndex ? " selected" : ""}`}
                 onMouseEnter={() => setSelectedIndex(i)}
               >
-                <ResultIcon icon_path={result.icon_path} title={result.title} />
+                <ResultIcon icon_path={result.icon_path} title={result.title} kind={result.kind} />
                 <div className="result-text">
                   <div className="result-title">{result.title}</div>
                   {result.subtitle && (

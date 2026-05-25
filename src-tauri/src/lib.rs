@@ -129,6 +129,7 @@ pub fn run() {
                 let _ = window.hide();
             }
             start_socket_listener(app.handle().clone());
+            bg_registry.write().unwrap().register(providers::calc::CalcProvider);
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let provider = providers::apps::AppProvider::new();

@@ -1,0 +1,46 @@
+use std::rc::Rc;
+
+use exp_rs::{interp, EvalContext};
+
+use super::{Provider, SearchResult};
+
+pub struct CalcProvider;
+
+impl Provider for CalcProvider {
+    fn id(&self) -> &'static str {
+        "calc"
+    }
+
+    fn search(&self, query: &str) -> Vec<SearchResult> {
+        let q = query.trim();
+        if q.is_empty() {
+            return vec![];
+        }
+        // Skip queries with no digits or math characters to avoid parsing overhead.
+        if !q.chars().any(|c| c.is_ascii_digit() || "+-*/^%().".contains(c)) {
+            return vec![];
+        }
+        let mut ctx = EvalContext::new();
+        let _ = ctx.register_native_function("log2", 1, |args| args[0].log2());
+        let Ok(result) = interp(q, Some(Rc::new(ctx))) else {
+            return vec![];
+        };
+        if !result.is_finite() {
+            return vec![];
+        }
+        let display = if result.fract() == 0.0 && result.abs() < 1e15 {
+            format!("{:.0}", result)
+        } else {
+            format!("{}", result)
+        };
+        vec![SearchResult {
+            id: "calc:result".to_string(),
+            title: display,
+            subtitle: Some(q.to_string()),
+            kind: "calc".to_string(),
+            score: 1_000_000.0,
+            exec: None,
+            icon_path: None,
+        }]
+    }
+}

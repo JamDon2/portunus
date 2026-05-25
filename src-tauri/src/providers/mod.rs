@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod calc;
 
 use serde::Serialize;
 
