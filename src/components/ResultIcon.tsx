@@ -1,0 +1,72 @@
+import { useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { ClockIcon, PlusIcon } from "../icons";
+
+interface Props {
+  icon_path?: string;
+  title: string;
+  kind: string;
+}
+
+export default function ResultIcon({ icon_path, title, kind }: Props) {
+  const [failed, setFailed] = useState(false);
+
+  if (icon_path && !failed) {
+    return (
+      <img
+        className="result-icon-img"
+        src={convertFileSrc(icon_path)}
+        alt=""
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  if (kind === "calc") {
+    return (
+      <div className="result-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
+          <rect x="4" y="2" width="16" height="20" rx="2" />
+          <rect x="7" y="5" width="10" height="4" rx="1" />
+          <circle cx="8" cy="14" r="1" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="14" r="1" fill="currentColor" stroke="none" />
+          <circle cx="16" cy="14" r="1" fill="currentColor" stroke="none" />
+          <circle cx="8" cy="18" r="1" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="18" r="1" fill="currentColor" stroke="none" />
+          <circle cx="16" cy="18" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      </div>
+    );
+  }
+
+  if (kind === "timer-item" || kind === "timer-create" || kind === "timer-expired") {
+    return <div className="result-icon"><ClockIcon /></div>;
+  }
+
+  if (kind === "timer-new") {
+    return <div className="result-icon"><PlusIcon /></div>;
+  }
+
+  if (kind === "folder") {
+    return (
+      <div className="result-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
+          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+        </svg>
+      </div>
+    );
+  }
+
+  if (kind === "file") {
+    return (
+      <div className="result-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+      </div>
+    );
+  }
+
+  return <div className="result-icon">{title[0]}</div>;
+}
