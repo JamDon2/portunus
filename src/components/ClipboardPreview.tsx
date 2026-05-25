@@ -13,13 +13,13 @@ export default function ClipboardPreview({ result, onPaste }: Props) {
 
   const [text, setText] = useState<string | null>(null);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [imgLoaded, setImgLoaded] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setText(null);
-    setImgSrc(null);
     setError(false);
+    setImgLoaded(false);
 
     invoke<number[]>("decode_clipboard_entry", { id })
       .then(bytes => {
@@ -31,8 +31,10 @@ export default function ClipboardPreview({ result, onPaste }: Props) {
           const mime = isPng ? "image/png" : "image/jpeg";
           const url = URL.createObjectURL(new Blob([arr], { type: mime }));
           setImgSrc(url);
+          setText(null);
         } else {
           setText(new TextDecoder().decode(arr));
+          setImgSrc(null);
         }
       })
       .catch(() => { if (!cancelled) setError(true); });
@@ -55,7 +57,12 @@ export default function ClipboardPreview({ result, onPaste }: Props) {
 
       {imgSrc && (
         <div className="clipboard-img-wrap">
-          <img src={imgSrc} alt="clipboard image" />
+          <img
+            src={imgSrc}
+            alt="clipboard image"
+            style={{ opacity: imgLoaded ? 1 : 0, transition: "opacity 0.12s ease" }}
+            onLoad={() => setImgLoaded(true)}
+          />
         </div>
       )}
 
