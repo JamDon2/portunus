@@ -183,8 +183,11 @@ function PdfPreview({ path }: { path: string }) {
     return () => { cancelled = true; };
   }, [path]);
 
+  const isLoading = !src && !error;
+
   return (
-    <div className="pdf-preview-wrap">
+    <div className={`pdf-preview-wrap${isLoading ? " is-loading" : ""}`}>
+      {isLoading && <div className="pdf-skeleton" />}
       {src && (
         <img
           src={src}
