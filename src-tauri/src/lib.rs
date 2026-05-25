@@ -103,6 +103,63 @@ fn is_apps_ready() -> bool {
 }
 
 #[tauri::command]
+async fn render_pdf_page(path: String) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || render_pdf_page_blocking(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn render_pdf_page_blocking(path: &str) -> Result<Vec<u8>, String> {
+    use image::ImageFormat;
+    use pdfium_render::prelude::*;
+
+    eprintln!("[pdf] rendering: {path}");
+
+    let bindings = Pdfium::bind_to_system_library().map_err(|e| {
+        let msg = e.to_string();
+        eprintln!("[pdf] bind_to_system_library failed: {msg}");
+        msg
+    })?;
+    let pdfium = Pdfium::new(bindings);
+
+    let doc = pdfium.load_pdf_from_file(&path, None).map_err(|e| {
+        let msg = e.to_string();
+        eprintln!("[pdf] load_pdf_from_file failed: {msg}");
+        msg
+    })?;
+
+    eprintln!("[pdf] loaded, {} page(s)", doc.pages().len());
+
+    let page = doc.pages().get(0).map_err(|e| {
+        let msg = e.to_string();
+        eprintln!("[pdf] get page 0 failed: {msg}");
+        msg
+    })?;
+
+    let bitmap = page
+        .render_with_config(&PdfRenderConfig::new().set_target_width(800))
+        .map_err(|e| {
+            let msg = e.to_string();
+            eprintln!("[pdf] render failed: {msg}");
+            msg
+        })?;
+
+    let mut bytes = Vec::new();
+    bitmap
+        .as_image()
+        .into_rgb8()
+        .write_to(&mut std::io::Cursor::new(&mut bytes), ImageFormat::Jpeg)
+        .map_err(|e| {
+            let msg = e.to_string();
+            eprintln!("[pdf] jpeg encode failed: {msg}");
+            msg
+        })?;
+
+    eprintln!("[pdf] done, {} bytes", bytes.len());
+    Ok(bytes)
+}
+
+#[tauri::command]
 fn hide_window(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
@@ -142,7 +199,7 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![search, launch_app, hide_window, is_apps_ready])
+        .invoke_handler(tauri::generate_handler![search, launch_app, hide_window, is_apps_ready, render_pdf_page])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

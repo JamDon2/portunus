@@ -22,7 +22,8 @@ html, body, #root {
   --fg-mute:    #8f857a;
   --fg-dim:     #5e564e;
 
-  --accent:     #d6a370;
+  --accent:      #d6a370;
+  --accent-soft: #d6a37020;
 
   --kbd-bg:     #2a2521;
   --kbd-fg:     #b8ad9f;
@@ -125,7 +126,7 @@ html, body, #root {
 
 .result-row {
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 28px 1fr auto;
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
@@ -163,6 +164,13 @@ html, body, #root {
 }
 
 .result-text { min-width: 0; }
+
+.result-meta {
+  font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 
 .result-title {
   font-size: 14px;
@@ -309,4 +317,96 @@ kbd {
   letter-spacing: 0.18em;
   text-transform: uppercase;
   font-size: 10px;
+}
+
+/* ---------- file / folder preview ---------- */
+
+.file-preview {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.file-preview-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.file-preview-icon-wrap {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-preview-head-text {
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.file-preview-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-preview-tag {
+  margin-top: 5px;
+  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-mute);
+}
+
+.file-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font: 400 10px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg);
+}
+
+.file-preview-meta-key {
+  color: var(--fg-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ---------- pdf preview ---------- */
+
+.pdf-preview-wrap {
+  border-radius: 4px;
+  background: #15120f;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.pdf-preview-wrap img {
+  width: 100%;
+  height: auto;
+  display: block;
+  transition: opacity 0.15s ease;
+}
+
+.pdf-preview-msg {
+  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-dim);
+  padding: 24px;
 }

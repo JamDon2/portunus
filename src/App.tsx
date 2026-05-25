@@ -3,6 +3,42 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function formatDate(ts: number): string {
+  return new Date(ts * 1000).toLocaleDateString("en-US", {
+    year: "numeric", month: "short", day: "numeric",
+  });
+}
+
+function fileKind(title: string, isFolder: boolean): string {
+  if (isFolder) return "Folder";
+  const ext = title.split(".").pop()?.toLowerCase() ?? "";
+  const map: Record<string, string> = {
+    pdf: "PDF Document",
+    png: "PNG Image", jpg: "JPEG Image", jpeg: "JPEG Image",
+    gif: "GIF Image", webp: "WebP Image", svg: "SVG Image",
+    ts: "TypeScript Source", tsx: "TypeScript Source",
+    js: "JavaScript Source", jsx: "JavaScript Source",
+    rs: "Rust Source", py: "Python Source", go: "Go Source",
+    md: "Markdown", txt: "Text File",
+    zip: "Archive", tar: "Archive", gz: "Archive",
+    bz2: "Archive", xz: "Archive", "7z": "Archive", rar: "Archive",
+    mp4: "Video", mkv: "Video", mov: "Video", avi: "Video",
+    mp3: "Audio", flac: "Audio", wav: "Audio", ogg: "Audio",
+    json: "JSON Data", xml: "XML Document",
+    html: "HTML Document", css: "CSS Stylesheet",
+    sh: "Shell Script", toml: "TOML Config",
+    yaml: "YAML Config", yml: "YAML Config",
+  };
+  return map[ext] ?? "File";
+}
+
 interface SearchResult {
   id: string;
   title: string;
@@ -105,9 +141,110 @@ function AppPreview({ result, onLaunch }: { result: SearchResult; onLaunch: () =
   );
 }
 
+const pdfPromiseCache = new Map<string, Promise<string>>();
+const pdfUrlCache = new Map<string, string>();
+
+function getPdfUrl(path: string): Promise<string> {
+  if (!pdfPromiseCache.has(path)) {
+    pdfPromiseCache.set(path,
+      invoke<number[]>("render_pdf_page", { path }).then((bytes) => {
+        const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
+        pdfUrlCache.set(path, url);
+        return url;
+      })
+    );
+  }
+  return pdfPromiseCache.get(path)!;
+}
+
+function PdfPreview({ path }: { path: string }) {
+  const [src, setSrc] = useState<string | null>(() => pdfUrlCache.get(path) ?? null);
+  const [loaded, setLoaded] = useState(() => pdfUrlCache.has(path));
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    const cached = pdfUrlCache.get(path);
+    if (cached) {
+      setSrc(cached);
+      setLoaded(true);
+      setError(false);
+      return;
+    }
+    let cancelled = false;
+    setSrc(null);
+    setLoaded(false);
+    setError(false);
+    getPdfUrl(path)
+      .then((url) => { if (!cancelled) setSrc(url); })
+      .catch((e) => {
+        console.error("[pdf] render_pdf_page failed:", e);
+        if (!cancelled) setError(true);
+      });
+    return () => { cancelled = true; };
+  }, [path]);
+
+  return (
+    <div className="pdf-preview-wrap">
+      {src && (
+        <img
+          src={src}
+          alt="PDF preview"
+          style={{ opacity: loaded ? 1 : 0 }}
+          onLoad={() => setLoaded(true)}
+        />
+      )}
+      {error && <span className="pdf-preview-msg">Preview unavailable</span>}
+    </div>
+  );
+}
+
+function FilePreview({ result }: { result: SearchResult }) {
+  const isFolder = result.kind === "folder";
+  const kind = fileKind(result.title, isFolder);
+  const tag = [kind, !isFolder && result.file_size != null ? formatBytes(result.file_size) : null]
+    .filter(Boolean).join(" · ");
+  const filePath = result.subtitle ? `${result.subtitle}/${result.title}` : result.title;
+  const isPdf = kind === "PDF Document";
+
+  const icon = isFolder ? (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="22" height="22">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="22" height="22">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </svg>
+  );
+
+  return (
+    <div className="file-preview">
+      <div className="file-preview-head">
+        <div className="file-preview-icon-wrap">{icon}</div>
+        <div className="file-preview-head-text">
+          <div className="file-preview-title">{result.title}</div>
+          <div className="file-preview-tag">{tag}</div>
+        </div>
+      </div>
+
+      {isPdf && <PdfPreview path={filePath} />}
+
+      <div className="file-preview-meta">
+        {result.modified && <span><span className="file-preview-meta-key">Modified </span>{formatDate(result.modified)}</span>}
+        {result.created && <span><span className="file-preview-meta-key">Created </span>{formatDate(result.created)}</span>}
+        {!isFolder && result.file_size != null && <span><span className="file-preview-meta-key">Size </span>{formatBytes(result.file_size)}</span>}
+        <span><span className="file-preview-meta-key">Kind </span>{kind}</span>
+      </div>
+    </div>
+  );
+}
+
 function PreviewPanel({ result, onLaunch }: { result: SearchResult | null; onLaunch: () => void }) {
   if (result?.kind === "app") {
     return <AppPreview result={result} onLaunch={onLaunch} />;
+  }
+  if (result?.kind === "file" || result?.kind === "folder") {
+    return <FilePreview result={result} />;
   }
   return <div className="preview-empty" />;
 }
@@ -241,8 +378,7 @@ function App() {
                 className={`result-row${i === selectedIndex ? " selected" : ""}`}
                 role="option"
                 aria-selected={i === selectedIndex}
-                onMouseEnter={() => setSelectedIndex(i)}
-                onClick={() => launch(result.exec)}
+                onClick={() => { setSelectedIndex(i); launch(result.exec); }}
               >
                 <ResultIcon icon_path={result.icon_path} title={result.title} kind={result.kind} />
                 <div className="result-text">
@@ -250,6 +386,11 @@ function App() {
                   {result.subtitle && (
                     <div className="result-subtitle">{result.subtitle}</div>
                   )}
+                </div>
+                <div className="result-meta">
+                  {result.kind === "file" && result.file_size != null
+                    ? formatBytes(result.file_size)
+                    : ""}
                 </div>
               </div>
             ))}
