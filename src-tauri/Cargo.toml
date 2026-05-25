@@ -28,4 +28,5 @@ exp-rs = "0.2"
 pdfium-render = { version = "0.8", features = ["image"] }
 image = "0.25"
 roxmltree = "0.20"
+toml = "1"
 

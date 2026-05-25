@@ -7,17 +7,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+// Category base scores (not user-tunable; define search priority ordering).
 pub const SCORE_CALC: f32 = 3_000_000.0;
 pub const SCORE_APP: f32 = 2_000_000.0;
 pub const SCORE_FILE: f32 = 1_000_000.0;
 pub const SCORE_FOLDER: f32 = 0.0;
 
-pub const MIN_NUCLEO_SCORE: u32 = 80;
-pub const MIN_NUCLEO_SCORE_APP: u32 = 50;
-pub const RECENCY_WEIGHT: f32 = 50.0;
-const ONE_YEAR_SECS: f64 = 365.0 * 24.0 * 3600.0;
-
-pub fn recency_bonus(created: Option<u64>, modified: Option<u64>) -> f32 {
+pub fn recency_bonus(created: Option<u64>, modified: Option<u64>, weight: f32) -> f32 {
+    const ONE_YEAR_SECS: f64 = 365.0 * 24.0 * 3600.0;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -32,7 +29,7 @@ pub fn recency_bonus(created: Option<u64>, modified: Option<u64>) -> f32 {
     }
     let age = (now - newest) as f64;
     let factor = (1.0 - age / ONE_YEAR_SECS).max(0.0) as f32;
-    factor * RECENCY_WEIGHT
+    factor * weight
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,12 +54,14 @@ pub trait Provider: Send + Sync {
 
 pub struct PluginRegistry {
     providers: Vec<Box<dyn Provider>>,
+    max_results: usize,
 }
 
 impl PluginRegistry {
-    pub fn new() -> Self {
+    pub fn new(max_results: usize) -> Self {
         Self {
             providers: Vec::new(),
+            max_results,
         }
     }
 
@@ -81,14 +80,14 @@ impl PluginRegistry {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        // deduplicate by exec: same file may appear from both FileProvider and RecentProvider;
-        // keep the highest-scored occurrence (already first after sort)
+        // Deduplicate by exec: same file may appear from both FileProvider and RecentProvider;
+        // keep the highest-scored occurrence (already first after sort).
         let mut seen = std::collections::HashSet::new();
         results.retain(|r| match &r.exec {
             Some(e) => seen.insert(e.clone()),
             None => true,
         });
-        results.truncate(8);
+        results.truncate(self.max_results);
         results
     }
 }

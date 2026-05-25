@@ -5,6 +5,7 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use super::{Provider, SearchResult};
+use crate::config::{FilesConfig, SearchConfig};
 
 struct FileEntry {
     path: String,
@@ -18,16 +19,18 @@ struct FileEntry {
 
 pub struct FileProvider {
     entries: Vec<FileEntry>,
+    min_score: u32,
+    recency_weight: f32,
 }
 
 impl FileProvider {
-    pub fn new() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        let roots: Vec<(PathBuf, usize)> = vec![
-            (PathBuf::from(&home).join("Downloads"), 2),
-            (PathBuf::from(&home).join("Documents"), 2),
-            (PathBuf::from(&home).join(".config").join("hypr"), 2),
-        ];
+    pub fn new(files_cfg: &FilesConfig, search_cfg: &SearchConfig) -> Self {
+        let roots: Vec<(PathBuf, usize)> = files_cfg
+            .dirs
+            .iter()
+            .map(|d| (crate::config::Config::expand_path(&d.path), d.depth))
+            .collect();
+
         let mut entries = Vec::new();
         for (dir, depth) in &roots {
             if !dir.is_dir() {
@@ -81,7 +84,11 @@ impl FileProvider {
                 });
             }
         }
-        Self { entries }
+        Self {
+            entries,
+            min_score: search_cfg.min_score_file,
+            recency_weight: search_cfg.recency_weight,
+        }
     }
 }
 
@@ -108,7 +115,7 @@ impl Provider for FileProvider {
             .filter_map(|entry| {
                 let score =
                     pattern.score(Utf32Str::new(&entry.name, &mut char_buf), &mut matcher)?;
-                if score < super::MIN_NUCLEO_SCORE {
+                if score < self.min_score {
                     return None;
                 }
                 let base = if entry.is_dir {
@@ -116,7 +123,8 @@ impl Provider for FileProvider {
                 } else {
                     super::SCORE_FILE
                 };
-                let recency = super::recency_bonus(entry.created, entry.modified);
+                let recency =
+                    super::recency_bonus(entry.created, entry.modified, self.recency_weight);
                 let escaped = entry.path.replace('"', "\\\"");
                 Some(SearchResult {
                     id: format!("file:{}", entry.path),

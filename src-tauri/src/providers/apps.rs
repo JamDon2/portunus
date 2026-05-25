@@ -6,6 +6,7 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use super::{Provider, SearchResult};
+use crate::config::SearchConfig;
 
 // ── data types ───────────────────────────────────────────────────────────────
 
@@ -30,11 +31,15 @@ struct ParsedEntry {
 
 pub struct AppProvider {
     apps: Vec<DesktopEntry>,
+    min_score: u32,
 }
 
 impl AppProvider {
-    pub fn new() -> Self {
-        Self { apps: load_apps() }
+    pub fn new(search_cfg: &SearchConfig) -> Self {
+        Self {
+            apps: load_apps(),
+            min_score: search_cfg.min_score_app,
+        }
     }
 }
 
@@ -307,7 +312,7 @@ impl Provider for AppProvider {
             .iter()
             .filter_map(|app| {
                 let score = pattern.score(Utf32Str::new(&app.name, &mut char_buf), &mut matcher)?;
-                if score < super::MIN_NUCLEO_SCORE_APP && query.chars().count() >= 4 {
+                if score < self.min_score && query.chars().count() >= 4 {
                     return None;
                 }
                 Some(SearchResult {

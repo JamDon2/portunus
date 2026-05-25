@@ -5,6 +5,7 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use super::{Provider, SearchResult};
+use crate::config::{RecentConfig, SearchConfig};
 
 struct RecentEntry {
     path: String,
@@ -19,12 +20,16 @@ struct RecentEntry {
 
 pub struct RecentProvider {
     entries: Vec<RecentEntry>,
+    min_score: u32,
+    recency_weight: f32,
 }
 
 impl RecentProvider {
-    pub fn new() -> Self {
+    pub fn new(recent_cfg: &RecentConfig, search_cfg: &SearchConfig) -> Self {
         Self {
-            entries: load_entries(),
+            entries: load_entries(recent_cfg.max_entries),
+            min_score: search_cfg.min_score_file,
+            recency_weight: search_cfg.recency_weight,
         }
     }
 }
@@ -52,7 +57,7 @@ impl Provider for RecentProvider {
             .filter_map(|entry| {
                 let score =
                     pattern.score(Utf32Str::new(&entry.name, &mut char_buf), &mut matcher)?;
-                if score < super::MIN_NUCLEO_SCORE {
+                if score < self.min_score {
                     return None;
                 }
                 let base = if entry.is_dir {
@@ -60,7 +65,8 @@ impl Provider for RecentProvider {
                 } else {
                     super::SCORE_FILE
                 };
-                let recency = super::recency_bonus(None, Some(entry.visited));
+                let recency =
+                    super::recency_bonus(None, Some(entry.visited), self.recency_weight);
                 let escaped = entry.path.replace('"', "\\\"");
                 Some(SearchResult {
                     id: format!("recent:{}", entry.path),
@@ -79,7 +85,7 @@ impl Provider for RecentProvider {
     }
 }
 
-fn load_entries() -> Vec<RecentEntry> {
+fn load_entries(max_entries: usize) -> Vec<RecentEntry> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let xbel_path = PathBuf::from(home).join(".local/share/recently-used.xbel");
 
@@ -161,12 +167,10 @@ fn load_entries() -> Vec<RecentEntry> {
     }
 
     entries.reverse();
-    entries.truncate(500);
+    entries.truncate(max_entries);
     entries
 }
 
-// Decodes a "file:///path/to/file" URI into an absolute path string.
-// Returns None for non-file:// URIs (smb://, ftp://, etc.).
 fn decode_file_uri(href: &str) -> Option<String> {
     let encoded = href.strip_prefix("file://")?;
     let raw = encoded.as_bytes();
@@ -186,7 +190,6 @@ fn decode_file_uri(href: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-// Parses "YYYY-MM-DDTHH:MM:SS[.frac][Z]" into a Unix timestamp (UTC).
 fn parse_iso8601(s: &str) -> Option<u64> {
     let s = s.get(..19)?;
     let b = s.as_bytes();
@@ -205,7 +208,6 @@ fn parse_iso8601(s: &str) -> Option<u64> {
     let mi: i64 = s[14..16].parse().ok()?;
     let se: i64 = s[17..19].parse().ok()?;
 
-    // Julian Day Number → Unix day (JDN of 1970-01-01 is 2440588)
     let a = (14 - mo) / 12;
     let yy = y + 4800 - a;
     let m = mo + 12 * a - 3;

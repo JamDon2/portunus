@@ -1,3 +1,4 @@
+mod config;
 mod providers;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -108,7 +109,7 @@ struct PdfWorkerHandle {
     tx: std::sync::mpsc::SyncSender<PdfRenderMsg>,
 }
 
-fn start_pdf_worker() -> PdfWorkerHandle {
+fn start_pdf_worker(render_width: u32) -> PdfWorkerHandle {
     let (tx, rx) = std::sync::mpsc::sync_channel::<PdfRenderMsg>(4);
     std::thread::spawn(move || {
         use image::ImageFormat;
@@ -136,7 +137,9 @@ fn start_pdf_worker() -> PdfWorkerHandle {
                         msg
                     })?;
                     let bitmap = page
-                        .render_with_config(&PdfRenderConfig::new().set_target_width(800))
+                        .render_with_config(
+                            &PdfRenderConfig::new().set_target_width(render_width as i32),
+                        )
                         .map_err(|e| {
                             let msg = e.to_string();
                             eprintln!("[pdf] render failed: {msg}");
@@ -190,26 +193,42 @@ pub fn run() {
         return;
     }
 
-    let registry: Registry = Arc::new(RwLock::new(providers::PluginRegistry::new()));
+    let cfg = config::Config::load();
+    let search_cfg = cfg.search.clone();
+    let files_cfg = cfg.files;
+    let recent_cfg = cfg.recent;
+    let providers_cfg = cfg.providers;
+    let pdf_render_width = cfg.pdf.render_width;
+    let max_results = cfg.general.max_results;
+
+    let registry: Registry = Arc::new(RwLock::new(providers::PluginRegistry::new(max_results)));
     let bg_registry = Arc::clone(&registry);
 
     tauri::Builder::default()
         .manage(registry)
-        .manage(start_pdf_worker())
+        .manage(start_pdf_worker(pdf_render_width))
         .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
             }
             start_socket_listener(app.handle().clone());
-            bg_registry.write().unwrap().register(providers::calc::CalcProvider);
+            if providers_cfg.calc {
+                bg_registry.write().unwrap().register(providers::calc::CalcProvider);
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                let file_provider = providers::files::FileProvider::new();
-                bg_registry.write().unwrap().register(file_provider);
-                let recent_provider = providers::recent::RecentProvider::new();
-                bg_registry.write().unwrap().register(recent_provider);
-                let app_provider = providers::apps::AppProvider::new();
-                bg_registry.write().unwrap().register(app_provider);
+                if providers_cfg.files {
+                    let file_provider = providers::files::FileProvider::new(&files_cfg, &search_cfg);
+                    bg_registry.write().unwrap().register(file_provider);
+                }
+                if providers_cfg.recent {
+                    let recent_provider = providers::recent::RecentProvider::new(&recent_cfg, &search_cfg);
+                    bg_registry.write().unwrap().register(recent_provider);
+                }
+                if providers_cfg.apps {
+                    let app_provider = providers::apps::AppProvider::new(&search_cfg);
+                    bg_registry.write().unwrap().register(app_provider);
+                }
                 APPS_READY.store(true, Ordering::Release);
                 let _ = handle.emit("apps-ready", ());
             });
