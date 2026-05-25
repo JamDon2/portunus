@@ -13,11 +13,7 @@ interface SearchResult {
   icon_path?: string;
 }
 
-function ResultIcon({
-  icon_path,
-  title,
-  kind,
-}: {
+function ResultIcon({ icon_path, title, kind }: {
   icon_path?: string;
   title: string;
   kind: string;
@@ -55,6 +51,43 @@ function ResultIcon({
   return <div className="result-icon">{title[0]}</div>;
 }
 
+function AppPreview({ result, onLaunch }: { result: SearchResult; onLaunch: () => void }) {
+  const [iconFailed, setIconFailed] = useState(false);
+
+  return (
+    <div className="app-preview">
+      <div className="app-preview-hero">
+        {result.icon_path && !iconFailed ? (
+          <img
+            className="app-preview-icon"
+            src={convertFileSrc(result.icon_path)}
+            alt=""
+            onError={() => setIconFailed(true)}
+          />
+        ) : (
+          <div className="app-preview-icon-fallback">{result.title[0]}</div>
+        )}
+        <div>
+          <div className="app-preview-name">{result.title}</div>
+          {result.subtitle && <div className="app-preview-sub">{result.subtitle}</div>}
+        </div>
+      </div>
+      <div className="app-preview-actions">
+        <button className="btn-primary" onClick={onLaunch}>
+          Launch <span className="btn-kbd">↵</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PreviewPanel({ result, onLaunch }: { result: SearchResult | null; onLaunch: () => void }) {
+  if (result?.kind === "app") {
+    return <AppPreview result={result} onLaunch={onLaunch} />;
+  }
+  return <div className="preview-empty" />;
+}
+
 function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -74,7 +107,6 @@ function App() {
     };
   }, []);
 
-  // Focus input when window is shown (state is reset on hide instead)
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let active = true;
@@ -90,7 +122,6 @@ function App() {
     };
   }, []);
 
-  // Debounced search
   useEffect(() => {
     if (!query.trim()) {
       setResults([]);
@@ -108,12 +139,18 @@ function App() {
     };
   }, [query]);
 
-  // Reset selection when results change
   useEffect(() => {
     setSelectedIndex(0);
   }, [results]);
 
-  // Keyboard navigation
+  const launch = (exec?: string) => {
+    if (exec) {
+      setQuery("");
+      setResults([]);
+      invoke("launch_app", { exec });
+    }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowDown") {
@@ -123,12 +160,7 @@ function App() {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
-        const exec = results[selectedIndex]?.exec;
-        if (exec) {
-          setQuery("");
-          setResults([]);
-          invoke("launch_app", { exec });
-        }
+        launch(results[selectedIndex]?.exec);
       } else if (e.key === "Escape") {
         e.preventDefault();
         setQuery("");
@@ -140,6 +172,9 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [results, selectedIndex]);
 
+  const selected = results[selectedIndex] ?? null;
+  const calcResult = results.find((r) => r.kind === "calc");
+
   return (
     <div className="launcher" ref={containerRef}>
       <div className="card">
@@ -149,29 +184,41 @@ function App() {
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            strokeWidth="2.2"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.35-4.35" />
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
           </svg>
           <input
             ref={inputRef}
             className="search-input"
             type="text"
-            placeholder={loading ? "Loading…" : "Search…"}
+            placeholder={loading ? "Loading…" : "Search apps…"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
+            spellCheck={false}
           />
+          {calcResult && (
+            <div className="calc-inline">= {calcResult.title}</div>
+          )}
         </div>
 
-        {results.length > 0 && (
-          <div className="results">
+        <div className="body">
+          <div className="results-col" role="listbox">
+            {query && results.length === 0 && (
+              <div className="results-empty">No results</div>
+            )}
             {results.map((result, i) => (
               <div
                 key={result.id}
-                className={`result-item${i === selectedIndex ? " selected" : ""}`}
+                className={`result-row${i === selectedIndex ? " selected" : ""}`}
+                role="option"
+                aria-selected={i === selectedIndex}
                 onMouseEnter={() => setSelectedIndex(i)}
+                onClick={() => launch(result.exec)}
               >
                 <ResultIcon icon_path={result.icon_path} title={result.title} kind={result.kind} />
                 <div className="result-text">
@@ -183,7 +230,20 @@ function App() {
               </div>
             ))}
           </div>
-        )}
+
+          <div className="preview-col">
+            <PreviewPanel result={selected} onLaunch={() => launch(selected?.exec)} />
+          </div>
+        </div>
+
+        <div className="footer">
+          <div className="hints">
+            <span className="hint"><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+            <span className="hint"><kbd>↵</kbd> open</span>
+            <span className="hint"><kbd>Esc</kbd> close</span>
+          </div>
+          <div className="brand">Portunus</div>
+        </div>
       </div>
     </div>
   );

@@ -28,10 +28,12 @@ impl Provider for CalcProvider {
         if !result.is_finite() {
             return vec![];
         }
-        let display = if result.fract() == 0.0 && result.abs() < 1e15 {
-            format!("{:.0}", result)
+        let rounded = (result * 1e10).round() / 1e10;
+        let display = if rounded.fract() == 0.0 && rounded.abs() < 1e15 {
+            format!("{:.0}", rounded)
         } else {
-            format!("{}", result)
+            let s = format!("{:.10}", rounded);
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
         };
         vec![SearchResult {
             id: "calc:result".to_string(),
