@@ -214,10 +214,10 @@ const STYLES = `
 
 /* Hint */
 .dict-hint {
-  padding: 22px 20px;
+  padding: 20px 20px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   flex: 1;
 }
 .dict-hint-hero {
@@ -237,24 +237,39 @@ const STYLES = `
   color: var(--fg-mute);
   line-height: 1.55;
 }
-.dict-hint-box {
+.dict-hint-divider {
+  height: 1px;
+  background: var(--line-soft);
+}
+.dict-hint-prose {
+  font-size: 12px;
+  color: var(--fg-mute);
+  line-height: 1.7;
+}
+.dict-hint-token {
+  font: 500 11.5px/1 "JetBrains Mono","Fira Code",monospace;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+.dict-hint-example {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 9px 12px;
   background: #15120f;
-  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 12px 14px;
+  border-left: 2px solid var(--accent);
 }
-.dict-hint-label {
-  font: 400 9px/1 "JetBrains Mono","Fira Code",monospace;
-  color: var(--fg-dim);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  margin-bottom: 9px;
-}
-.dict-hint-cmd {
-  font: 500 13px/1.8 "JetBrains Mono","Fira Code",monospace;
+.dict-hint-ex-cmd {
+  font: 600 13px/1 "JetBrains Mono","Fira Code",monospace;
   color: var(--accent);
 }
-.dict-hint-arg { color: var(--fg-mute); }
+.dict-hint-ex-word {
+  font: 400 13px/1 "JetBrains Mono","Fira Code",monospace;
+  color: var(--fg-mute);
+}
 `;
 
 if (typeof document !== 'undefined') {
@@ -288,18 +303,24 @@ function HintPanel() {
         <div>
           <div className="dict-hint-name">WordNet Dictionary</div>
           <div className="dict-hint-desc">
-            Look up definitions, synonyms,<br />and usage examples for any word.
+            Definitions, synonyms, and usage examples for any English word.
           </div>
         </div>
       </div>
-      <div className="dict-hint-box">
-        <div className="dict-hint-label">Usage</div>
-        <div className="dict-hint-cmd">
-          define <span className="dict-hint-arg">serendipity</span>
-        </div>
-        <div className="dict-hint-cmd">
-          dict <span className="dict-hint-arg">word</span>
-        </div>
+
+      <div className="dict-hint-divider" />
+
+      <div className="dict-hint-prose">
+        Type{' '}
+        <span className="dict-hint-token">define</span>
+        {' '}or{' '}
+        <span className="dict-hint-token">dict</span>
+        {' '}followed by any word:
+      </div>
+
+      <div className="dict-hint-example">
+        <span className="dict-hint-ex-cmd">define</span>
+        <span className="dict-hint-ex-word">serendipity</span>
       </div>
     </div>
   );
