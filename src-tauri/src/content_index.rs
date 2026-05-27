@@ -161,6 +161,26 @@ impl ContentIndex {
         Ok(results)
     }
 
+    pub fn remove_path(&self, path: &str) -> rusqlite::Result<()> {
+        let db = self.db.lock().unwrap();
+        db.execute("DELETE FROM content_fts WHERE path = ?", [path])?;
+        db.execute("DELETE FROM file_meta WHERE path = ?", [path])?;
+        Ok(())
+    }
+
+    fn get_meta(&self, path: &str) -> rusqlite::Result<Option<StoredMeta>> {
+        let db = self.db.lock().unwrap();
+        match db.query_row(
+            "SELECT mtime, size FROM file_meta WHERE path = ?",
+            [path],
+            |r| Ok(StoredMeta { mtime: r.get(0)?, size: r.get(1)? }),
+        ) {
+            Ok(m) => Ok(Some(m)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn clear(&self) -> rusqlite::Result<()> {
         let db = self.db.lock().unwrap();
         db.execute_batch(
@@ -462,4 +482,67 @@ fn collect_updates(
             })
         })
         .collect()
+}
+
+// ── per-event helpers ─────────────────────────────────────────────────────────
+
+/// Called for every filesystem event path. Returns true if the index was modified.
+pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentConfig) -> bool {
+    let path_str = path.to_string_lossy().into_owned();
+
+    if !path.exists() || path.is_dir() {
+        return index.remove_path(&path_str).is_ok();
+    }
+
+    if !is_event_path_eligible(path, cfg) {
+        return index.remove_path(&path_str).is_ok();
+    }
+
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let size = meta.len();
+    if size > cfg.max_file_bytes {
+        return index.remove_path(&path_str).is_ok();
+    }
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    if let Ok(Some(m)) = index.get_meta(&path_str) {
+        if m.mtime == mtime && m.size == size {
+            return false;
+        }
+    }
+
+    match extract_text(&path_str, cfg) {
+        Ok(text) if !text.trim().is_empty() => {
+            match index.upsert_batch(&[FileUpdate { path: path_str.clone(), text, mtime, size }]) {
+                Ok(()) => { eprintln!("[content] indexed {path_str}"); true }
+                Err(e) => { eprintln!("[content] event upsert failed {path_str}: {e}"); false }
+            }
+        }
+        Ok(_) => index.remove_path(&path_str).is_ok(),
+        Err(e) => { eprintln!("[content] event extract failed {path_str}: {e}"); false }
+    }
+}
+
+fn is_event_path_eligible(path: &Path, cfg: &ContentConfig) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    for dir_entry in &cfg.dirs {
+        let dir = crate::config::Config::expand_path(&dir_entry.path);
+        if let Ok(rel) = path.strip_prefix(&dir) {
+            let effective_exts = dir_entry.extensions.as_ref().unwrap_or(&cfg.extensions);
+            if !effective_exts.contains(&ext) {
+                return false;
+            }
+            return rel.components().count() <= dir_entry.depth;
+        }
+    }
+    false
 }

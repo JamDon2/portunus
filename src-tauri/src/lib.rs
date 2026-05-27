@@ -11,6 +11,7 @@ static APPS_READY: AtomicBool = AtomicBool::new(false);
 
 type Registry = Arc<RwLock<providers::PluginRegistry>>;
 type FrecencyState = Option<Arc<frecency::FrecencyStore>>;
+type ContentWatcherTx = Arc<Mutex<Option<std::sync::mpsc::Sender<config::ContentConfig>>>>;
 
 #[derive(serde::Serialize, Clone)]
 struct ContentIndexProgress {
@@ -173,6 +174,8 @@ fn rebuild_providers(
     registry: &Registry,
     content_state: &Arc<Mutex<Option<Arc<content_index::ContentIndex>>>>,
     progress_cb: &Arc<dyn Fn(usize, usize) + Send + Sync>,
+    content_watcher_tx: &ContentWatcherTx,
+    notify_cb: &Arc<dyn Fn() + Send + Sync>,
 ) {
     // Update per-search scalars instantly (no rebuild needed).
     shared.write().unwrap().update_from(new_cfg);
@@ -190,6 +193,7 @@ fn rebuild_providers(
         let enabled = new_cfg.providers.files;
         let shared2 = Arc::clone(shared);
         let reg2 = Arc::clone(registry);
+        let ncb = Arc::clone(notify_cb);
         std::thread::spawn(move || {
             let new: Option<Box<dyn providers::Provider>> = if enabled {
                 Some(Box::new(providers::files::FileProvider::new(&files_cfg, shared2)))
@@ -198,6 +202,7 @@ fn rebuild_providers(
             };
             reg2.write().unwrap().replace("files", new);
             eprintln!("[config] files provider rebuilt");
+            ncb();
         });
     }
 
@@ -206,6 +211,7 @@ fn rebuild_providers(
         let enabled = new_cfg.providers.recent;
         let shared2 = Arc::clone(shared);
         let reg2 = Arc::clone(registry);
+        let ncb = Arc::clone(notify_cb);
         std::thread::spawn(move || {
             let new: Option<Box<dyn providers::Provider>> = if enabled {
                 Some(Box::new(providers::recent::RecentProvider::new(&recent_cfg, shared2)))
@@ -214,6 +220,7 @@ fn rebuild_providers(
             };
             reg2.write().unwrap().replace("recent", new);
             eprintln!("[config] recent provider rebuilt");
+            ncb();
         });
     }
 
@@ -221,6 +228,7 @@ fn rebuild_providers(
         let enabled = new_cfg.providers.apps;
         let shared2 = Arc::clone(shared);
         let reg2 = Arc::clone(registry);
+        let ncb = Arc::clone(notify_cb);
         std::thread::spawn(move || {
             let new: Option<Box<dyn providers::Provider>> = if enabled {
                 Some(Box::new(providers::apps::AppProvider::new(shared2)))
@@ -229,6 +237,7 @@ fn rebuild_providers(
             };
             reg2.write().unwrap().replace("apps", new);
             eprintln!("[config] apps provider rebuilt");
+            ncb();
         });
     }
 
@@ -243,6 +252,7 @@ fn rebuild_providers(
             reg.replace("calc", None);
             eprintln!("[config] calc provider disabled");
         }
+        notify_cb();
     }
 
     if new_cfg.providers.dict != old_cfg.providers.dict {
@@ -257,14 +267,20 @@ fn rebuild_providers(
             reg.replace("dict", None);
             eprintln!("[config] dict provider disabled");
         }
+        notify_cb();
     }
 
     if new_cfg.content != old_cfg.content {
         let new_content_cfg = new_cfg.content.clone();
         let old_content_cfg = old_cfg.content.clone();
+        // Notify the filesystem watcher of the new config so it can watch any added dirs.
+        if let Some(tx) = content_watcher_tx.lock().unwrap().as_ref() {
+            let _ = tx.send(new_content_cfg.clone());
+        }
         let reg2 = Arc::clone(registry);
         let ci_state = Arc::clone(content_state);
         let cb = Arc::clone(progress_cb);
+        let ncb = Arc::clone(notify_cb);
         std::thread::spawn(move || {
             // Hold the lock for the full operation (register → index) so
             // two rapid config saves can't race each other on the same DB tables.
@@ -300,10 +316,12 @@ fn rebuild_providers(
                 );
                 content_index::run_content_indexer(idx, &new_content_cfg, Some(cb));
                 eprintln!("[content] reindex complete");
+                ncb();
             } else {
                 *guard = None;
                 reg2.write().unwrap().replace("content", None);
                 eprintln!("[content] content provider disabled");
+                ncb();
             }
         });
     }
@@ -317,6 +335,8 @@ fn start_config_watcher(
     last_cfg: Arc<Mutex<config::Config>>,
     content_state: Arc<Mutex<Option<Arc<content_index::ContentIndex>>>>,
     progress_cb: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    content_watcher_tx: ContentWatcherTx,
+    notify_cb: Arc<dyn Fn() + Send + Sync>,
 ) {
     use notify_debouncer_full::{new_debouncer, notify::RecursiveMode, notify::Watcher};
     use std::time::Duration;
@@ -379,10 +399,96 @@ fn start_config_watcher(
             eprintln!("[config] change detected, reloading…");
             let new_cfg = config::Config::load();
             let mut last = last_cfg.lock().unwrap();
-            rebuild_providers(&new_cfg, &last, &shared, &registry, &content_state, &progress_cb);
+            rebuild_providers(&new_cfg, &last, &shared, &registry, &content_state, &progress_cb, &content_watcher_tx, &notify_cb);
             *last = new_cfg;
         }
     });
+}
+
+// ── content filesystem watcher ────────────────────────────────────────────────
+
+fn start_content_watcher(
+    content_state: Arc<Mutex<Option<Arc<content_index::ContentIndex>>>>,
+    initial_cfg: config::ContentConfig,
+    notify_cb: Arc<dyn Fn() + Send + Sync>,
+) -> std::sync::mpsc::Sender<config::ContentConfig> {
+    use notify_debouncer_full::{new_debouncer, notify::RecursiveMode, notify::Watcher};
+    use std::time::Duration;
+
+    let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<config::ContentConfig>();
+
+    std::thread::spawn(move || {
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+        let mut debouncer = match new_debouncer(Duration::from_millis(500), None, move |res| {
+            let _ = ev_tx.send(res);
+        }) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("[content-watcher] failed to create debouncer: {e}");
+                return;
+            }
+        };
+
+        let mut current_cfg = initial_cfg;
+        let mut watched_dirs: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+
+        let watch_new_dirs =
+            |debouncer: &mut notify_debouncer_full::Debouncer<notify_debouncer_full::notify::INotifyWatcher, notify_debouncer_full::FileIdMap>,
+             cfg: &config::ContentConfig,
+             watched: &mut std::collections::HashSet<std::path::PathBuf>| {
+                for dir_entry in &cfg.dirs {
+                    let dir = config::Config::expand_path(&dir_entry.path);
+                    if dir.is_dir() && watched.insert(dir.clone()) {
+                        if let Err(e) = debouncer.watcher().watch(&dir, RecursiveMode::Recursive) {
+                            eprintln!("[content-watcher] watch {:?}: {e}", dir);
+                        } else {
+                            eprintln!("[content-watcher] watching {:?}", dir);
+                        }
+                    }
+                }
+            };
+
+        watch_new_dirs(&mut debouncer, &current_cfg, &mut watched_dirs);
+
+        loop {
+            while let Ok(new_cfg) = cfg_rx.try_recv() {
+                watch_new_dirs(&mut debouncer, &new_cfg, &mut watched_dirs);
+                current_cfg = new_cfg;
+            }
+
+            match ev_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(Ok(events)) => {
+                    if !current_cfg.enabled {
+                        continue;
+                    }
+                    let idx = content_state.lock().unwrap().as_ref().map(Arc::clone);
+                    if let Some(idx) = idx {
+                        let mut changed = false;
+                        for ev in events {
+                            for path in ev.event.paths {
+                                if content_index::process_event_path(&idx, &path, &current_cfg) {
+                                    changed = true;
+                                }
+                            }
+                        }
+                        if changed {
+                            notify_cb();
+                        }
+                    }
+                }
+                Ok(Err(errs)) => {
+                    for e in errs {
+                        eprintln!("[content-watcher] {e}");
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+
+    cfg_tx
 }
 
 // ── entry point ───────────────────────────────────────────────────────────────
@@ -471,6 +577,9 @@ FLAGS:
     // last_cfg is shared between the config watcher and the socket reload_fn.
     let last_cfg: Arc<Mutex<config::Config>> = Arc::new(Mutex::new(cfg.clone()));
 
+    // Populated once the content watcher thread starts; None until then.
+    let content_watcher_tx: ContentWatcherTx = Arc::new(Mutex::new(None));
+
     // Open content index early (fast — just opens/creates the SQLite file).
     // Wrapped in Arc<Mutex<Option<...>>> so rebuild_providers can open/replace it at runtime.
     let content_state: Arc<Mutex<Option<Arc<content_index::ContentIndex>>>> =
@@ -520,6 +629,12 @@ FLAGS:
             let progress_cb: Arc<dyn Fn(usize, usize) + Send + Sync> =
                 make_progress_cb(app.handle().clone());
 
+            // notify_cb fires "search-invalidated" so the frontend re-runs the current query.
+            let notify_handle = app.handle().clone();
+            let notify_cb: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                let _ = notify_handle.emit("search-invalidated", ());
+            });
+
             // reindex_fn: used by the --reindex socket command.
             let reindex_ci = Arc::clone(&content_state);
             let reindex_cc = content_cfg.clone();
@@ -545,6 +660,8 @@ FLAGS:
             let reload_last = Arc::clone(&last_cfg);
             let reload_ci = Arc::clone(&content_state);
             let reload_cb = Arc::clone(&progress_cb);
+            let reload_watcher_tx = Arc::clone(&content_watcher_tx);
+            let reload_notify = Arc::clone(&notify_cb);
             let reload_fn: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
                 let new_cfg = config::Config::load();
                 let mut last = reload_last.lock().unwrap();
@@ -555,6 +672,8 @@ FLAGS:
                     &reload_registry,
                     &reload_ci,
                     &reload_cb,
+                    &reload_watcher_tx,
+                    &reload_notify,
                 );
                 *last = new_cfg;
             });
@@ -566,6 +685,8 @@ FLAGS:
                 Arc::clone(&last_cfg),
                 Arc::clone(&content_state),
                 Arc::clone(&progress_cb),
+                Arc::clone(&content_watcher_tx),
+                Arc::clone(&notify_cb),
             );
 
             providers::files::setup(app.handle());
@@ -592,6 +713,8 @@ FLAGS:
             let shared_bg = Arc::clone(&shared_config);
             let startup_ci = Arc::clone(&content_state);
             let startup_cb = Arc::clone(&progress_cb);
+            let startup_cb_notify = Arc::clone(&notify_cb);
+            let startup_watcher_tx = Arc::clone(&content_watcher_tx);
             std::thread::spawn(move || {
                 if providers_cfg.files {
                     let file_provider =
@@ -624,6 +747,14 @@ FLAGS:
                     std::thread::spawn(move || {
                         content_index::run_content_indexer(idx, &cc, Some(cb));
                     });
+                }
+
+                // Start the filesystem watcher for live content index updates.
+                if content_cfg.enabled {
+                    let watcher_ci = Arc::clone(&startup_ci);
+                    let watcher_notify = Arc::clone(&startup_cb_notify);
+                    let tx = start_content_watcher(watcher_ci, content_cfg.clone(), watcher_notify);
+                    *startup_watcher_tx.lock().unwrap() = Some(tx);
                 }
 
                 APPS_READY.store(true, Ordering::Release);

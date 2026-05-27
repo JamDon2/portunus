@@ -143,6 +143,15 @@ export default function App() {
     if (q.trim()) invoke<SearchResult[]>("search", { query: q }).then(setResults);
   };
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let active = true;
+    listen("search-invalidated", requery).then(fn => {
+      if (active) unlisten = fn; else fn();
+    });
+    return () => { active = false; unlisten?.(); };
+  }, []);
+
   const makeCtx = (): LaunchContext => ({
     setQuery,
     setResults,
