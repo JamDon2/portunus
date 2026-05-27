@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::UNIX_EPOCH;
 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
@@ -173,23 +174,23 @@ pub fn list_folder(path: String) -> Vec<FolderEntry> {
 
 // ── Search provider ───────────────────────────────────────────────────────────
 
-struct FileEntry {
-    path: String,
-    name: String,
-    parent: String,
-    is_dir: bool,
-    file_size: Option<u64>,
-    created: Option<u64>,
-    modified: Option<u64>,
+pub struct FileEntry {
+    pub path: String,
+    pub name: String,
+    pub parent: String,
+    pub is_dir: bool,
+    pub file_size: Option<u64>,
+    pub created: Option<u64>,
+    pub modified: Option<u64>,
 }
 
 pub struct FileProvider {
-    entries: Vec<FileEntry>,
+    entries: Arc<RwLock<Vec<FileEntry>>>,
     shared: SharedConfig,
 }
 
 impl FileProvider {
-    pub fn new(files_cfg: &FilesConfig, shared: SharedConfig) -> Self {
+    pub fn walk_dirs(files_cfg: &FilesConfig) -> Vec<FileEntry> {
         let roots: Vec<(PathBuf, usize)> = files_cfg
             .dirs
             .iter()
@@ -249,8 +250,79 @@ impl FileProvider {
                 });
             }
         }
+        entries
+    }
+
+    /// Returns entries for `path` and, if it is a directory, all of its contents up to
+    /// the remaining depth budget. Use this instead of `entry_from_path` when handling
+    /// a directory that may have been moved in (e.g. a rename event).
+    pub fn entries_for_path(path: &Path, base: &Path, max_depth: usize) -> Vec<FileEntry> {
+        let Some(root) = Self::entry_from_path(path, base, max_depth) else {
+            return vec![];
+        };
+        if !root.is_dir {
+            return vec![root];
+        }
+        let rel_depth = match path.strip_prefix(base) {
+            Ok(rel) => rel.components().count(),
+            Err(_) => return vec![root],
+        };
+        let remaining = max_depth.saturating_sub(rel_depth);
+        let mut entries = vec![root];
+        if remaining > 0 {
+            for wentry in walkdir::WalkDir::new(path)
+                .max_depth(remaining)
+                .follow_links(false)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if wentry.depth() == 0 {
+                    continue;
+                }
+                if let Some(fe) = Self::entry_from_path(wentry.path(), base, max_depth) {
+                    entries.push(fe);
+                }
+            }
+        }
+        entries
+    }
+
+    pub fn entry_from_path(path: &Path, base: &Path, max_depth: usize) -> Option<FileEntry> {
+        let rel = path.strip_prefix(base).ok()?;
+        let depth = rel.components().count();
+        if depth == 0 || depth > max_depth {
+            return None;
+        }
+        let name = path.file_name()?.to_str()?.to_owned();
+        let parent = path.parent()?.to_str()?.to_owned();
+        let meta = std::fs::metadata(path).ok()?;
+        let is_dir = meta.is_dir();
+        let file_size = if is_dir { None } else { Some(meta.len()) };
+        let created = meta
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        Some(FileEntry {
+            path: path.to_string_lossy().into_owned(),
+            name,
+            parent,
+            is_dir,
+            file_size,
+            created,
+            modified,
+        })
+    }
+
+    pub fn with_entries(entries: Arc<RwLock<Vec<FileEntry>>>, shared: SharedConfig) -> Self {
         Self { entries, shared }
     }
+
 }
 
 impl Provider for FileProvider {
@@ -278,8 +350,9 @@ impl Provider for FileProvider {
             AtomKind::Fuzzy,
         );
         let mut char_buf = Vec::new();
+        let entries = self.entries.read().unwrap();
 
-        self.entries
+        entries
             .iter()
             .filter_map(|entry| {
                 let score =

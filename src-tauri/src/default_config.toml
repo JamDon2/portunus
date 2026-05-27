@@ -31,7 +31,8 @@ min_score_app  = 95    # nucleo minimum match quality for apps at 4+ char querie
 recency_weight = 50.0  # max bonus added to file scores for recently modified items
 
 [debug]
-log_scores = false     # print nucleo score + threshold for every match candidate to stderr
+log_scores  = false    # print nucleo score + threshold for every match candidate to stderr
+log_watcher = false    # print content-watcher events and process_event_path decisions to stderr
 
 [frecency]
 enabled        = true

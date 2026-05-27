@@ -168,6 +168,18 @@ impl ContentIndex {
         Ok(())
     }
 
+    /// Removes all entries whose path starts with `dir_path/`. Used when a directory is
+    /// deleted or moved out of the watched tree and no individual file events are fired.
+    pub fn remove_prefix(&self, dir_path: &str) -> rusqlite::Result<usize> {
+        let pattern = format!("{dir_path}/%");
+        let mut db = self.db.lock().unwrap();
+        let tx = db.transaction()?;
+        let removed = tx.execute("DELETE FROM content_fts WHERE path LIKE ?", [&pattern])?;
+        tx.execute("DELETE FROM file_meta WHERE path LIKE ?", [&pattern])?;
+        tx.commit()?;
+        Ok(removed)
+    }
+
     fn get_meta(&self, path: &str) -> rusqlite::Result<Option<StoredMeta>> {
         let db = self.db.lock().unwrap();
         match db.query_row(
@@ -487,20 +499,51 @@ fn collect_updates(
 // ── per-event helpers ─────────────────────────────────────────────────────────
 
 /// Called for every filesystem event path. Returns true if the index was modified.
-pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentConfig) -> bool {
+pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentConfig, log: bool) -> bool {
     let path_str = path.to_string_lossy().into_owned();
 
-    if !path.exists() || path.is_dir() {
-        return index.remove_path(&path_str).is_ok();
+    if !path.exists() {
+        if log { eprintln!("[content] event: path gone, removing — {path_str}"); }
+        // Remove the path itself plus any children (handles directory deletions/moves-out
+        // where individual file events are not fired for the contents).
+        let removed_children = index.remove_prefix(&path_str).unwrap_or(0) > 0;
+        let removed_self = index.remove_path(&path_str).is_ok();
+        if log { eprintln!("[content] event: removed_children={removed_children} removed_self={removed_self}"); }
+        return removed_children || removed_self;
+    }
+
+    if path.is_dir() {
+        if log { eprintln!("[content] event: directory appeared, walking — {path_str}"); }
+        // Directory appeared (created or moved in): walk it and index all eligible files.
+        // Individual file Create events are not fired for files inside a moved-in directory.
+        let mut changed = false;
+        for entry in walkdir::WalkDir::new(path)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.depth() == 0 || entry.file_type().is_dir() {
+                continue;
+            }
+            if process_event_path(index, entry.path(), cfg, log) {
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     if !is_event_path_eligible(path, cfg) {
+        if log { eprintln!("[content] event: not eligible — {path_str}"); }
         return index.remove_path(&path_str).is_ok();
     }
 
-    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let Ok(meta) = std::fs::metadata(path) else {
+        if log { eprintln!("[content] event: metadata failed — {path_str}"); }
+        return false;
+    };
     let size = meta.len();
     if size > cfg.max_file_bytes {
+        if log { eprintln!("[content] event: file too large ({size}) — {path_str}"); }
         return index.remove_path(&path_str).is_ok();
     }
     let mtime = meta
@@ -512,6 +555,7 @@ pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentC
 
     if let Ok(Some(m)) = index.get_meta(&path_str) {
         if m.mtime == mtime && m.size == size {
+            if log { eprintln!("[content] event: mtime+size unchanged, skipping — {path_str}"); }
             return false;
         }
     }

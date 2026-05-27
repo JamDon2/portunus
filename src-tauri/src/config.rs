@@ -135,11 +135,12 @@ impl Default for SearchConfig {
 #[serde(default)]
 pub struct DebugConfig {
     pub log_scores: bool,
+    pub log_watcher: bool,
 }
 
 impl Default for DebugConfig {
     fn default() -> Self {
-        Self { log_scores: false }
+        Self { log_scores: false, log_watcher: false }
     }
 }
 
@@ -216,6 +217,7 @@ pub struct SharedSearchConfig {
     pub min_score_app: u32,
     pub recency_weight: f32,
     pub log_scores: bool,
+    pub log_watcher: bool,
 }
 
 pub type SharedConfig = Arc<RwLock<SharedSearchConfig>>;
@@ -227,6 +229,7 @@ impl SharedSearchConfig {
             min_score_app: cfg.search.min_score_app,
             recency_weight: cfg.search.recency_weight,
             log_scores: cfg.debug.log_scores,
+            log_watcher: cfg.debug.log_watcher,
         }
     }
 
@@ -235,6 +238,7 @@ impl SharedSearchConfig {
         self.min_score_app = cfg.search.min_score_app;
         self.recency_weight = cfg.search.recency_weight;
         self.log_scores = cfg.debug.log_scores;
+        self.log_watcher = cfg.debug.log_watcher;
     }
 }
 
