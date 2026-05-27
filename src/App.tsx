@@ -47,7 +47,7 @@ export default function App() {
       setIndexingProgress(p);
       clearTimeout(doneTimer);
       if (p.indexed >= p.total && p.total > 0) {
-        doneTimer = setTimeout(() => setIndexingProgress(null), 1200);
+        doneTimer = setTimeout(() => setIndexingProgress(null), 150);
       }
     }).then(fn => {
       if (active) unlisten = fn; else fn();

@@ -86,16 +86,20 @@ function PdfPreview({ path }: { path: string }) {
     return () => { cancelled = true; };
   }, [path]);
 
-  const isLoading = !src && !error;
-
   return (
-    <div className={`pdf-preview-wrap${isLoading ? " is-loading" : ""}`}>
-      {isLoading && <div className="pdf-skeleton" />}
+    <div className={`pdf-preview-wrap${!loaded && !error ? " is-loading" : ""}`}>
+      {!error && (
+        <div
+          className="pdf-skeleton"
+          style={{ opacity: loaded ? 0 : 1, animation: loaded ? "none" : undefined }}
+        />
+      )}
       {src && (
         <img
           src={src}
           alt="PDF preview"
-          style={{ opacity: loaded ? 1 : 0 }}
+          className={loaded ? "pdf-img-revealed" : undefined}
+          style={{ opacity: loaded ? undefined : 0 }}
           onLoad={() => setLoaded(true)}
         />
       )}
@@ -144,16 +148,20 @@ function ImagePreview({ path }: { path: string }) {
     return () => { cancelled = true; };
   }, [path]);
 
-  const isLoading = !src && !error;
-
   return (
-    <div className={`pdf-preview-wrap${isLoading ? " is-loading" : ""}`}>
-      {isLoading && <div className="pdf-skeleton" />}
+    <div className={`pdf-preview-wrap${!loaded && !error ? " is-loading" : ""}`}>
+      {!error && (
+        <div
+          className="pdf-skeleton"
+          style={{ opacity: loaded ? 0 : 1, animation: loaded ? "none" : undefined }}
+        />
+      )}
       {src && (
         <img
           src={src}
           alt="Image preview"
-          style={{ opacity: loaded ? 1 : 0 }}
+          className={loaded ? "pdf-img-revealed" : undefined}
+          style={{ opacity: loaded ? undefined : 0 }}
           onLoad={() => setLoaded(true)}
         />
       )}
