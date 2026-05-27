@@ -1,6 +1,6 @@
 # Portunus
 
-macOS Spotlight-style app launcher for Linux (Hyprland).
+Application launcher and poweruser search for Linux (Hyprland).
 
 ## Tech Stack
 
@@ -50,29 +50,34 @@ src-tauri/
     default.json    # ACL: core:default, core:window:allow-set-size
 
   src/
-    main.rs         # Binary entry point (do not edit)
-    lib.rs          # Tauri commands + setup:
-                    #   search, launch_app (records frecency), hide_window, is_apps_ready
-                    #   render_pdf_page (async, spawn_blocking)
-                    #   FileProvider + AppProvider loaded in background thread
-                    #   → emits "apps-ready" when both are ready
-    frecency.rs     # FrecencyStore: SQLite-backed launch history
-                    #   DB at $XDG_DATA_HOME/portunus/frecency.db
-                    #   record_launch(id, kind) — half-life decay upsert
-                    #   all_scores() → HashMap<id, score>
-    config.rs       # Config loader (TOML at ~/.config/portunus/config.toml)
-                    # Sections: general, providers, files, recent, search, pdf, frecency
+    main.rs             # Binary entry point (do not edit)
+    lib.rs              # Tauri commands (search, launch_app, hide_window, is_apps_ready)
+                        #   + pub(crate) type aliases + run() entry point
+                        #   → emits "apps-ready" when background providers finish loading
+    cli.rs              # CLI flag handling: --show, --clipboard, --reindex, --reload-config, --help
+    ipc.rs              # Unix socket IPC: socket_path, try_signal_running, start_socket_listener
+    preview.rs          # File preview Tauri commands: render_pdf_page, read_text_preview,
+                        #   render_image_preview, list_folder; PdfWorkerHandle (dedicated thread)
+    provider_reload.rs  # rebuild_providers: hot-reload all providers on config change
+    watcher.rs          # Filesystem watchers: run_dir_watcher (shared helper),
+                        #   start_config_watcher, start_content_watcher, start_file_watcher
+    frecency.rs         # FrecencyStore: SQLite-backed launch history
+                        #   DB at $XDG_DATA_HOME/portunus/frecency.db
+                        #   record_launch(id, kind) — half-life decay upsert
+                        #   all_scores() → HashMap<id, score>
+    config.rs           # Config loader (TOML at ~/.config/portunus/config.toml)
+                        # Sections: general, providers, files, recent, search, pdf, frecency
     providers/
-      mod.rs        # Provider trait, SearchResult, PluginRegistry
-                    # Scoring constants + recency_bonus()
-                    # PluginRegistry::search() applies frecency bonus before sort
-      apps.rs       # AppProvider: parses .desktop files, builds icon index,
-                    # fuzzy-matches with nucleo-matcher
-      calc.rs       # CalcProvider: evaluates math expressions via exp-rs
-      files.rs      # FileProvider: indexes configured dirs
-      recent.rs     # RecentProvider: ~/.local/share/recently-used.xbel
-      clipboard.rs  # ClipboardProvider: cliphist integration
-      timer.rs      # TimerProvider: countdown timers
+      mod.rs            # Provider trait, SearchResult, PluginRegistry
+                        # Scoring constants + recency_bonus()
+                        # PluginRegistry::search() applies frecency bonus before sort
+      apps.rs           # AppProvider: parses .desktop files, builds icon index,
+                        # fuzzy-matches with nucleo-matcher
+      calc.rs           # CalcProvider: evaluates math expressions via exp-rs
+      files.rs          # FileProvider + FileEntry: indexes configured dirs
+      recent.rs         # RecentProvider: ~/.local/share/recently-used.xbel
+      clipboard.rs      # ClipboardProvider: cliphist integration
+      timer.rs          # TimerProvider: countdown timers
 ```
 
 ## Architecture Notes

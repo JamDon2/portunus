@@ -1,7 +1,12 @@
+mod cli;
 mod config;
 mod content_index;
 mod frecency;
+mod ipc;
+mod preview;
+mod provider_reload;
 mod providers;
+mod watcher;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -9,82 +14,18 @@ use tauri::{Emitter, Manager};
 
 static APPS_READY: AtomicBool = AtomicBool::new(false);
 
-type Registry = Arc<RwLock<providers::PluginRegistry>>;
-type FrecencyState = Option<Arc<frecency::FrecencyStore>>;
-type ContentWatcherTx = Arc<Mutex<Option<std::sync::mpsc::Sender<config::ContentConfig>>>>;
-type FileWatcherTx = Arc<Mutex<Option<std::sync::mpsc::Sender<config::FilesConfig>>>>;
-type SharedFileEntries = Arc<RwLock<Vec<providers::files::FileEntry>>>;
+pub(crate) type Registry = Arc<RwLock<providers::PluginRegistry>>;
+pub(crate) type FrecencyState = Option<Arc<frecency::FrecencyStore>>;
+pub(crate) type ContentWatcherTx =
+    Arc<Mutex<Option<std::sync::mpsc::Sender<config::ContentConfig>>>>;
+pub(crate) type FileWatcherTx =
+    Arc<Mutex<Option<std::sync::mpsc::Sender<config::FilesConfig>>>>;
+pub(crate) type SharedFileEntries = Arc<RwLock<Vec<providers::files::FileEntry>>>;
 
 #[derive(serde::Serialize, Clone)]
 struct ContentIndexProgress {
     indexed: usize,
     total: usize,
-}
-
-fn socket_path() -> std::path::PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(runtime_dir).join("portunus.sock")
-}
-
-fn try_signal_running(cmd: &str) -> bool {
-    use std::io::Write;
-    match std::os::unix::net::UnixStream::connect(socket_path()) {
-        Ok(mut stream) => stream.write_all(format!("{cmd}\n").as_bytes()).is_ok(),
-        Err(_) => false,
-    }
-}
-
-fn start_socket_listener(
-    app: tauri::AppHandle,
-    reindex_fn: Option<Arc<dyn Fn() + Send + Sync>>,
-    reload_fn: Arc<dyn Fn() + Send + Sync>,
-) {
-    use std::io::BufRead;
-    let path = socket_path();
-    let _ = std::fs::remove_file(&path);
-    let listener = match std::os::unix::net::UnixListener::bind(&path) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("portunus: failed to bind socket: {e}");
-            return;
-        }
-    };
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let mut line = String::new();
-            let _ = std::io::BufReader::new(stream).read_line(&mut line);
-            let cmd = line.trim();
-            if cmd == "show" || cmd.starts_with("show:") {
-                let initial_query = cmd.strip_prefix("show:").map(str::to_string);
-                if let Some(window) = app.get_webview_window("main") {
-                    let already_visible = window.is_visible().unwrap_or(false);
-                    if let Some(q) = initial_query {
-                        // Always apply a query command (e.g. --clipboard), even if already shown.
-                        // Append a trailing space so prefix-based providers like ClipboardProvider activate.
-                        let q_with_space = if q.ends_with(' ') { q } else { format!("{q} ") };
-                        let _ = app.emit("window-show-query", q_with_space);
-                        if !already_visible {
-                            let _ = window.show();
-                        }
-                        let _ = window.set_focus();
-                    } else if !already_visible {
-                        // Plain --show: no-op when the window is already visible.
-                        let _ = app.emit("window-show", ());
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
-            } else if cmd == "reindex" {
-                if let Some(f) = &reindex_fn {
-                    let f = Arc::clone(f);
-                    std::thread::spawn(move || f());
-                }
-            } else if cmd == "reload-config" {
-                let f = Arc::clone(&reload_fn);
-                std::thread::spawn(move || f());
-            }
-        }
-    });
 }
 
 #[tauri::command]
@@ -167,566 +108,11 @@ fn make_progress_cb(handle: tauri::AppHandle) -> Arc<dyn Fn(usize, usize) + Send
     })
 }
 
-// ── hot-reload ────────────────────────────────────────────────────────────────
-
-fn rebuild_providers(
-    new_cfg: &config::Config,
-    old_cfg: &config::Config,
-    shared: &config::SharedConfig,
-    registry: &Registry,
-    content_state: &Arc<Mutex<Option<Arc<content_index::ContentIndex>>>>,
-    progress_cb: &Arc<dyn Fn(usize, usize) + Send + Sync>,
-    content_watcher_tx: &ContentWatcherTx,
-    notify_cb: &Arc<dyn Fn() + Send + Sync>,
-    file_entries: &SharedFileEntries,
-    file_watcher_tx: &FileWatcherTx,
-) {
-    // Update per-search scalars instantly (no rebuild needed).
-    shared.write().unwrap().update_from(new_cfg);
-
-    // Update registry-level settings (max_results, frecency_weight).
-    {
-        let mut reg = registry.write().unwrap();
-        reg.update_settings(new_cfg.general.max_results, new_cfg.frecency.weight);
-    }
-
-    // ── Selectively rebuild index-backed providers ────────────────────────────
-
-    if new_cfg.files != old_cfg.files || new_cfg.providers.files != old_cfg.providers.files {
-        let files_cfg = new_cfg.files.clone();
-        let was_enabled = old_cfg.providers.files;
-        let now_enabled = new_cfg.providers.files;
-        let shared2 = Arc::clone(shared);
-        let reg2 = Arc::clone(registry);
-        let ncb = Arc::clone(notify_cb);
-        let fe = Arc::clone(file_entries);
-        let fw_tx = Arc::clone(file_watcher_tx);
-        std::thread::spawn(move || {
-            if now_enabled {
-                let new_vec = providers::files::FileProvider::walk_dirs(&files_cfg);
-                *fe.write().unwrap() = new_vec;
-                if !was_enabled {
-                    let p = providers::files::FileProvider::with_entries(Arc::clone(&fe), shared2);
-                    reg2.write().unwrap().replace("files", Some(Box::new(p)));
-                }
-            } else {
-                *fe.write().unwrap() = vec![];
-                reg2.write().unwrap().replace("files", None);
-            }
-            if let Some(tx) = fw_tx.lock().unwrap().as_ref() {
-                let _ = tx.send(files_cfg);
-            }
-            eprintln!("[config] files provider rebuilt");
-            ncb();
-        });
-    }
-
-    if new_cfg.recent != old_cfg.recent || new_cfg.providers.recent != old_cfg.providers.recent {
-        let recent_cfg = new_cfg.recent.clone();
-        let enabled = new_cfg.providers.recent;
-        let shared2 = Arc::clone(shared);
-        let reg2 = Arc::clone(registry);
-        let ncb = Arc::clone(notify_cb);
-        std::thread::spawn(move || {
-            let new: Option<Box<dyn providers::Provider>> = if enabled {
-                Some(Box::new(providers::recent::RecentProvider::new(&recent_cfg, shared2)))
-            } else {
-                None
-            };
-            reg2.write().unwrap().replace("recent", new);
-            eprintln!("[config] recent provider rebuilt");
-            ncb();
-        });
-    }
-
-    if new_cfg.providers.apps != old_cfg.providers.apps {
-        let enabled = new_cfg.providers.apps;
-        let shared2 = Arc::clone(shared);
-        let reg2 = Arc::clone(registry);
-        let ncb = Arc::clone(notify_cb);
-        std::thread::spawn(move || {
-            let new: Option<Box<dyn providers::Provider>> = if enabled {
-                Some(Box::new(providers::apps::AppProvider::new(shared2)))
-            } else {
-                None
-            };
-            reg2.write().unwrap().replace("apps", new);
-            eprintln!("[config] apps provider rebuilt");
-            ncb();
-        });
-    }
-
-    // ── Cheap providers: toggle under write lock directly ─────────────────────
-
-    if new_cfg.providers.calc != old_cfg.providers.calc {
-        let mut reg = registry.write().unwrap();
-        if new_cfg.providers.calc {
-            reg.register(providers::calc::CalcProvider);
-            eprintln!("[config] calc provider enabled");
-        } else {
-            reg.replace("calc", None);
-            eprintln!("[config] calc provider disabled");
-        }
-        notify_cb();
-    }
-
-    if new_cfg.providers.dict != old_cfg.providers.dict {
-        let mut reg = registry.write().unwrap();
-        if new_cfg.providers.dict {
-            let p = providers::dict::DictProvider::new();
-            if p.available {
-                reg.register(p);
-            }
-            eprintln!("[config] dict provider enabled");
-        } else {
-            reg.replace("dict", None);
-            eprintln!("[config] dict provider disabled");
-        }
-        notify_cb();
-    }
-
-    if new_cfg.content != old_cfg.content {
-        let new_content_cfg = new_cfg.content.clone();
-        let old_content_cfg = old_cfg.content.clone();
-        // Notify the filesystem watcher of the new config so it can watch any added dirs.
-        if let Some(tx) = content_watcher_tx.lock().unwrap().as_ref() {
-            let _ = tx.send(new_content_cfg.clone());
-        }
-        let reg2 = Arc::clone(registry);
-        let ci_state = Arc::clone(content_state);
-        let cb = Arc::clone(progress_cb);
-        let ncb = Arc::clone(notify_cb);
-        std::thread::spawn(move || {
-            // Hold the lock for the full operation (register → index) so
-            // two rapid config saves can't race each other on the same DB tables.
-            let mut guard = ci_state.lock().unwrap();
-            if new_content_cfg.enabled {
-                let idx = match guard.as_ref() {
-                    Some(existing) => Arc::clone(existing),
-                    None => match content_index::ContentIndex::open() {
-                        Ok(idx) => {
-                            let arc = Arc::new(idx);
-                            *guard = Some(Arc::clone(&arc));
-                            arc
-                        }
-                        Err(e) => {
-                            eprintln!("[content] failed to open index: {e}");
-                            return;
-                        }
-                    },
-                };
-                // OCR settings change the extracted text without touching mtime/size,
-                // so the incremental check would wrongly skip affected files. All other
-                // config changes (dirs, extensions, max_file_bytes) are handled correctly
-                // by run_content_indexer's mtime+size check and remove_stale.
-                let ocr_changed = old_content_cfg.ocr_images != new_content_cfg.ocr_images
-                    || old_content_cfg.ocr_pdf_fallback != new_content_cfg.ocr_pdf_fallback
-                    || old_content_cfg.ocr_language != new_content_cfg.ocr_language;
-                if ocr_changed {
-                    idx.clear().ok();
-                }
-                reg2.write().unwrap().replace(
-                    "content",
-                    Some(Box::new(providers::content::ContentProvider::new(Arc::clone(&idx)))),
-                );
-                content_index::run_content_indexer(idx, &new_content_cfg, Some(cb));
-                eprintln!("[content] reindex complete");
-                ncb();
-            } else {
-                *guard = None;
-                reg2.write().unwrap().replace("content", None);
-                eprintln!("[content] content provider disabled");
-                ncb();
-            }
-        });
-    }
-
-    eprintln!("[config] reload complete");
-}
-
-fn start_config_watcher(
-    shared: config::SharedConfig,
-    registry: Registry,
-    last_cfg: Arc<Mutex<config::Config>>,
-    content_state: Arc<Mutex<Option<Arc<content_index::ContentIndex>>>>,
-    progress_cb: Arc<dyn Fn(usize, usize) + Send + Sync>,
-    content_watcher_tx: ContentWatcherTx,
-    notify_cb: Arc<dyn Fn() + Send + Sync>,
-    file_entries: SharedFileEntries,
-    file_watcher_tx: FileWatcherTx,
-) {
-    use notify_debouncer_full::{new_debouncer, notify::RecursiveMode, notify::Watcher};
-    use std::time::Duration;
-
-    let config_dir = {
-        let config_home = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-            format!("{home}/.config")
-        });
-        std::path::PathBuf::from(config_home).join("portunus")
-    };
-
-    std::thread::spawn(move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        // Watch the DIRECTORY (not the file directly) because many editors save via
-        // atomic rename: write temp file → rename over target. Watching the directory
-        // catches IN_MOVED_TO which inotify fires on rename.
-        let debouncer = loop {
-            let tx2 = tx.clone();
-            match new_debouncer(Duration::from_millis(500), None, move |res| {
-                let _ = tx2.send(res);
-            }) {
-                Ok(mut d) => {
-                    if config_dir.exists() {
-                        if d.watcher().watch(&config_dir, RecursiveMode::NonRecursive).is_ok() {
-                            break d;
-                        }
-                    }
-                    std::thread::sleep(Duration::from_secs(2));
-                }
-                Err(e) => {
-                    eprintln!("[config-watcher] failed to create debouncer: {e}");
-                    return;
-                }
-            }
-        };
-        let _ = debouncer; // keep alive
-
-        for res in rx {
-            let events = match res {
-                Ok(evs) => evs,
-                Err(errs) => {
-                    for e in errs {
-                        eprintln!("[config-watcher] {e}");
-                    }
-                    continue;
-                }
-            };
-
-            let touched = events.iter().any(|e| {
-                e.event.paths.iter().any(|p| {
-                    p.file_name().and_then(|n| n.to_str()) == Some("config.toml")
-                })
-            });
-            if !touched {
-                continue;
-            }
-
-            eprintln!("[config] change detected, reloading…");
-            let new_cfg = config::Config::load();
-            let mut last = last_cfg.lock().unwrap();
-            rebuild_providers(&new_cfg, &last, &shared, &registry, &content_state, &progress_cb, &content_watcher_tx, &notify_cb, &file_entries, &file_watcher_tx);
-            *last = new_cfg;
-        }
-    });
-}
-
-// ── content filesystem watcher ────────────────────────────────────────────────
-
-fn start_content_watcher(
-    content_state: Arc<Mutex<Option<Arc<content_index::ContentIndex>>>>,
-    initial_cfg: config::ContentConfig,
-    notify_cb: Arc<dyn Fn() + Send + Sync>,
-    shared: config::SharedConfig,
-) -> std::sync::mpsc::Sender<config::ContentConfig> {
-    use notify_debouncer_full::{new_debouncer, notify::RecursiveMode, notify::Watcher};
-    use std::time::Duration;
-
-    let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<config::ContentConfig>();
-
-    std::thread::spawn(move || {
-        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
-        let mut debouncer = match new_debouncer(Duration::from_millis(500), None, move |res| {
-            let _ = ev_tx.send(res);
-        }) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("[content-watcher] failed to create debouncer: {e}");
-                return;
-            }
-        };
-
-        let mut current_cfg = initial_cfg;
-        let mut watched_dirs: std::collections::HashSet<std::path::PathBuf> =
-            std::collections::HashSet::new();
-
-        let watch_new_dirs =
-            |debouncer: &mut notify_debouncer_full::Debouncer<notify_debouncer_full::notify::INotifyWatcher, notify_debouncer_full::FileIdMap>,
-             cfg: &config::ContentConfig,
-             watched: &mut std::collections::HashSet<std::path::PathBuf>| {
-                for dir_entry in &cfg.dirs {
-                    let dir = config::Config::expand_path(&dir_entry.path);
-                    if dir.is_dir() && watched.insert(dir.clone()) {
-                        if let Err(e) = debouncer.watcher().watch(&dir, RecursiveMode::Recursive) {
-                            eprintln!("[content-watcher] watch {:?}: {e}", dir);
-                        } else {
-                            eprintln!("[content-watcher] watching {:?}", dir);
-                        }
-                    }
-                }
-            };
-
-        watch_new_dirs(&mut debouncer, &current_cfg, &mut watched_dirs);
-
-        loop {
-            while let Ok(new_cfg) = cfg_rx.try_recv() {
-                watch_new_dirs(&mut debouncer, &new_cfg, &mut watched_dirs);
-                current_cfg = new_cfg;
-            }
-
-            match ev_rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(Ok(events)) => {
-                    if !current_cfg.enabled {
-                        continue;
-                    }
-                    let log = shared.read().unwrap().log_watcher;
-                    let idx = content_state.lock().unwrap().as_ref().map(Arc::clone);
-                    if let Some(idx) = idx {
-                        let mut changed = false;
-                        for ev in &events {
-                            if log { eprintln!("[content-watcher] event {:?} paths={:?}", ev.event.kind, ev.event.paths); }
-                            for path in &ev.event.paths {
-                                let result = content_index::process_event_path(&idx, path, &current_cfg, log);
-                                if log { eprintln!("[content-watcher] process_event_path({:?}) -> {}", path, result); }
-                                if result {
-                                    changed = true;
-                                }
-                            }
-                        }
-                        if log { eprintln!("[content-watcher] batch done: changed={changed}"); }
-                        if changed {
-                            notify_cb();
-                        }
-                    } else if log {
-                        eprintln!("[content-watcher] event received but content index is None");
-                    }
-                }
-                Ok(Err(errs)) => {
-                    for e in errs {
-                        eprintln!("[content-watcher] {e}");
-                    }
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-    });
-
-    cfg_tx
-}
-
-// ── file provider filesystem watcher ─────────────────────────────────────────
-
-fn find_dir_for<'a>(
-    path: &std::path::Path,
-    dirs: &'a [(std::path::PathBuf, usize)],
-) -> Option<(&'a std::path::Path, usize)> {
-    dirs.iter()
-        .find(|(base, _)| path.starts_with(base))
-        .map(|(base, depth)| (base.as_path(), *depth))
-}
-
-fn start_file_watcher(
-    entries: SharedFileEntries,
-    initial_cfg: config::FilesConfig,
-    notify_cb: Arc<dyn Fn() + Send + Sync>,
-) -> std::sync::mpsc::Sender<config::FilesConfig> {
-    use notify_debouncer_full::{new_debouncer, notify::EventKind, notify::RecursiveMode,
-                                notify::Watcher, notify::event::ModifyKind};
-    use std::time::Duration;
-
-    let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<config::FilesConfig>();
-
-    std::thread::spawn(move || {
-        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
-        let mut debouncer = match new_debouncer(Duration::from_millis(500), None, move |res| {
-            let _ = ev_tx.send(res);
-        }) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("[file-watcher] failed to create debouncer: {e}");
-                return;
-            }
-        };
-
-        let mut current_cfg = initial_cfg;
-        let mut watched_dirs: std::collections::HashSet<std::path::PathBuf> =
-            std::collections::HashSet::new();
-
-        let watch_new_dirs = |debouncer: &mut notify_debouncer_full::Debouncer<
-            notify_debouncer_full::notify::INotifyWatcher,
-            notify_debouncer_full::FileIdMap,
-        >,
-                               cfg: &config::FilesConfig,
-                               watched: &mut std::collections::HashSet<std::path::PathBuf>| {
-            for dir_entry in &cfg.dirs {
-                let dir = config::Config::expand_path(&dir_entry.path);
-                if dir.is_dir() && watched.insert(dir.clone()) {
-                    if let Err(e) = debouncer.watcher().watch(&dir, RecursiveMode::Recursive) {
-                        eprintln!("[file-watcher] watch {:?}: {e}", dir);
-                    } else {
-                        eprintln!("[file-watcher] watching {:?}", dir);
-                    }
-                }
-            }
-        };
-
-        watch_new_dirs(&mut debouncer, &current_cfg, &mut watched_dirs);
-
-        loop {
-            while let Ok(new_cfg) = cfg_rx.try_recv() {
-                watch_new_dirs(&mut debouncer, &new_cfg, &mut watched_dirs);
-                current_cfg = new_cfg;
-            }
-
-            match ev_rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(Ok(events)) => {
-                    let dirs_with_depth: Vec<(std::path::PathBuf, usize)> = current_cfg
-                        .dirs
-                        .iter()
-                        .map(|d| (config::Config::expand_path(&d.path), d.depth))
-                        .collect();
-
-                    let mut to_add: Vec<providers::files::FileEntry> = vec![];
-                    let mut to_remove: Vec<String> = vec![];
-
-                    for ev in &events {
-                        let paths = &ev.event.paths;
-                        match &ev.event.kind {
-                            EventKind::Create(_) => {
-                                for path in paths {
-                                    if let Some((base, depth)) =
-                                        find_dir_for(path, &dirs_with_depth)
-                                    {
-                                        to_add.extend(
-                                            providers::files::FileProvider::entries_for_path(
-                                                path, base, depth,
-                                            ),
-                                        );
-                                    }
-                                }
-                            }
-                            EventKind::Remove(_) => {
-                                for path in paths {
-                                    to_remove.push(path.to_string_lossy().into_owned());
-                                }
-                            }
-                            // Handle all rename variants (Both, From, To, Any, Other) uniformly:
-                            // a path that still exists is the destination; one that is gone is the source.
-                            EventKind::Modify(ModifyKind::Name(_)) => {
-                                for path in paths {
-                                    if path.exists() {
-                                        if let Some((base, depth)) =
-                                            find_dir_for(path, &dirs_with_depth)
-                                        {
-                                            to_add.extend(
-                                                providers::files::FileProvider::entries_for_path(
-                                                    path, base, depth,
-                                                ),
-                                            );
-                                        }
-                                    } else {
-                                        to_remove.push(path.to_string_lossy().into_owned());
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if !to_add.is_empty() || !to_remove.is_empty() {
-                        let mut guard = entries.write().unwrap();
-                        for p in &to_remove {
-                            let prefix = format!("{p}/");
-                            guard.retain(|e| e.path != *p && !e.path.starts_with(&prefix));
-                        }
-                        guard.extend(to_add);
-                        drop(guard);
-                        notify_cb();
-                    }
-                }
-                Ok(Err(errs)) => {
-                    for e in errs {
-                        eprintln!("[file-watcher] {e}");
-                    }
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-    });
-
-    cfg_tx
-}
-
 // ── entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if std::env::args().any(|a| a == "--help" || a == "-h") {
-        println!("portunus — macOS Spotlight-style launcher for Linux
-
-USAGE:
-  portunus [FLAG]
-
-FLAGS:
-  --show            Show the launcher window (signals running instance)
-  --clipboard       Show the launcher pre-filled with \"clipboard\"
-  --reindex         Rebuild the content search index
-  --reload-config   Reload config from file without restarting
-  --help, -h        Show this help message");
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--show") {
-        if !try_signal_running("show") {
-            eprintln!("portunus: no running instance found");
-            std::process::exit(1);
-        }
-        return;
-    }
-    if std::env::args().any(|a| a == "--clipboard") {
-        if !try_signal_running("show:clipboard ") {
-            eprintln!("portunus: no running instance found");
-            std::process::exit(1);
-        }
-        return;
-    }
-    if std::env::args().any(|a| a == "--reload-config") {
-        if !try_signal_running("reload-config") {
-            eprintln!("portunus: no running instance found");
-            std::process::exit(1);
-        }
-        return;
-    }
-    if std::env::args().any(|a| a == "--reindex") {
-        if !try_signal_running("reindex") {
-            // No running instance — run standalone with stderr progress
-            let cfg = config::Config::load();
-            if cfg.content.enabled {
-                match content_index::ContentIndex::open() {
-                    Ok(index) => {
-                        let index = Arc::new(index);
-                        index.clear().ok();
-                        content_index::run_content_indexer(
-                            Arc::clone(&index),
-                            &cfg.content,
-                            Some(Arc::new(|indexed, total| {
-                                eprint!("\r[content] {indexed}/{total}");
-                                if indexed >= total {
-                                    eprintln!();
-                                }
-                            })),
-                        );
-                        eprintln!("[content] reindex complete");
-                    }
-                    Err(e) => eprintln!("[content] failed to open index: {e}"),
-                }
-            } else {
-                eprintln!("[content] content indexing is disabled in config");
-            }
-        }
+    if cli::handle_cli_args() {
         return;
     }
 
@@ -840,7 +226,7 @@ FLAGS:
             let reload_fn: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
                 let new_cfg = config::Config::load();
                 let mut last = reload_last.lock().unwrap();
-                rebuild_providers(
+                provider_reload::rebuild_providers(
                     &new_cfg,
                     &last,
                     &reload_shared,
@@ -855,8 +241,8 @@ FLAGS:
                 *last = new_cfg;
             });
 
-            start_socket_listener(app.handle().clone(), reindex_fn, Arc::clone(&reload_fn));
-            start_config_watcher(
+            ipc::start_socket_listener(app.handle().clone(), reindex_fn, Arc::clone(&reload_fn));
+            watcher::start_config_watcher(
                 Arc::clone(&shared_config),
                 Arc::clone(&bg_registry),
                 Arc::clone(&last_cfg),
@@ -868,7 +254,7 @@ FLAGS:
                 Arc::clone(&file_watcher_tx),
             );
 
-            providers::files::setup(app.handle());
+            preview::setup(app.handle());
             providers::timer::setup(app.handle(), &bg_registry);
 
             bg_registry
@@ -905,7 +291,7 @@ FLAGS:
                         Arc::clone(&shared_bg),
                     );
                     bg_registry.write().unwrap().register(file_provider);
-                    let tx = start_file_watcher(
+                    let tx = watcher::start_file_watcher(
                         Arc::clone(&startup_file_entries),
                         files_cfg.clone(),
                         Arc::clone(&startup_cb_notify),
@@ -944,7 +330,12 @@ FLAGS:
                 if content_cfg.enabled {
                     let watcher_ci = Arc::clone(&startup_ci);
                     let watcher_notify = Arc::clone(&startup_cb_notify);
-                    let tx = start_content_watcher(watcher_ci, content_cfg.clone(), watcher_notify, Arc::clone(&shared_bg));
+                    let tx = watcher::start_content_watcher(
+                        watcher_ci,
+                        content_cfg.clone(),
+                        watcher_notify,
+                        Arc::clone(&shared_bg),
+                    );
                     *startup_watcher_tx.lock().unwrap() = Some(tx);
                 }
 
@@ -963,11 +354,11 @@ FLAGS:
             // Timer provider
             providers::timer::create_timer,
             providers::timer::stop_timer,
-            // Files provider
-            providers::files::render_pdf_page,
-            providers::files::read_text_preview,
-            providers::files::render_image_preview,
-            providers::files::list_folder,
+            // File preview
+            preview::render_pdf_page,
+            preview::read_text_preview,
+            preview::render_image_preview,
+            preview::list_folder,
             // Clipboard provider
             providers::clipboard::paste_clipboard,
             providers::clipboard::decode_clipboard_entry,
