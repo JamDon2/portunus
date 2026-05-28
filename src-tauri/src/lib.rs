@@ -30,7 +30,7 @@ struct ContentIndexProgress {
 
 #[tauri::command]
 fn search(query: String, registry: tauri::State<'_, Registry>) -> Vec<providers::SearchResult> {
-    registry.read().unwrap().search(&query)
+    registry.read().unwrap_or_else(|e| e.into_inner()).search(&query)
 }
 
 fn split_exec(exec: &str) -> Vec<String> {

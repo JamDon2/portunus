@@ -45,7 +45,7 @@ impl Provider for ContentProvider {
         match self.index.search(&fts_query, 50) {
             Ok(results) => results
                 .into_iter()
-                .map(|(path, rank, snip)| {
+                .map(|(path, rank, snip, mtime, size)| {
                     let p = Path::new(&path);
                     let title = p
                         .file_name()
@@ -58,6 +58,11 @@ impl Provider for ContentProvider {
                         .unwrap_or("")
                         .to_owned();
                     let escaped = path.replace('"', "\\\"");
+                    let created = std::fs::metadata(&path)
+                        .ok()
+                        .and_then(|m| m.created().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs());
                     SearchResult {
                         id: format!("file:{path}"),
                         title,
@@ -67,9 +72,9 @@ impl Provider for ContentProvider {
                         score: SCORE_CONTENT + (-rank as f32) * 1000.0,
                         exec: Some(format!("xdg-open \"{escaped}\"")),
                         icon_path: None,
-                        file_size: None,
-                        created: None,
-                        modified: None,
+                        file_size: if size > 0 { Some(size) } else { None },
+                        created,
+                        modified: if mtime > 0 { Some(mtime as u64) } else { None },
                     }
                 })
                 .collect(),

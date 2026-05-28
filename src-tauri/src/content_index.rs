@@ -144,12 +144,14 @@ impl ContentIndex {
         Ok(count)
     }
 
-    pub fn search(&self, fts_query: &str, limit: usize) -> rusqlite::Result<Vec<(String, f64, String)>> {
+    pub fn search(&self, fts_query: &str, limit: usize) -> rusqlite::Result<Vec<(String, f64, String, i64, u64)>> {
         let db = self.db.lock().unwrap();
         // \x02 = STX, \x03 = ETX — used as highlight start/end markers in the snippet.
         let mut stmt = db.prepare(
-            "SELECT path, rank, snippet(content_fts, 1, '\x02', '\x03', '…', 20) \
-             FROM content_fts WHERE text MATCH ? ORDER BY rank LIMIT ?",
+            "SELECT content_fts.path, rank, snippet(content_fts, 1, '\x02', '\x03', '…', 20), \
+             COALESCE(m.mtime, 0), COALESCE(m.size, 0) \
+             FROM content_fts LEFT JOIN file_meta m ON m.path = content_fts.path \
+             WHERE content_fts.text MATCH ? ORDER BY rank LIMIT ?",
         )?;
         let results = stmt
             .query_map(params![fts_query, limit as i64], |row| {
@@ -157,6 +159,8 @@ impl ContentIndex {
                     row.get::<_, String>(0)?,
                     row.get::<_, f64>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, u64>(4)?,
                 ))
             })?
             .filter_map(|r| r.ok())
@@ -529,8 +533,18 @@ pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentC
         if log { eprintln!("[content] event: directory appeared, walking — {path_str}"); }
         // Directory appeared (created or moved in): walk it and index all eligible files.
         // Individual file Create events are not fired for files inside a moved-in directory.
+        // Honour the per-dir depth limit from config, just like the initial index does.
+        let walk_depth = cfg.dirs.iter()
+            .filter_map(|d| {
+                let base = crate::config::Config::expand_path(&d.path);
+                let rel = path.strip_prefix(&base).ok()?;
+                Some(d.depth.saturating_sub(rel.components().count()))
+            })
+            .max()
+            .unwrap_or(usize::MAX);
         let mut changed = false;
         for entry in walkdir::WalkDir::new(path)
+            .max_depth(walk_depth)
             .follow_links(false)
             .into_iter()
             .filter_map(|e| e.ok())

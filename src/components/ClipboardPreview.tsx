@@ -20,7 +20,6 @@ export default function ClipboardPreview({ result, onPaste }: Props) {
   useEffect(() => {
     let cancelled = false;
     setError(false);
-    setImgLoaded(false);
 
     invoke<number[]>("decode_clipboard_entry", { id })
       .then(bytes => {
@@ -31,6 +30,7 @@ export default function ClipboardPreview({ result, onPaste }: Props) {
         if (isPng || isJpeg) {
           const mime = isPng ? "image/png" : "image/jpeg";
           const url = URL.createObjectURL(new Blob([arr], { type: mime }));
+          setImgLoaded(false);
           setImgSrc(url);
           setText(null);
         } else {

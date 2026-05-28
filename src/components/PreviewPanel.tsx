@@ -11,5 +11,5 @@ interface Props {
 export default function PreviewPanel({ result, onLaunch, onStopTimer, onReveal }: Props) {
   const Preview = getPreview(result?.kind);
   if (!Preview || !result) return <div className="preview-empty" />;
-  return <Preview key={result.id} result={result} onLaunch={onLaunch} onStopTimer={onStopTimer} onReveal={onReveal} />;
+  return <Preview key={result.kind} result={result} onLaunch={onLaunch} onStopTimer={onStopTimer} onReveal={onReveal} />;
 }

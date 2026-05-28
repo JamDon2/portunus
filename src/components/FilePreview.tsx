@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
 import { SearchResult } from "../types";
 import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable } from "../utils";
 import { EnterIcon, CopyIcon, FolderOpenIcon, CheckIcon } from "../icons";
@@ -216,6 +218,52 @@ function FolderContents({ path }: { path: string }) {
   );
 }
 
+// ── markdown preview ──────────────────────────────────────────────────────────
+
+const mdComponents: Components = {
+  code({ className, children }) {
+    const match = /language-(\w+)/.exec(className ?? "");
+    if (match) {
+      try {
+        const highlighted = hljs.highlight(String(children).replace(/\n$/, ""), {
+          language: match[1],
+          ignoreIllegals: true,
+        });
+        return (
+          <code
+            className={`hljs language-${match[1]}`}
+            dangerouslySetInnerHTML={{ __html: highlighted.value }}
+          />
+        );
+      } catch { /* fall through to plain */ }
+    }
+    return <code className={className}>{children}</code>;
+  },
+};
+
+function MarkdownPreview({ path }: { path: string }) {
+  const [source, setSource] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSource(null);
+    invoke<string>("read_text_preview", { path })
+      .then(text => { if (!cancelled) setSource(text); })
+      .catch(() => { if (!cancelled) setSource(""); });
+    return () => { cancelled = true; };
+  }, [path]);
+
+  if (source === null) return <div className="text-preview-wrap" />;
+
+  return (
+    <div className="text-preview-wrap">
+      <div className="md-preview-wrap">
+        <ReactMarkdown components={mdComponents}>{source}</ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
 // ── text preview ─────────────────────────────────────────────────────────────
 
 function TextPreview({ path, lang }: { path: string; lang: string }) {
@@ -315,7 +363,8 @@ export default function FilePreview({ result, onLaunch, onReveal }: Props) {
 
       {isPdf && <PdfPreview path={filePath} />}
       {isImage && <ImagePreview path={filePath} />}
-      {textLang && <TextPreview path={filePath} lang={textLang} />}
+      {textLang === "markdown" && <MarkdownPreview path={filePath} />}
+      {textLang && textLang !== "markdown" && <TextPreview path={filePath} lang={textLang} />}
       {isFolder && <FolderContents path={filePath} />}
 
       <div className="file-preview-meta">
