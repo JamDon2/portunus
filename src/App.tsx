@@ -2,14 +2,16 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
-import { SearchResult, ExpiredTimer } from "./types";
+import { Config, SearchResult, ExpiredTimer } from "./types";
 import { playTimerChime, audioCtxWarmup } from "./utils";
+import { applyTheme } from "./theme";
 import ResultsList from "./components/ResultsList";
 import PreviewPanel from "./components/PreviewPanel";
 import FooterHints from "./components/FooterHints";
 import { dispatchLaunch, dispatchKeyDown, type LaunchContext } from "./providers/registry";
 import "./providers";
 import "./App.css";
+import "./themes.css";
 
 const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'timer-hint', 'content-hint']);
 
@@ -28,6 +30,16 @@ export default function App() {
 
   useEffect(() => { queryRef.current = query; }, [query]);
   useEffect(() => { getVersion().then(setVersion); }, []);
+
+  // Load config on mount to apply theme, then re-apply whenever settings changes appearance.
+  useEffect(() => {
+    invoke<Config>("get_config").then(cfg => applyTheme(cfg.appearance));
+    let unlisten: (() => void) | undefined;
+    listen<Config["appearance"]>("appearance-changed", event => {
+      applyTheme(event.payload);
+    }).then(fn => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
 
   useLayoutEffect(() => {
     setInputWidth(mirrorRef.current?.offsetWidth ?? 0);

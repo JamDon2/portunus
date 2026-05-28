@@ -50,6 +50,10 @@ export interface Config {
     ocr_language: string;
     threads: number;
   };
+  appearance: {
+    theme: string;
+    font_size: number;
+  };
 }
 
 export interface SearchResult {

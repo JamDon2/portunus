@@ -18,6 +18,7 @@ pub struct Config {
     pub frecency: FrecencyConfig,
     pub debug: DebugConfig,
     pub content: ContentConfig,
+    pub appearance: AppearanceConfig,
 }
 
 impl Default for Config {
@@ -31,6 +32,7 @@ impl Default for Config {
             frecency: FrecencyConfig::default(),
             debug: DebugConfig::default(),
             content: ContentConfig::default(),
+            appearance: AppearanceConfig::default(),
         }
     }
 }
@@ -204,6 +206,19 @@ impl Default for ContentConfig {
             ocr_language: "eng".to_string(),
             threads: 2,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct AppearanceConfig {
+    pub theme: String,
+    pub font_size: u32,
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self { theme: "warm-dark".to_string(), font_size: 13 }
     }
 }
 

@@ -75,7 +75,7 @@ const STYLES = `
   animation: dict-list-in 0.18s ease both;
 }
 .dict-list::-webkit-scrollbar { width: 4px; }
-.dict-list::-webkit-scrollbar-thumb { background: #2a2521; border-radius: 2px; }
+.dict-list::-webkit-scrollbar-thumb { background: var(--bg-input); border-radius: 2px; }
 .dict-list::-webkit-scrollbar-track { background: transparent; }
 
 @keyframes dict-list-in {
@@ -131,7 +131,7 @@ const STYLES = `
   margin-left: 19px;
   margin-top: 2px;
   padding-left: 8px;
-  border-left: 1px solid rgba(160,120,70,0.5);
+  border-left: 1px solid var(--accent-border);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -140,7 +140,7 @@ const STYLES = `
 .dict-quote {
   font-size: 12.5px;
   font-style: italic;
-  color: #9a7848;
+  color: var(--quote-fg);
   line-height: 1.45;
 }
 .dict-quote::before { content: '"'; margin-right: 1px; }
@@ -156,9 +156,9 @@ const STYLES = `
 
 .dict-syn {
   font: 400 10.5px/1 "JetBrains Mono","Fira Code",monospace;
-  color: #857d72;
-  background: #1e1b17;
-  border: 1px solid rgba(133,125,114,0.25);
+  color: var(--fg-dim);
+  background: var(--bg-footer);
+  border: 1px solid var(--line-soft);
   padding: 2px 5px;
   border-radius: 3px;
   white-space: nowrap;
@@ -169,7 +169,7 @@ const STYLES = `
 
 .dict-skel-row {
   border-radius: 4px;
-  background: #2b2622;
+  background: var(--bg-skeleton);
   position: relative;
   overflow: hidden;
   flex-shrink: 0;
@@ -246,7 +246,7 @@ const STYLES = `
   align-items: baseline;
   gap: 7px;
   padding: 9px 12px;
-  background: #15120f;
+  background: var(--bg-deep);
   border-radius: var(--radius-sm);
   border-left: 2px solid var(--accent);
 }

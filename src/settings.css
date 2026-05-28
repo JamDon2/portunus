@@ -12,23 +12,60 @@ html, body, #root {
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg-card:    #221e1a;
-  --bg-preview: #191613;
-  --bg-row-hov: #2a2622;
-  --bg-row-sel: #3d3429;
-  --bg-sidebar: #1a1714;
-  --line:       #312b25;
-  --line-soft:  #28231f;
+  --bg-card:        #221e1a;
+  --bg-preview:     #191613;
+  --bg-sidebar:     #1a1714;
+  --bg-bar:         #272320;
+  --bg-deep:        #15120f;
+  --bg-footer:      #1e1b17;
+  --bg-input:       #2a2521;
+  --bg-skeleton:    #2b2622;
+  --bg-row-hov:     #2a2622;
+  --bg-row-sel:     #3d3429;
 
-  --fg:         #e8dfd3;
-  --fg-mute:    #8f857a;
-  --fg-dim:     #5e564e;
+  --line:           #312b25;
+  --line-soft:      #28231f;
+  --border:         #3d3730;
+  --border-raised:  #4a4038;
 
-  --accent:      #d6a370;
-  --accent-soft: #d6a37020;
+  --fg:             #e8dfd3;
+  --fg-mute:        #8f857a;
+  --fg-dim:         #5e564e;
+  --fg-desc:        #7d7468;
 
-  --kbd-bg:     #2a2521;
-  --kbd-fg:     #b8ad9f;
+  --accent:         #d6a370;
+  --accent-soft:    rgba(214,163,112,0.12);
+  --accent-border:  rgba(160,120,70,0.5);
+
+  --kbd-bg:         #2a2521;
+  --kbd-fg:         #b8ad9f;
+
+  --icon-bg:        #2e2924;
+  --icon-bg-sel:    #3d3025;
+  --icon-fg-mute:   #a09080;
+
+  --text-on-accent: #1a1310;
+
+  --danger-bg:      #6b2a1e;
+  --danger-bg-dim:  #3d1c18;
+  --danger-fg:      #f0c8be;
+
+  --toggle-bg:      #3a3330;
+  --toggle-thumb:   #7a6e66;
+
+  --quote-fg:       #9a7848;
+
+  --hljs-keyword:   #d6a370;
+  --hljs-string:    #96be65;
+  --hljs-number:    #e8c07a;
+  --hljs-comment:   #5e564e;
+  --hljs-function:  #8dbcd4;
+  --hljs-type:      #c8a464;
+  --hljs-builtin:   #d48055;
+  --hljs-attr:      #c8b890;
+  --hljs-variable:  #c8c0b8;
+
+  --font-size-base: 13px;
 
   --radius:     14px;
   --radius-sm:  8px;
@@ -67,7 +104,7 @@ html, body, #root {
   justify-content: space-between;
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
-  background: #272320;
+  background: var(--bg-bar);
   user-select: none;
   cursor: default;
 }
@@ -196,7 +233,7 @@ html, body, #root {
 }
 
 .settings-content::-webkit-scrollbar { width: 6px; }
-.settings-content::-webkit-scrollbar-thumb { background: #2a2521; border-radius: 3px; }
+.settings-content::-webkit-scrollbar-thumb { background: var(--bg-input); border-radius: 3px; }
 .settings-content::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- section ---------- */
@@ -215,7 +252,7 @@ html, body, #root {
 .settings-section-desc {
   margin-top: 4px;
   font-size: 12px;
-  color: #7d7468;
+  color: var(--fg-desc);
   line-height: 1.5;
 }
 
@@ -249,7 +286,7 @@ html, body, #root {
 .settings-field-desc {
   margin-top: 3px;
   font-size: 11px;
-  color: #7d7468;
+  color: var(--fg-desc);
   line-height: 1.5;
 }
 
@@ -273,9 +310,9 @@ html, body, #root {
 .toggle-track {
   width: 36px;
   height: 20px;
-  background: #3a3330;
+  background: var(--toggle-bg);
   border-radius: 10px;
-  border: 1px solid #4a4038;
+  border: 1px solid var(--border-raised);
   position: relative;
   cursor: pointer;
   transition: background 0.18s, border-color 0.18s;
@@ -293,14 +330,14 @@ html, body, #root {
   left: 2px;
   width: 14px;
   height: 14px;
-  background: #7a6e66;
+  background: var(--toggle-thumb);
   border-radius: 50%;
   transition: transform 0.18s, background 0.18s;
 }
 
 .toggle-input:checked + .toggle-track .toggle-thumb {
   transform: translateX(16px);
-  background: #1a1310;
+  background: var(--text-on-accent);
 }
 
 /* ---------- number input ---------- */
@@ -309,7 +346,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 0;
-  border: 1px solid #3d3730;
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   background: var(--kbd-bg);
@@ -340,8 +377,8 @@ html, body, #root {
   height: 28px;
   background: transparent;
   border: none;
-  border-left: 1px solid #3d3730;
-  border-right: 1px solid #3d3730;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   color: var(--fg);
   font: 500 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   text-align: center;
@@ -359,7 +396,7 @@ html, body, #root {
 .settings-text-input {
   height: 28px;
   background: var(--kbd-bg);
-  border: 1px solid #3d3730;
+  border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--fg);
   font: 400 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -393,7 +430,7 @@ html, body, #root {
 .settings-dir-path {
   height: 28px;
   background: var(--kbd-bg);
-  border: 1px solid #3d3730;
+  border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--fg);
   font: 400 12px/1 "JetBrains Mono", "Fira Code", monospace;
@@ -409,7 +446,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 0;
-  border: 1px solid #3d3730;
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   background: var(--kbd-bg);
@@ -439,8 +476,8 @@ html, body, #root {
   text-align: center;
   font: 500 12px/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg);
-  border-left: 1px solid #3d3730;
-  border-right: 1px solid #3d3730;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   padding: 0 4px;
   line-height: 28px;
 }
@@ -449,7 +486,7 @@ html, body, #root {
   width: 28px;
   height: 28px;
   background: none;
-  border: 1px solid #3d3730;
+  border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--fg-dim);
   cursor: pointer;
@@ -461,16 +498,16 @@ html, body, #root {
 }
 
 .settings-dir-remove:hover {
-  background: #3d1c18;
-  border-color: #6b2a1e;
-  color: #f0c8be;
+  background: var(--danger-bg-dim);
+  border-color: var(--danger-bg);
+  color: var(--danger-fg);
 }
 
 .settings-dir-add {
   height: 28px;
   padding: 0 12px;
   background: none;
-  border: 1px dashed #3d3730;
+  border: 1px dashed var(--border);
   border-radius: 6px;
   color: var(--fg-dim);
   cursor: pointer;
@@ -499,7 +536,7 @@ html, body, #root {
   gap: 5px;
   padding: 8px;
   background: var(--kbd-bg);
-  border: 1px solid #3d3730;
+  border: 1px solid var(--border);
   border-radius: 6px;
   min-height: 38px;
   align-content: flex-start;
@@ -516,8 +553,8 @@ html, body, #root {
   gap: 4px;
   font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg-mute);
-  background: #2e2924;
-  border: 1px solid #3d3730;
+  background: var(--icon-bg);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2px 6px 2px 7px;
   white-space: nowrap;
@@ -536,7 +573,7 @@ html, body, #root {
   transition: color 0.1s;
 }
 
-.settings-ext-remove:hover { color: #f0c8be; }
+.settings-ext-remove:hover { color: var(--danger-fg); }
 
 .settings-ext-input {
   background: none;
@@ -555,7 +592,7 @@ html, body, #root {
 
 .settings-section-note {
   font-size: 11px;
-  color: #7d7468;
+  color: var(--fg-desc);
   line-height: 1.5;
   padding: 10px 12px;
   background: rgba(255,255,255,0.02);
@@ -568,7 +605,7 @@ html, body, #root {
 
 .settings-footer {
   border-top: 1px solid var(--line-soft);
-  background: #1e1b17;
+  background: var(--bg-footer);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -597,7 +634,7 @@ html, body, #root {
   border-radius: 6px;
   border: none;
   background: var(--accent);
-  color: #1a1310;
+  color: var(--text-on-accent);
   font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
   display: inline-flex;

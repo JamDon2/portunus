@@ -1,0 +1,7 @@
+import type { Config } from "./types";
+
+export function applyTheme(appearance: Config["appearance"]) {
+  const root = document.documentElement;
+  root.setAttribute("data-theme", appearance.theme);
+  root.style.zoom = String(appearance.font_size / 13);
+}

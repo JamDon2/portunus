@@ -21,6 +21,7 @@ pub(crate) type ContentWatcherTx =
 pub(crate) type FileWatcherTx =
     Arc<Mutex<Option<std::sync::mpsc::Sender<config::FilesConfig>>>>;
 pub(crate) type SharedFileEntries = Arc<RwLock<Vec<providers::files::FileEntry>>>;
+pub(crate) type ConfigState = Arc<Mutex<config::Config>>;
 
 #[derive(serde::Serialize, Clone)]
 struct ContentIndexProgress {
@@ -103,13 +104,17 @@ fn hide_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn get_config() -> config::Config {
-    config::Config::load()
+fn get_config(state: tauri::State<ConfigState>) -> config::Config {
+    state.lock().unwrap().clone()
 }
 
 #[tauri::command]
-fn save_config(config: config::Config) -> Result<(), String> {
-    config.save()
+fn save_config(config: config::Config, state: tauri::State<ConfigState>) -> Result<(), String> {
+    let result = config.save();
+    if result.is_ok() {
+        *state.lock().unwrap() = config;
+    }
+    result
 }
 
 #[tauri::command]
@@ -197,6 +202,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(registry)
         .manage(frecency_state)
+        .manage(Arc::clone(&last_cfg))
         .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();

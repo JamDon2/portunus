@@ -190,7 +190,7 @@ export default function ContentSection({ config, onChange }: Props) {
         </div>
         <div className="settings-dir-list">
           {cc.dirs.map((dir, i) => (
-            <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid var(--line-soft)" }}>
+            <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px", background: "var(--kbd-bg)", borderRadius: 6, border: "1px solid var(--line-soft)" }}>
               <div className="settings-dir-row">
                 <input
                   className="settings-dir-path"

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Config } from "./types";
 import GeneralSection from "./components/settings/GeneralSection";
@@ -9,9 +10,12 @@ import SearchSection from "./components/settings/SearchSection";
 import FrecencySection from "./components/settings/FrecencySection";
 import ContentSection from "./components/settings/ContentSection";
 import DebugSection from "./components/settings/DebugSection";
+import AppearanceSection from "./components/settings/AppearanceSection";
+import { applyTheme } from "./theme";
 import "./settings.css";
+import "./themes.css";
 
-type Section = "general" | "providers" | "files" | "search" | "frecency" | "content" | "debug";
+type Section = "general" | "providers" | "files" | "search" | "frecency" | "content" | "debug" | "appearance";
 
 interface NavItem {
   id: Section;
@@ -85,6 +89,16 @@ const NAV: NavItem[] = [
       </svg>
     ),
   },
+  {
+    id: "appearance",
+    label: "Appearance",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+      </svg>
+    ),
+  },
 ];
 
 const AUTOSAVE_DELAY_MS = 800;
@@ -107,6 +121,7 @@ export default function Settings() {
       const cfg = await invoke<Config>("get_config");
       diskConfigRef.current = cfg;
       setConfig(cfg);
+      applyTheme(cfg.appearance);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -138,6 +153,16 @@ export default function Settings() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Apply theme immediately on any appearance change.
+  // Only broadcast to main window when it's a user-driven change, not the initial disk load.
+  useEffect(() => {
+    if (!config) return;
+    applyTheme(config.appearance);
+    if (diskConfigRef.current && config.appearance !== diskConfigRef.current.appearance) {
+      emit("appearance-changed", config.appearance);
+    }
+  }, [config?.appearance]);
 
   // Auto-save: fires 800ms after the last config change, skips on initial load
   useEffect(() => {
@@ -222,7 +247,8 @@ export default function Settings() {
                 {activeSection === "search"    && <SearchSection    config={config} onChange={setConfig} />}
                 {activeSection === "frecency"  && <FrecencySection  config={config} onChange={setConfig} />}
                 {activeSection === "content"   && <ContentSection   config={config} onChange={setConfig} />}
-                {activeSection === "debug"     && <DebugSection     config={config} onChange={setConfig} />}
+                {activeSection === "debug"      && <DebugSection      config={config} onChange={setConfig} />}
+                {activeSection === "appearance" && <AppearanceSection config={config} onChange={setConfig} />}
               </>
             )}
           </div>
@@ -232,7 +258,7 @@ export default function Settings() {
         <div className="settings-footer">
           <span className="settings-footer-status">
             {error
-              ? <span style={{ color: "#f0c8be" }}>Error: {error}</span>
+              ? <span style={{ color: "var(--danger-fg)" }}>Error: {error}</span>
               : saving
                 ? <span style={{ color: "var(--fg-mute)" }}>Saving…</span>
                 : <span className={`settings-save-status${savedFlash ? " visible" : ""}`}>✓ Saved</span>
