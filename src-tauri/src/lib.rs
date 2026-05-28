@@ -121,10 +121,13 @@ fn save_config(config: config::Config, state: tauri::State<ConfigState>) -> Resu
 }
 
 #[tauri::command]
-fn open_settings_window(app: tauri::AppHandle) {
+fn open_settings_window(app: tauri::AppHandle, section: Option<String>) {
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
+        if let Some(s) = section {
+            let _ = win.emit("navigate-to-section", s);
+        }
     }
 }
 

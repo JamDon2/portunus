@@ -223,6 +223,15 @@ export default function Settings() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Jump to a specific section when the launcher opens settings with a target.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("navigate-to-section", e => {
+      setActiveSection(e.payload as Section);
+    }).then(fn => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
+
   // Apply theme immediately on any appearance change.
   // Only broadcast to main window when it's a user-driven change, not the initial disk load.
   useEffect(() => {

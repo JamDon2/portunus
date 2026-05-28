@@ -13,7 +13,7 @@ import "./providers";
 import "./App.css";
 import "./themes.css";
 
-const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'timer-hint', 'content-hint']);
+const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'timer-hint', 'content-hint', 'content-disabled']);
 
 export default function App() {
   const [query, setQuery] = useState("");
@@ -23,6 +23,7 @@ export default function App() {
   const [expiredTimers, setExpiredTimers] = useState<ExpiredTimer[]>([]);
   const [version, setVersion] = useState("");
   const [indexingProgress, setIndexingProgress] = useState<{ indexed: number; total: number } | null>(null);
+  const [contentEnabled, setContentEnabled] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const mirrorRef = useRef<HTMLSpanElement>(null);
   const [inputWidth, setInputWidth] = useState(0);
@@ -31,9 +32,12 @@ export default function App() {
   useEffect(() => { queryRef.current = query; }, [query]);
   useEffect(() => { getVersion().then(setVersion); }, []);
 
-  // Load config on mount to apply theme, then re-apply whenever settings changes appearance.
+  // Load config on mount to apply theme and read content.enabled; re-apply theme on settings changes.
   useEffect(() => {
-    invoke<Config>("get_config").then(cfg => applyTheme(cfg.appearance));
+    invoke<Config>("get_config").then(cfg => {
+      applyTheme(cfg.appearance);
+      setContentEnabled(cfg.content.enabled);
+    });
     let unlisten: (() => void) | undefined;
     listen<Config["appearance"]>("appearance-changed", event => {
       applyTheme(event.payload);
@@ -76,6 +80,7 @@ export default function App() {
     listen("window-show", () => {
       inputRef.current?.focus();
       audioCtxWarmup();
+      invoke<Config>("get_config").then(cfg => setContentEnabled(cfg.content.enabled));
     }).then(fn => {
       if (active) unlisten = fn; else fn();
     });
@@ -110,6 +115,15 @@ export default function App() {
   const displayResults = useMemo<SearchResult[]>(() => {
     if (query.trim()) {
       const isContent = query.trimStart().startsWith('!');
+      if (isContent && !contentEnabled) {
+        return [{
+          id: "content:disabled",
+          title: "Content search is disabled",
+          subtitle: "Open Settings → Content to enable",
+          kind: "content-disabled",
+          score: 0,
+        }];
+      }
       if (results.length === 0 && !isContent) {
         return [{
           id: "content:hint",
@@ -130,7 +144,7 @@ export default function App() {
       score: 0,
       exec: `timer:dismiss:${t.id}`,
     }));
-  }, [query, results, expiredTimers]);
+  }, [query, results, expiredTimers, contentEnabled]);
 
   const hasTimerItems = displayResults.some(r => r.kind === "timer-item");
   useEffect(() => {
@@ -161,7 +175,14 @@ export default function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let active = true;
-    listen("search-invalidated", requery).then(fn => {
+    listen("search-invalidated", () => {
+      requery();
+      // Also refresh content.enabled so the disabled hint appears/disappears
+      // immediately when the user toggles content search in Settings.
+      invoke<Config>("get_config").then(cfg => {
+        if (active) setContentEnabled(cfg.content.enabled);
+      });
+    }).then(fn => {
       if (active) unlisten = fn; else fn();
     });
     return () => { active = false; unlisten?.(); };
@@ -176,6 +197,10 @@ export default function App() {
 
   const launch = (result?: SearchResult) => {
     if (!result) return;
+    if (result.kind === "content-disabled") {
+      invoke("open_settings_window", { section: "content" });
+      return;
+    }
     if (result.kind === "content-hint") {
       setQuery('! ' + queryRef.current.trim());
       return;

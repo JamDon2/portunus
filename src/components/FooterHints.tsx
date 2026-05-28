@@ -92,6 +92,15 @@ export default function FooterHints({ selected, isContentSearch }: Props) {
       </div>
     );
   }
+  if (selected?.kind === "content-disabled") {
+    return (
+      <div className="hints">
+        <span className="hint"><kbd><EnterIcon /></kbd> open settings</span>
+        <span className="hint"><kbd>Tab</kbd> back</span>
+        <span className="hint"><kbd>Esc</kbd> close</span>
+      </div>
+    );
+  }
   if (selected?.kind === "content-hint") {
     return (
       <div className="hints">
