@@ -427,12 +427,6 @@ pub fn run_content_indexer(
         Err(_) => collect_updates(&eligible, &stored, cfg_ref, &processed, total, &on_progress),
     };
 
-    if total > 0 {
-        if let Some(ref cb) = on_progress {
-            cb(total, total);
-        }
-    }
-
     let db_indexed = updates.len();
     match index.upsert_batch(&updates) {
         Ok(()) => {}
@@ -444,6 +438,14 @@ pub fn run_content_indexer(
             "[content] done: total={total} indexed={db_indexed} removed={removed}"
         ),
         Err(e) => eprintln!("[content] remove_stale error: {e}"),
+    }
+
+    // Signal 100% only after the DB writes are committed, so the frontend
+    // progress bar doesn't disappear while upsert_batch is still running.
+    if total > 0 {
+        if let Some(ref cb) = on_progress {
+            cb(total, total);
+        }
     }
 }
 
@@ -464,7 +466,7 @@ fn collect_updates(
             if let Some(m) = stored.get(&path_str) {
                 if m.mtime == *mtime && m.size == *size {
                     let n = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                    if n % 10 == 0 || n == total {
+                    if n % 10 == 0 && n < total {
                         if let Some(ref cb) = on_progress {
                             cb(n, total);
                         }
@@ -477,7 +479,7 @@ fn collect_updates(
                 Ok(t) if !t.trim().is_empty() => t,
                 Ok(_) => {
                     let n = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                    if n % 10 == 0 || n == total {
+                    if n % 10 == 0 && n < total {
                         if let Some(ref cb) = on_progress {
                             cb(n, total);
                         }
@@ -487,7 +489,7 @@ fn collect_updates(
                 Err(e) => {
                     eprintln!("[content] extract failed {path_str}: {e}");
                     let n = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                    if n % 10 == 0 || n == total {
+                    if n % 10 == 0 && n < total {
                         if let Some(ref cb) = on_progress {
                             cb(n, total);
                         }
@@ -497,7 +499,7 @@ fn collect_updates(
             };
 
             let n = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % 10 == 0 || n == total {
+            if n % 10 == 0 && n < total {
                 if let Some(ref cb) = on_progress {
                     cb(n, total);
                 }

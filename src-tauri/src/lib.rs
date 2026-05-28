@@ -102,6 +102,24 @@ fn hide_window(app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn get_config() -> config::Config {
+    config::Config::load()
+}
+
+#[tauri::command]
+fn save_config(config: config::Config) -> Result<(), String> {
+    config.save()
+}
+
+#[tauri::command]
+fn open_settings_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
 fn make_progress_cb(handle: tauri::AppHandle) -> Arc<dyn Fn(usize, usize) + Send + Sync> {
     Arc::new(move |indexed, total| {
         let _ = handle.emit("content-index-progress", ContentIndexProgress { indexed, total });
@@ -183,6 +201,22 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
             }
+
+            // Pre-create the settings window hidden so it's ready instantly when opened.
+            let _ = tauri::WebviewWindowBuilder::new(
+                app,
+                "settings",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("Portunus Settings")
+            .inner_size(800.0, 560.0)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(false)
+            .skip_taskbar(false)
+            .center()
+            .visible(false)
+            .build();
 
             // progress_cb is built once and shared by reindex_fn, reload_fn, and the watcher.
             let progress_cb: Arc<dyn Fn(usize, usize) + Send + Sync> =
@@ -353,6 +387,9 @@ pub fn run() {
             launch_app,
             hide_window,
             is_apps_ready,
+            get_config,
+            save_config,
+            open_settings_window,
             // Timer provider
             providers::timer::create_timer,
             providers::timer::stop_timer,

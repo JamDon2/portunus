@@ -7,7 +7,7 @@ const DEFAULT_CONFIG: &str = include_str!("default_config.toml");
 
 // ── top-level ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Config {
     pub general: GeneralConfig,
@@ -37,7 +37,7 @@ impl Default for Config {
 
 // ── sections ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct GeneralConfig {
     pub max_results: usize,
@@ -49,7 +49,7 @@ impl Default for GeneralConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct ProvidersConfig {
     pub apps: bool,
@@ -71,7 +71,7 @@ impl Default for ProvidersConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 pub struct DirEntry {
     pub path: String,
     #[serde(default = "default_depth")]
@@ -82,7 +82,7 @@ fn default_depth() -> usize {
     2
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct FilesConfig {
     pub dirs: Vec<DirEntry>,
@@ -101,7 +101,7 @@ impl Default for FilesConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct RecentConfig {
     pub max_entries: usize,
@@ -113,7 +113,7 @@ impl Default for RecentConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct SearchConfig {
     pub min_score_file: u32,
@@ -131,7 +131,7 @@ impl Default for SearchConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct DebugConfig {
     pub log_scores: bool,
@@ -144,7 +144,7 @@ impl Default for DebugConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct FrecencyConfig {
     pub enabled: bool,
@@ -162,7 +162,7 @@ impl Default for FrecencyConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 pub struct ContentDirEntry {
     pub path: String,
     #[serde(default = "default_depth")]
@@ -170,7 +170,7 @@ pub struct ContentDirEntry {
     pub extensions: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct ContentConfig {
     pub enabled: bool,
@@ -270,6 +270,14 @@ impl Config {
                 Self::default()
             }
         }
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| format!("failed to serialize config: {e}"))?;
+        let path = config_path();
+        std::fs::write(&path, toml_str)
+            .map_err(|e| format!("failed to write config to {}: {e}", path.display()))
     }
 
     /// Expand a path string: replace a leading `~` with $HOME.

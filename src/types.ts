@@ -1,3 +1,57 @@
+export interface DirEntry {
+  path: string;
+  depth: number;
+}
+
+export interface ContentDirEntry {
+  path: string;
+  depth: number;
+  extensions: string[] | null;
+}
+
+export interface Config {
+  general: {
+    max_results: number;
+  };
+  providers: {
+    apps: boolean;
+    files: boolean;
+    recent: boolean;
+    calc: boolean;
+    dict: boolean;
+  };
+  files: {
+    dirs: DirEntry[];
+  };
+  recent: {
+    max_entries: number;
+  };
+  search: {
+    min_score_file: number;
+    min_score_app: number;
+    recency_weight: number;
+  };
+  debug: {
+    log_scores: boolean;
+    log_watcher: boolean;
+  };
+  frecency: {
+    enabled: boolean;
+    half_life_days: number;
+    weight: number;
+  };
+  content: {
+    enabled: boolean;
+    dirs: ContentDirEntry[];
+    extensions: string[];
+    max_file_bytes: number;
+    ocr_images: boolean;
+    ocr_pdf_fallback: boolean;
+    ocr_language: string;
+    threads: number;
+  };
+}
+
 export interface SearchResult {
   id: string;
   title: string;
