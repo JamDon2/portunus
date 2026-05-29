@@ -12,6 +12,7 @@ export interface ContentDirEntry {
 export interface Config {
   general: {
     max_results: number;
+    onboarding_completed: boolean;
   };
   providers: {
     apps: boolean;

@@ -43,11 +43,14 @@ impl Default for Config {
 #[serde(default)]
 pub struct GeneralConfig {
     pub max_results: usize,
+    /// Set to true once the first-launch onboarding wizard has been completed
+    /// (or skipped). When false, the launcher shows the wizard on next show.
+    pub onboarding_completed: bool,
 }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
-        Self { max_results: 20 }
+        Self { max_results: 20, onboarding_completed: false }
     }
 }
 

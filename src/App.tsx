@@ -13,6 +13,7 @@ import FooterHints from "./components/FooterHints";
 import { pdfView } from "./components/FilePreview";
 import { dispatchLaunch, dispatchKeyDown, type LaunchContext } from "./providers/registry";
 import { useTauriListener } from "./hooks/useTauriListener";
+import OnboardingWizard from "./components/onboarding/OnboardingWizard";
 import "./providers";
 import "./App.css";
 import "./themes.css";
@@ -31,6 +32,10 @@ export default function App() {
   const [version, setVersion] = useState("");
   const [indexingProgress, setIndexingProgress] = useState<{ indexed: number; total: number } | null>(null);
   const [contentEnabled, setContentEnabled] = useState(true);
+  const [onboardConfig, setOnboardConfig] = useState<Config | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const showOnboardingRef = useRef(false);
+  useEffect(() => { showOnboardingRef.current = showOnboarding; }, [showOnboarding]);
   const inputRef = useRef<HTMLInputElement>(null);
   const mirrorRef = useRef<HTMLSpanElement>(null);
   const [inputWidth, setInputWidth] = useState(0);
@@ -44,6 +49,8 @@ export default function App() {
     invoke<Config>("get_config").then(cfg => {
       applyTheme(cfg.appearance);
       setContentEnabled(cfg.content.enabled);
+      setOnboardConfig(cfg);
+      if (!cfg.general.onboarding_completed) setShowOnboarding(true);
     });
     let unlisten: (() => void) | undefined;
     listen<Config["appearance"]>("appearance-changed", event => {
@@ -222,6 +229,8 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // While the onboarding wizard is open it owns all input.
+      if (showOnboardingRef.current) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setSelectedIndex(i => Math.min(i + 1, Math.max(displayResults.length - 1, 0)));
@@ -306,6 +315,16 @@ export default function App() {
 
   return (
     <div className="launcher">
+      {showOnboarding && onboardConfig && (
+        <OnboardingWizard
+          config={onboardConfig}
+          onComplete={() => {
+            setShowOnboarding(false);
+            invoke<Config>("get_config").then(cfg => setContentEnabled(cfg.content.enabled));
+            inputRef.current?.focus();
+          }}
+        />
+      )}
       <div className="card" onMouseDown={e => {
         const t = e.target as HTMLElement;
         if (t !== inputRef.current && !t.closest('pre, code')) e.preventDefault();
