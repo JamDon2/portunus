@@ -111,6 +111,9 @@ function pdfKey(path: string, page: number): string {
   return `${path}#${page}`;
 }
 
+// Currently-previewed PDF page, read by App.launch to open at the right page.
+export const pdfView = { path: "", page: 0 };
+
 function getPdfUrl(path: string, page: number): Promise<string> {
   const key = pdfKey(path, page);
   if (!pdfPromiseCache.has(key)) {
@@ -149,6 +152,9 @@ function PdfPreview({ path, page }: { path: string; page: number }) {
 
   // Reset to the matched page when the previewed file changes.
   useEffect(() => { setCur(page); }, [path, page]);
+
+  // Track the displayed page so launch can open the PDF at it.
+  useEffect(() => { pdfView.path = path; pdfView.page = cur; }, [path, cur]);
 
   useEffect(() => {
     const cached = pdfUrlCache.get(key);

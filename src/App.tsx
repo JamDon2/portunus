@@ -10,6 +10,7 @@ import ResultsList from "./components/ResultsList";
 import PreviewPanel from "./components/PreviewPanel";
 import { deriveContentTerms } from "./highlight";
 import FooterHints from "./components/FooterHints";
+import { pdfView } from "./components/FilePreview";
 import { dispatchLaunch, dispatchKeyDown, type LaunchContext } from "./providers/registry";
 import { useTauriListener } from "./hooks/useTauriListener";
 import "./providers";
@@ -210,7 +211,13 @@ export default function App() {
     if (!result.exec) return;
     setQuery("");
     setResults([]);
-    invoke("launch_app", { exec: result.exec, id: result.id, kind: result.kind });
+    // PDFs open at the page currently shown in the preview.
+    let exec = result.exec;
+    const fp = result.subtitle ? `${result.subtitle}/${result.title}` : result.title;
+    if (result.title.toLowerCase().endsWith(".pdf") && pdfView.path === fp) {
+      exec = `xdg-open "file://${encodeURI(fp)}#page=${pdfView.page + 1}"`;
+    }
+    invoke("launch_app", { exec, id: result.id, kind: result.kind });
   };
 
   useEffect(() => {
