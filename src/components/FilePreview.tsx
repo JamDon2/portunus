@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import { SearchResult } from "../types";
-import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable } from "../utils";
+import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable, isSvg, isCsv } from "../utils";
 import { EnterIcon, CopyIcon, FolderOpenIcon, CheckIcon } from "../icons";
 import hljs from "highlight.js/lib/core";
 import langRust       from "highlight.js/lib/languages/rust";
@@ -20,6 +20,17 @@ import langCss        from "highlight.js/lib/languages/css";
 import langXml        from "highlight.js/lib/languages/xml";
 import langC          from "highlight.js/lib/languages/c";
 import langCpp        from "highlight.js/lib/languages/cpp";
+import langSql        from "highlight.js/lib/languages/sql";
+import langPhp        from "highlight.js/lib/languages/php";
+import langLua        from "highlight.js/lib/languages/lua";
+import langSwift      from "highlight.js/lib/languages/swift";
+import langRuby       from "highlight.js/lib/languages/ruby";
+import langJava       from "highlight.js/lib/languages/java";
+import langKotlin     from "highlight.js/lib/languages/kotlin";
+import langDocker     from "highlight.js/lib/languages/dockerfile";
+import langMake       from "highlight.js/lib/languages/makefile";
+import langScss       from "highlight.js/lib/languages/scss";
+import langLess       from "highlight.js/lib/languages/less";
 import langPlain      from "highlight.js/lib/languages/plaintext";
 
 hljs.registerLanguage("rust",       langRust);
@@ -36,6 +47,17 @@ hljs.registerLanguage("css",        langCss);
 hljs.registerLanguage("xml",        langXml);
 hljs.registerLanguage("c",          langC);
 hljs.registerLanguage("cpp",        langCpp);
+hljs.registerLanguage("sql",        langSql);
+hljs.registerLanguage("php",        langPhp);
+hljs.registerLanguage("lua",        langLua);
+hljs.registerLanguage("swift",      langSwift);
+hljs.registerLanguage("ruby",       langRuby);
+hljs.registerLanguage("java",       langJava);
+hljs.registerLanguage("kotlin",     langKotlin);
+hljs.registerLanguage("dockerfile", langDocker);
+hljs.registerLanguage("makefile",   langMake);
+hljs.registerLanguage("scss",       langScss);
+hljs.registerLanguage("less",       langLess);
 hljs.registerLanguage("plaintext",  langPlain);
 
 // ── pdf ───────────────────────────────────────────────────────────────────────
@@ -168,6 +190,103 @@ function ImagePreview({ path }: { path: string }) {
         />
       )}
       {error && <span className="pdf-preview-msg">Preview unavailable</span>}
+    </div>
+  );
+}
+
+// ── svg preview ───────────────────────────────────────────────────────────────
+
+// SVG is a vector format the image crate can't decode, but WebKit renders it
+// natively — so we load it straight through the asset protocol instead of the
+// raster pipeline used by ImagePreview.
+function SvgPreview({ path }: { path: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
+  const src = convertFileSrc(path);
+
+  useEffect(() => { setLoaded(false); setError(false); }, [path]);
+
+  return (
+    <div className={`pdf-preview-wrap${!loaded && !error ? " is-loading" : ""}`}>
+      {!error && (
+        <div
+          className="pdf-skeleton"
+          style={{ opacity: loaded ? 0 : 1, animation: loaded ? "none" : undefined }}
+        />
+      )}
+      <img
+        src={src}
+        alt="SVG preview"
+        className={loaded ? "pdf-img-revealed" : undefined}
+        style={{ opacity: loaded ? undefined : 0 }}
+        onLoad={() => setLoaded(true)}
+        onError={() => setError(true)}
+      />
+      {error && <span className="pdf-preview-msg">Preview unavailable</span>}
+    </div>
+  );
+}
+
+// ── csv / tsv preview ─────────────────────────────────────────────────────────
+
+// Minimal RFC-4180-ish parser: handles quoted fields with embedded delimiters
+// and doubled "" escapes. Good enough for a preview over the (possibly line-
+// truncated) text returned by read_text_preview.
+function parseDelimited(text: string, delim: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delim) {
+      row.push(field); field = "";
+    } else if (ch === "\n") {
+      row.push(field); field = "";
+      rows.push(row); row = [];
+    } else if (ch !== "\r") {
+      field += ch;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function CsvPreview({ path, delim }: { path: string; delim: string }) {
+  const [rows, setRows] = useState<string[][] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null);
+    invoke<string>("read_text_preview", { path })
+      .then(text => { if (!cancelled) setRows(parseDelimited(text, delim).slice(0, 100)); })
+      .catch(() => { if (!cancelled) setRows([]); });
+    return () => { cancelled = true; };
+  }, [path, delim]);
+
+  if (rows === null) return <div className="text-preview-wrap" />;
+  if (rows.length === 0) return <div className="text-preview-wrap" />;
+
+  const [header, ...body] = rows;
+  return (
+    <div className="text-preview-wrap">
+      <table className="csv-preview">
+        <thead>
+          <tr>{header.map((cell, i) => <th key={i}>{cell}</th>)}</tr>
+        </thead>
+        <tbody>
+          {body.map((r, ri) => (
+            <tr key={ri}>{r.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -310,7 +429,11 @@ export default function FilePreview({ result, onLaunch, onReveal }: Props) {
   const filePath = result.subtitle ? `${result.subtitle}/${result.title}` : result.title;
   const isPdf = kind === "PDF Document";
   const isImage = !isFolder && isImagePreviewable(result.title);
-  const textLang = !isFolder && !isImage ? textPreviewLang(result.title) : null;
+  const isSvgFile = !isFolder && isSvg(result.title);
+  const isCsvFile = !isFolder && isCsv(result.title);
+  const textLang = !isFolder && !isImage && !isSvgFile && !isCsvFile
+    ? textPreviewLang(result.title)
+    : null;
 
   const [copied, setCopied] = useState(false);
 
@@ -363,6 +486,8 @@ export default function FilePreview({ result, onLaunch, onReveal }: Props) {
 
       {isPdf && <PdfPreview path={filePath} />}
       {isImage && <ImagePreview path={filePath} />}
+      {isSvgFile && <SvgPreview path={filePath} />}
+      {isCsvFile && <CsvPreview path={filePath} delim={result.title.toLowerCase().endsWith(".tsv") ? "\t" : ","} />}
       {textLang === "markdown" && <MarkdownPreview path={filePath} />}
       {textLang && textLang !== "markdown" && <TextPreview path={filePath} lang={textLang} />}
       {isFolder && <FolderContents path={filePath} />}

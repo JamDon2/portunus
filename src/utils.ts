@@ -90,26 +90,47 @@ export function isImagePreviewable(filename: string): boolean {
   return IMAGE_EXTS.has(ext);
 }
 
+export function isSvg(filename: string): boolean {
+  return filename.split(".").pop()?.toLowerCase() === "svg";
+}
+
+export function isCsv(filename: string): boolean {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  return ext === "csv" || ext === "tsv";
+}
+
 const TEXT_PREVIEW_LANGS: Record<string, string> = {
   rs: "rust",
   ts: "typescript", tsx: "typescript",
   js: "javascript", jsx: "javascript",
   py: "python",
   go: "go",
-  sh: "bash", bash: "bash",
+  sh: "bash", bash: "bash", zsh: "bash",
   json: "json",
   toml: "ini",
+  ini: "ini", conf: "ini", cfg: "ini", env: "ini",
   yaml: "yaml", yml: "yaml",
   md: "markdown",
-  css: "css",
-  html: "xml", htm: "xml", xml: "xml",
-  svg: "xml",
+  css: "css", scss: "scss", less: "less",
+  html: "xml", htm: "xml", xml: "xml", vue: "xml",
   c: "c", h: "c",
-  cpp: "cpp", cc: "cpp",
+  cpp: "cpp", cc: "cpp", cxx: "cpp", hh: "cpp", hpp: "cpp",
+  java: "java",
+  rb: "ruby",
+  kt: "kotlin", kts: "kotlin",
+  sql: "sql",
+  php: "php",
+  lua: "lua",
+  swift: "swift",
+  dockerfile: "dockerfile",
+  makefile: "makefile",
+  rst: "plaintext", log: "plaintext",
   txt: "plaintext",
 };
 
 export function textPreviewLang(filename: string): string | null {
+  // `split(".").pop()` returns the whole name for extensionless files,
+  // so "Dockerfile"/"Makefile" map correctly via their lowercased name.
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   return TEXT_PREVIEW_LANGS[ext] ?? null;
 }
@@ -124,14 +145,26 @@ export function fileKind(title: string, isFolder: boolean): string {
     ts: "TypeScript Source", tsx: "TypeScript Source",
     js: "JavaScript Source", jsx: "JavaScript Source",
     rs: "Rust Source", py: "Python Source", go: "Go Source",
+    java: "Java Source", rb: "Ruby Source",
+    kt: "Kotlin Source", kts: "Kotlin Script",
+    swift: "Swift Source", php: "PHP Source", lua: "Lua Source",
+    c: "C Source", h: "C Header",
+    cpp: "C++ Source", cc: "C++ Source", cxx: "C++ Source",
+    hh: "C++ Header", hpp: "C++ Header",
+    sql: "SQL Script", vue: "Vue Component",
     md: "Markdown", txt: "Text File",
+    rst: "reStructuredText", log: "Log File",
+    csv: "CSV Data", tsv: "TSV Data",
     zip: "Archive", tar: "Archive", gz: "Archive",
     bz2: "Archive", xz: "Archive", "7z": "Archive", rar: "Archive",
     mp4: "Video", mkv: "Video", mov: "Video", avi: "Video",
     mp3: "Audio", flac: "Audio", wav: "Audio", ogg: "Audio",
     json: "JSON Data", xml: "XML Document",
     html: "HTML Document", css: "CSS Stylesheet",
-    sh: "Shell Script", toml: "TOML Config",
+    scss: "Sass Stylesheet", less: "Less Stylesheet",
+    sh: "Shell Script", bash: "Shell Script", zsh: "Shell Script",
+    toml: "TOML Config",
+    ini: "INI Config", conf: "Config File", cfg: "Config File", env: "Env File",
     yaml: "YAML Config", yml: "YAML Config",
   };
   return map[ext] ?? "File";

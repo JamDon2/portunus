@@ -854,11 +854,16 @@ kbd {
   position: relative;
 }
 
-.text-preview-wrap::-webkit-scrollbar { width: 4px; height: 4px; }
+.text-preview-wrap::-webkit-scrollbar { width: 10px; height: 10px; }
 .text-preview-wrap::-webkit-scrollbar-thumb {
   background: var(--bg-input);
-  border-radius: 2px;
+  border-radius: 5px;
+  border: 2px solid var(--bg-deep);
+  background-clip: padding-box;
+  min-height: 32px;
+  min-width: 32px;
 }
+.text-preview-wrap::-webkit-scrollbar-thumb:hover { background: var(--fg-mute); background-clip: padding-box; }
 .text-preview-wrap::-webkit-scrollbar-track { background: transparent; }
 .text-preview-wrap::-webkit-scrollbar-corner { background: var(--bg-deep); }
 
@@ -869,6 +874,40 @@ kbd {
   color: var(--fg);
   white-space: pre;
   tab-size: 2;
+}
+
+/* ---------- csv / tsv table preview ---------- */
+
+.csv-preview {
+  border-collapse: collapse;
+  font: 400 11px/1.5 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg);
+  width: max-content;
+  max-width: none;
+}
+
+.csv-preview th,
+.csv-preview td {
+  padding: 4px 10px;
+  border: 1px solid var(--bg-input);
+  text-align: left;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.csv-preview th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-input);
+  color: var(--fg);
+  font-weight: 600;
+  z-index: 1;
+}
+
+.csv-preview tbody tr:nth-child(even) td {
+  background: rgba(127, 127, 127, 0.05);
 }
 
 /* Syntax token colours */
