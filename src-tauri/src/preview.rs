@@ -142,15 +142,21 @@ pub fn read_spreadsheet_preview(path: String) -> Result<Vec<Vec<String>>, String
 const PREVIEW_MAX_LINES: usize = 300;
 const PREVIEW_MAX_BYTES: usize = 32 * 2048;
 
-/// Word-prefix, case-insensitive match of any term against a line. Mirrors the
-/// porter-stemmer-ish matching used for highlighting (`run` matches `running`).
-fn line_matches_terms(line: &str, terms: &[String]) -> bool {
+/// Bit `i` is set when `terms[i]` word-prefix-matches a word on the line. Caps at
+/// 64 terms. Word-prefix / case-insensitive matching mirrors the porter-stemmer-ish
+/// matching used for highlighting (`run` matches `running`).
+fn line_term_mask(line: &str, terms: &[String]) -> u64 {
     let lower = line.to_lowercase();
-    terms.iter().any(|t| {
-        lower
+    let mut mask = 0u64;
+    for (i, t) in terms.iter().take(64).enumerate() {
+        if lower
             .split(|c: char| !c.is_alphanumeric())
             .any(|w| w.starts_with(t.as_str()))
-    })
+        {
+            mask |= 1 << i;
+        }
+    }
+    mask
 }
 
 /// Joins `lines[start..]` into a preview, bounded by line and byte caps.
@@ -199,17 +205,57 @@ pub fn read_text_preview(path: String, terms: Option<Vec<String>>) -> Result<Str
         return Ok(lines.join("\n"));
     }
 
-    // Terms present: read up to SCAN_LINES, center the window on the first match
-    // so the relevant section is visible even when it's deep in the file.
+    // Terms present: read up to SCAN_LINES, then center the window on the earliest
+    // section that covers the most *distinct* query terms — so a multi-part query
+    // lands on the section holding all of them, not the first stray single match.
+    const CLUSTER_LINES: usize = 10;
     let mut lines: Vec<String> = Vec::new();
     for line in reader.lines().take(SCAN_LINES) {
         lines.push(line.map_err(|e| e.to_string())?);
     }
-    let start = lines
-        .iter()
-        .position(|l| line_matches_terms(l, &terms))
-        .map(|i| i.saturating_sub(PREVIEW_MAX_LINES / 2))
-        .unwrap_or(0);
+
+    let masks: Vec<u64> = lines.iter().map(|l| line_term_mask(l, &terms)).collect();
+
+    // Slide a CLUSTER_LINES window; track distinct terms covered. `counts[i]` is how
+    // many lines in the window carry term `i`; `distinct` is how many terms have a
+    // nonzero count. Strict `>` keeps the earliest window on ties.
+    let mut counts = [0u16; 64];
+    let mut distinct = 0i32;
+    let mut best_distinct = 0i32;
+    let mut best_start = 0usize;
+    for end in 0..masks.len() {
+        let mut m = masks[end];
+        while m != 0 {
+            let i = m.trailing_zeros() as usize;
+            if counts[i] == 0 {
+                distinct += 1;
+            }
+            counts[i] += 1;
+            m &= m - 1;
+        }
+        if end >= CLUSTER_LINES {
+            let mut out = masks[end - CLUSTER_LINES];
+            while out != 0 {
+                let i = out.trailing_zeros() as usize;
+                counts[i] -= 1;
+                if counts[i] == 0 {
+                    distinct -= 1;
+                }
+                out &= out - 1;
+            }
+        }
+        if distinct > best_distinct {
+            best_distinct = distinct;
+            best_start = end.saturating_sub(CLUSTER_LINES - 1);
+        }
+    }
+
+    // No term found anywhere in the scan: fall back to the top of the file.
+    let start = if best_distinct == 0 {
+        0
+    } else {
+        (best_start + CLUSTER_LINES / 2).saturating_sub(PREVIEW_MAX_LINES / 2)
+    };
     Ok(clip_lines(&lines, start))
 }
 

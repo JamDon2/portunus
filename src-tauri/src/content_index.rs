@@ -228,16 +228,60 @@ impl ContentIndex {
 
     /// Page index (0-based) of the best-matching page of a PDF for `fts_query`,
     /// or `None` if the file has no indexed pages or no page matched.
+    ///
+    /// Ranks pages by how many *distinct* query terms they cover (so a multi-part
+    /// query lands on the page holding the most of them), and breaks ties toward the
+    /// earliest page — rather than FTS BM25, which favours shorter pages and would
+    /// e.g. pick a repeated header on the last page over the first.
     pub fn best_page(&self, path: &str, fts_query: &str) -> Option<u32> {
+        let terms: Vec<String> = fts_query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        if terms.is_empty() {
+            return None;
+        }
+        // Single OR query so this stays one FTS lookup per file (same cost as before):
+        // it returns every page carrying *any* term; we count distinct coverage in Rust.
+        // Phrase-quote each term so FTS treats it literally (apostrophes etc.); doubled
+        // quotes escape an embedded quote.
+        let or_query = terms
+            .iter()
+            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+
         let db = util::lock(&self.db);
-        db.query_row(
-            "SELECT page FROM pdf_page_fts WHERE path = ? AND text MATCH ? \
-             ORDER BY rank LIMIT 1",
-            params![path, fts_query],
-            |r| r.get::<_, i64>(0),
-        )
-        .ok()
-        .map(|p| p as u32)
+        let mut stmt = db
+            .prepare(
+                "SELECT page, text FROM pdf_page_fts WHERE path = ? AND text MATCH ? \
+                 ORDER BY page",
+            )
+            .ok()?;
+        let rows = stmt
+            .query_map(params![path, or_query], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .ok()?;
+
+        // Pages arrive in ascending order; keep the first that strictly beats the best
+        // coverage so far — that yields max distinct terms, earliest page on ties.
+        let mut best: Option<(u32, u32)> = None; // (coverage, page)
+        for (page, text) in rows.flatten() {
+            let lower = text.to_lowercase();
+            let cov = terms
+                .iter()
+                .filter(|t| {
+                    lower
+                        .split(|c: char| !c.is_alphanumeric())
+                        .any(|w| w.starts_with(t.as_str()))
+                })
+                .count() as u32;
+            if best.is_none_or(|(bc, _)| cov > bc) {
+                best = Some((cov, page as u32));
+            }
+        }
+        best.map(|(_, page)| page)
     }
 
     /// Removes all entries whose path starts with `dir_path/`. Used when a directory is

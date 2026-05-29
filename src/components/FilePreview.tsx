@@ -6,13 +6,13 @@ import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import { SearchResult } from "../types";
 import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable, isSvg, isCsv, isOfficeText, isSpreadsheet } from "../utils";
-import { highlightInElement, cellMatches, buildTermRegex } from "../highlight";
+import { highlightInElement, focusBestCluster, cellMatches, buildTermRegex } from "../highlight";
 
 /**
  * After the referenced element renders, wraps matched terms in `<mark>` and
- * scrolls the first into view. The caller must remount the highlighted subtree
- * (via a `key`) whenever content or terms change, so the effect always runs on
- * clean, React-untouched DOM.
+ * scrolls the densest section (most distinct terms) into view. The caller must
+ * remount the highlighted subtree (via a `key`) whenever content or terms change,
+ * so the effect always runs on clean, React-untouched DOM.
  */
 function useTermHighlight<T extends HTMLElement>(terms: string[], dep: unknown) {
   const ref = useRef<T>(null);
@@ -20,8 +20,8 @@ function useTermHighlight<T extends HTMLElement>(terms: string[], dep: unknown) 
   // plain effect leaves one frame of un-highlighted, top-scrolled content (a jump).
   useLayoutEffect(() => {
     if (!ref.current || !terms.length) return;
-    const first = highlightInElement(ref.current, terms);
-    first?.scrollIntoView({ block: "center" });
+    highlightInElement(ref.current, terms);
+    focusBestCluster(ref.current, terms)?.scrollIntoView({ block: "center" });
   }, [dep, terms]);
   return ref;
 }

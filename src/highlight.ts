@@ -90,3 +90,43 @@ export function highlightInElement(
   }
   return first;
 }
+
+/** Index of the first term that word-prefix-matches `text`, or -1. */
+function termOf(text: string, terms: string[]): number {
+  const w = text.toLowerCase();
+  return terms.findIndex((t) => w.startsWith(t.toLowerCase()));
+}
+
+/**
+ * Of all `mark.preview-hl` in `el`, returns the one starting the section that
+ * covers the most DISTINCT terms within PROXIMITY_PX vertically; earliest wins ties.
+ * Falls back to the first mark (or null). Pairs with the backend's coverage-window
+ * selection so the scroll lands on the densest section, not the first lone term.
+ */
+export function focusBestCluster(
+  el: HTMLElement,
+  terms: string[],
+): HTMLElement | null {
+  if (!terms.length) return null;
+  const PROXIMITY_PX = 240;
+  const marks = Array.from(
+    el.querySelectorAll<HTMLElement>(`mark.${HL_CLASS}`),
+  ).map((m) => ({ el: m, top: m.offsetTop, term: termOf(m.textContent ?? "", terms) }));
+  if (!marks.length) return null;
+
+  let best = marks[0].el;
+  let bestDistinct = -1;
+  let bestTop = Infinity;
+  for (const m of marks) {
+    const seen = new Set<number>();
+    for (const o of marks) {
+      if (Math.abs(o.top - m.top) <= PROXIMITY_PX && o.term >= 0) seen.add(o.term);
+    }
+    if (seen.size > bestDistinct || (seen.size === bestDistinct && m.top < bestTop)) {
+      bestDistinct = seen.size;
+      bestTop = m.top;
+      best = m.el;
+    }
+  }
+  return best;
+}
