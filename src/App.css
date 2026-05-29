@@ -972,7 +972,7 @@ kbd {
 .md-preview-wrap h3 { font-size: 1.0em; }
 .md-preview-wrap h4,
 .md-preview-wrap h5,
-.md-preview-wrap h6 { font-size: 0.9em; color: var(--fg-mute); }
+.md-preview-wrap h6 { font-size: 0.95em; color: var(--fg); }
 .md-preview-wrap h1,
 .md-preview-wrap h2 {
   border-bottom: 1px solid var(--line-soft);

@@ -313,30 +313,25 @@ function CsvPreview({ path, delim }: { path: string; delim: string }) {
 // ── office text preview (docx / pptx / odt / odp) ────────────────────────────
 
 function OfficeTextPreview({ path }: { path: string }) {
-  const [html, setHtml] = useState<string | null>(null);
+  const [source, setSource] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setHtml(null);
+    setSource(null);
+    // Backend returns the document as Markdown; render it like a .md file.
     invoke<string>("read_office_preview", { path })
-      .then(text => {
-        if (cancelled) return;
-        // Render as plain preformatted text; no syntax highlighting needed.
-        const escaped = text
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
-        setHtml(escaped);
-      })
-      .catch(() => { if (!cancelled) setHtml(""); });
+      .then(text => { if (!cancelled) setSource(text); })
+      .catch(() => { if (!cancelled) setSource(""); });
     return () => { cancelled = true; };
   }, [path]);
 
-  if (html === null) return <div className="text-preview-wrap" />;
+  if (source === null) return <div className="text-preview-wrap" />;
 
   return (
     <div className="text-preview-wrap">
-      <pre className="text-preview-code" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="md-preview-wrap">
+        <ReactMarkdown components={mdComponents}>{source}</ReactMarkdown>
+      </div>
     </div>
   );
 }

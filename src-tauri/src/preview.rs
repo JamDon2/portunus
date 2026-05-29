@@ -97,7 +97,7 @@ pub async fn render_pdf_page(
 pub fn read_office_preview(path: String) -> Result<String, String> {
     const MAX_LINES: usize = 300;
     const MAX_BYTES: usize = 32 * 2048;
-    let text = crate::office::extract_office_text(&path)?;
+    let text = crate::office::extract_office_markdown(&path)?;
     let mut out = String::new();
     for (i, line) in text.lines().enumerate() {
         if i >= MAX_LINES || out.len() + line.len() + 1 > MAX_BYTES {
