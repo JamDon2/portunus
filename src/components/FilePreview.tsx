@@ -139,6 +139,12 @@ function PdfPreview({ path, page }: { path: string; page: number }) {
   const key = pdfKey(path, cur);
   const [src, setSrc] = useState<string | null>(() => pdfUrlCache.get(key) ?? null);
   const [loaded, setLoaded] = useState(() => pdfUrlCache.has(key));
+  // Skeleton only mounts if the render is slow enough to need it (delayed-spinner
+  // pattern). `reveal` gates the fade+scale animation so fast/cached renders pop in
+  // instantly without a flash.
+  const [showSkeleton, setShowSkeleton] = useState(false);
+  const [reveal, setReveal] = useState(false);
+  const skeletonShownRef = useRef(false);
   const [error, setError] = useState(false);
 
   // Reset to the matched page when the previewed file changes.
@@ -149,21 +155,48 @@ function PdfPreview({ path, page }: { path: string; page: number }) {
     if (cached) {
       setSrc(cached);
       setLoaded(true);
+      setShowSkeleton(false);
+      setReveal(false);
       setError(false);
       setCount(pdfPageCount.get(path) ?? null);
       return;
     }
     let cancelled = false;
-    setSrc(null);
-    setLoaded(false);
+    // Keep the currently-shown image up while the next render is in flight — no blank
+    // flash on a fast switch. Only blank it out (and show the skeleton) if the render
+    // turns out slow enough to need masking.
+    setReveal(false);
     setError(false);
+    skeletonShownRef.current = false;
+    const skeletonTimer = setTimeout(() => {
+      if (cancelled) return;
+      skeletonShownRef.current = true;
+      setSrc(null);          // drop the now-stale image so the skeleton shows through
+      setLoaded(false);
+      setShowSkeleton(true);
+    }, 140);
     getPdfUrl(path, cur)
-      .then((url) => { if (!cancelled) { setSrc(url); setCount(pdfPageCount.get(path) ?? null); } })
+      .then(async (url) => {
+        // Decode off-DOM so the <img> paints in a single frame (no half-drawn flash).
+        try {
+          const probe = new Image();
+          probe.src = url;
+          await probe.decode();
+        } catch { /* decode unsupported/failed; onLoad fallback covers it */ }
+        if (cancelled) return;
+        clearTimeout(skeletonTimer);
+        // Animate only on the slow path, where the skeleton was actually shown.
+        setReveal(skeletonShownRef.current);
+        setSrc(url);
+        setLoaded(true);
+        setShowSkeleton(false);
+        setCount(pdfPageCount.get(path) ?? null);
+      })
       .catch((e) => {
         console.error("[pdf] render_pdf_page failed:", e);
-        if (!cancelled) setError(true);
+        if (!cancelled) { clearTimeout(skeletonTimer); setError(true); }
       });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(skeletonTimer); };
   }, [key, path, cur]);
 
   // Ctrl+←/→ flips pages, clamped to [0, count-1] once the count is known.
@@ -183,8 +216,8 @@ function PdfPreview({ path, page }: { path: string; page: number }) {
   }, [count]);
 
   return (
-    <div className={`pdf-preview-wrap${!loaded && !error ? " is-loading" : ""}`}>
-      {!error && (
+    <div className={`pdf-preview-wrap${showSkeleton && !loaded && !error ? " is-loading" : ""}`}>
+      {!error && showSkeleton && (
         <div
           className="pdf-skeleton"
           style={{ opacity: loaded ? 0 : 1, animation: loaded ? "none" : undefined }}
@@ -194,8 +227,7 @@ function PdfPreview({ path, page }: { path: string; page: number }) {
         <img
           src={src}
           alt="PDF preview"
-          className={loaded ? "pdf-img-revealed" : undefined}
-          style={{ opacity: loaded ? undefined : 0 }}
+          className={reveal ? "pdf-img-revealed" : undefined}
           onLoad={() => setLoaded(true)}
         />
       )}
