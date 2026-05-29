@@ -74,3 +74,11 @@ export interface ExpiredTimer {
   id: number;
   label: string;
 }
+
+export interface DepStatus {
+  id: string;
+  label: string;
+  feature: string;
+  available: boolean;
+  install_hint: string;
+}

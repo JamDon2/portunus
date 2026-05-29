@@ -1,4 +1,6 @@
-import { Config } from "../../types";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Config, DepStatus } from "../../types";
 
 interface Props {
   config: Config;
@@ -9,6 +11,8 @@ interface ProviderDef {
   key: keyof Config["providers"];
   label: string;
   desc: string;
+  // Dependency id (from check_dependencies) this provider needs to function.
+  dep?: string;
 }
 
 const PROVIDERS: ProviderDef[] = [
@@ -16,7 +20,7 @@ const PROVIDERS: ProviderDef[] = [
   { key: "files",  label: "Files",         desc: "Indexed file search" },
   { key: "recent", label: "Recent files",  desc: "Recently-used files from ~/.local/share/recently-used.xbel" },
   { key: "calc",   label: "Calculator",    desc: "Inline math expression evaluator" },
-  { key: "dict",   label: "Dictionary",    desc: "Word definitions via dict (requires dictd: sudo pacman -S dictd)" },
+  { key: "dict",   label: "Dictionary",    desc: "Word definitions via dict", dep: "dict" },
 ];
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -37,6 +41,13 @@ export default function ProvidersSection({ config, onChange }: Props) {
   const set = (key: keyof Config["providers"], value: boolean) =>
     onChange({ ...config, providers: { ...config.providers, [key]: value } });
 
+  const [deps, setDeps] = useState<DepStatus[] | null>(null);
+  useEffect(() => {
+    invoke<DepStatus[]>("check_dependencies").then(setDeps).catch(() => setDeps([]));
+  }, []);
+
+  const depById = (id: string) => deps?.find(d => d.id === id);
+
   return (
     <div>
       <div className="settings-section-header">
@@ -44,17 +55,49 @@ export default function ProvidersSection({ config, onChange }: Props) {
         <div className="settings-section-desc">Enable or disable individual search providers.</div>
       </div>
 
-      {PROVIDERS.map(({ key, label, desc }) => (
-        <div className="settings-field" key={key}>
-          <div className="settings-field-label">
-            <div className="settings-field-name">{label}</div>
-            <div className="settings-field-desc">{desc}</div>
+      {PROVIDERS.map(({ key, label, desc, dep }) => {
+        const enabled = config.providers[key];
+        const status = dep ? depById(dep) : undefined;
+        const missing = enabled && status && !status.available;
+        return (
+          <div className="settings-field" key={key}>
+            <div className="settings-field-label">
+              <div className="settings-field-name">{label}</div>
+              <div className="settings-field-desc">{desc}</div>
+              {missing && (
+                <div className="settings-dep-inline-warn">
+                  ⚠ Enabled but <code>{status!.label}</code> is missing — install <code>{status!.install_hint}</code>
+                </div>
+              )}
+            </div>
+            <div className="settings-field-control">
+              <Toggle checked={enabled} onChange={v => set(key, v)} />
+            </div>
           </div>
-          <div className="settings-field-control">
-            <Toggle checked={config.providers[key]} onChange={v => set(key, v)} />
-          </div>
+        );
+      })}
+
+      <div className="settings-deps">
+        <div className="settings-deps-title">System dependencies</div>
+        <div className="settings-field-desc" style={{ marginBottom: 10 }}>
+          Optional tools that power individual features. Missing tools disable only their feature.
         </div>
-      ))}
+        {deps === null ? (
+          <div className="settings-field-desc">Checking…</div>
+        ) : (
+          deps.map(d => (
+            <div className="settings-dep-row" key={d.id}>
+              <span className={`settings-dep-dot${d.available ? " ok" : " missing"}`} />
+              <span className="settings-dep-feature">{d.feature}</span>
+              <span className="settings-dep-tool">
+                {d.available
+                  ? <>{d.label} ✓</>
+                  : <>{d.label} missing — install <code>{d.install_hint}</code></>}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }

@@ -75,14 +75,9 @@ pub struct ClipboardProvider;
 
 impl ClipboardProvider {
     pub fn is_available() -> bool {
-        fn in_path(bin: &str) -> bool {
-            std::env::var("PATH").ok().is_some_and(|path| {
-                path.split(':')
-                    .any(|dir| std::path::Path::new(dir).join(bin).is_file())
-            })
-        }
-        let cliphist = in_path("cliphist");
-        let wl_copy = in_path("wl-copy");
+        use crate::util::binary_in_path;
+        let cliphist = binary_in_path("cliphist");
+        let wl_copy = binary_in_path("wl-copy");
         if !cliphist {
             eprintln!("[portunus] clipboard: cliphist not found — clipboard provider disabled");
         } else if !wl_copy {

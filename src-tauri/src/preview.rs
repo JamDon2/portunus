@@ -8,6 +8,14 @@ pub struct PdfWorkerHandle {
 
 const PDF_RENDER_WIDTH: u32 = 800;
 
+/// Whether the pdfium system library can be loaded. Used by `check_dependencies`
+/// to report PDF-preview availability in Settings without waiting for the user
+/// to actually preview a PDF (where the failure would otherwise first surface).
+pub fn pdfium_available() -> bool {
+    use pdfium_render::prelude::*;
+    Pdfium::bind_to_system_library().is_ok()
+}
+
 fn start_pdf_worker() -> PdfWorkerHandle {
     let (tx, rx) = std::sync::mpsc::sync_channel::<PdfRenderMsg>(4);
     std::thread::spawn(move || {

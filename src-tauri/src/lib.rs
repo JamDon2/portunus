@@ -6,6 +6,7 @@ mod ipc;
 mod preview;
 mod provider_reload;
 mod providers;
+mod util;
 mod watcher;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +36,71 @@ struct ContentIndexProgress {
 #[tauri::command]
 fn search(query: String, registry: tauri::State<'_, Registry>) -> Vec<providers::SearchResult> {
     registry.read().unwrap_or_else(|e| e.into_inner()).search(&query)
+}
+
+#[derive(serde::Serialize, Clone)]
+struct DepStatus {
+    /// Stable identifier the frontend can match against (e.g. "dict").
+    id: &'static str,
+    /// The underlying tool name shown to the user.
+    label: &'static str,
+    /// The feature that stops working when this dependency is missing.
+    feature: &'static str,
+    available: bool,
+    /// Package the user should install to get this dependency.
+    install_hint: &'static str,
+}
+
+/// Reports the runtime availability of optional system dependencies so the
+/// Settings UI can warn the user instead of silently degrading. Each probe is
+/// cheap (PATH lookup), except pdfium which attempts a library bind.
+#[tauri::command]
+fn check_dependencies() -> Vec<DepStatus> {
+    use util::binary_in_path;
+    vec![
+        DepStatus {
+            id: "cliphist",
+            label: "cliphist",
+            feature: "Clipboard history",
+            available: binary_in_path("cliphist"),
+            install_hint: "cliphist",
+        },
+        DepStatus {
+            id: "wl-copy",
+            label: "wl-copy",
+            feature: "Clipboard paste",
+            available: binary_in_path("wl-copy"),
+            install_hint: "wl-clipboard",
+        },
+        DepStatus {
+            id: "dict",
+            label: "dict",
+            feature: "Dictionary lookups",
+            available: binary_in_path("dict"),
+            install_hint: "dictd",
+        },
+        DepStatus {
+            id: "poppler",
+            label: "pdftotext",
+            feature: "PDF content indexing",
+            available: binary_in_path("pdftotext"),
+            install_hint: "poppler",
+        },
+        DepStatus {
+            id: "tesseract",
+            label: "tesseract",
+            feature: "OCR (images & scanned PDFs)",
+            available: binary_in_path("tesseract"),
+            install_hint: "tesseract + tesseract-data-eng",
+        },
+        DepStatus {
+            id: "pdfium",
+            label: "libpdfium",
+            feature: "PDF preview",
+            available: preview::pdfium_available(),
+            install_hint: "pdfium (e.g. pdfium-bin)",
+        },
+    ]
 }
 
 fn split_exec(exec: &str) -> Vec<String> {
@@ -422,6 +488,8 @@ pub fn run() {
                 let dict_provider = providers::dict::DictProvider::new();
                 if dict_provider.available {
                     bg_registry.write().unwrap().register(dict_provider);
+                } else {
+                    eprintln!("[portunus] dict: `dict` not found — dictionary provider disabled");
                 }
             }
 
@@ -485,6 +553,7 @@ pub fn run() {
             open_settings_window,
             trigger_full_reindex,
             is_content_index_empty,
+            check_dependencies,
             // Timer provider
             providers::timer::create_timer,
             providers::timer::stop_timer,

@@ -631,17 +631,87 @@ html, body, #root {
   margin-bottom: 14px;
 }
 
+/* ---------- dependency status (Providers) ---------- */
+
+.settings-dep-inline-warn {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--danger-fg);
+}
+
+.settings-dep-inline-warn code,
+.settings-dep-tool code {
+  font-family: monospace;
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--kbd-bg);
+}
+
+.settings-deps {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.settings-deps-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-mute);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.settings-dep-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 12px;
+}
+
+.settings-dep-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+}
+
+.settings-dep-dot.ok { background: #5fb56f; }
+.settings-dep-dot.missing { background: var(--danger-fg); }
+
+.settings-dep-feature {
+  flex-shrink: 0;
+  width: 180px;
+  color: var(--fg);
+}
+
+.settings-dep-tool {
+  color: var(--fg-desc);
+}
+
 /* ---------- content reindex strip ---------- */
 
 .settings-reindex-strip {
+  /* Pin to the top of the scroll viewport so the staged-changes warning and the
+     live reindex progress stay visible even when the user scrolls down to the
+     directory list. Full-bleed (negative horizontal margins cancel the content
+     padding) with an opaque background so scrolling content can't show through. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  margin-bottom: 14px;
-  background: var(--accent-soft);
+  padding: 10px 28px;
+  margin: 0 -28px 14px;
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg-card);
   border: 1px solid var(--accent-border);
-  border-radius: 6px;
+  border-left: none;
+  border-right: none;
   font-size: 12px;
   color: var(--fg);
 }
