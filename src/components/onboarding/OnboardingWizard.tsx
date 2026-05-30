@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { Config, ContentDirEntry, DepStatus } from "../../types";
@@ -96,6 +96,9 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
   const [preset, setPreset] = useState<PresetId | null>(null);
   const [screenshotDir, setScreenshotDir] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
+  // True once the user intentionally finishes, so unmount cleanup keeps their theme.
+  const committedRef = useRef(false);
+  const primaryRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => { getVersion().then(setVersion); }, []);
 
@@ -110,7 +113,8 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
   useEffect(() => { applyTheme(draft.appearance); }, [draft.appearance]);
 
   // Restore the user's real saved theme if they bail out without finishing.
-  useEffect(() => () => { applyTheme(config.appearance); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // On an intentional finish (committedRef) the chosen theme is kept instead.
+  useEffect(() => () => { if (!committedRef.current) applyTheme(config.appearance); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const depOk = (id?: string) => !id || deps == null || deps[id] === true;
 
@@ -119,6 +123,7 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
 
   const choosePreset = (p: Preset) => {
     if (p.requires && !depOk(p.requires)) return; // blocked: dependency missing
+    if (preset === p.id) return; // already active — re-selecting would wipe an added screenshot folder
     setPreset(p.id);
     setScreenshotDir(null); // preset rewrites dirs, so drop any added screenshot folder
     setDraft(d => ({
@@ -166,21 +171,48 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
   const finish = async (skipped: boolean) => {
     if (finishing) return;
     setFinishing(true);
-    const final: Config = { ...draft, general: { ...draft.general, onboarding_completed: true } };
+    // Skip = leave everything at its saved defaults; only mark onboarding done.
+    // Finish = persist the draft (theme, providers, content) and keep it applied.
+    if (!skipped) committedRef.current = true;
+    const base = skipped ? config : draft;
+    const final: Config = { ...base, general: { ...base.general, onboarding_completed: true } };
     try {
       await invoke("save_config", { config: final });
       // Kick off the first content index only when there's something to index.
-      if (final.content.enabled && final.content.dirs.length > 0) {
+      if (!skipped && final.content.enabled && final.content.dirs.length > 0) {
         invoke("trigger_full_reindex").catch(() => {});
       }
     } catch {
       /* even if saving fails, don't trap the user behind the wizard */
     }
     onComplete();
-    void skipped;
   };
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
 
   const isLast = step === STEPS.length - 1;
+
+  // Keyboard-drive the wizard: Enter advances/finishes, Esc skips. Matches the
+  // keyboard-first launcher and the keys advertised on the Welcome screen.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (finishing) return;
+      if (e.key === "Enter") {
+        const t = e.target as HTMLElement | null;
+        if (t?.tagName === "INPUT" || t?.tagName === "TEXTAREA") return; // input owns Enter
+        e.preventDefault();
+        if (isLast) finishRef.current(false); else go(step + 1);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finishRef.current(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [step, isLast, finishing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Focus the primary action on each step so Enter has an obvious target.
+  useEffect(() => { primaryRef.current?.focus(); }, [step]);
 
   return (
     <div className="onb-overlay" role="dialog" aria-modal="true" aria-label="Welcome to Portunus">
@@ -216,6 +248,7 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
               <ContentStep
                 enabled={draft.content.enabled}
                 preset={preset}
+                deps={deps}
                 depOk={depOk}
                 onToggle={toggleContent}
                 onPreset={choosePreset}
@@ -238,11 +271,11 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
               </button>
             )}
             {isLast ? (
-              <button type="button" className="onb-btn onb-btn--primary" onClick={() => finish(false)} disabled={finishing}>
+              <button ref={primaryRef} type="button" className="onb-btn onb-btn--primary" onClick={() => finish(false)} disabled={finishing}>
                 {finishing ? "Finishing…" : "Finish"}
               </button>
             ) : (
-              <button type="button" className="onb-btn onb-btn--primary" onClick={() => go(step + 1)}>
+              <button ref={primaryRef} type="button" className="onb-btn onb-btn--primary" onClick={() => go(step + 1)}>
                 {step === 0 ? "Get started" : "Continue"}
               </button>
             )}
@@ -275,7 +308,7 @@ function WelcomeStep({ version }: { version: string }) {
         contents of your documents, all from one search box.
       </p>
       <div className="onb-kbd-row onb-rise" style={{ animationDelay: "280ms" }}>
-        Press <kbd>↵</kbd> to open · <kbd>↑</kbd><kbd>↓</kbd> to move · <kbd>Esc</kbd> to dismiss
+        Type to search · <kbd>↑</kbd><kbd>↓</kbd> to move · <kbd>↵</kbd> to launch · <kbd>Esc</kbd> to dismiss
       </div>
       {version && <div className="onb-version onb-rise" style={{ animationDelay: "340ms" }}>v{version}</div>}
     </div>
@@ -332,6 +365,9 @@ function ProvidersStep({
                   <Toggle label={p.name} checked={checked} onChange={v => onToggle({ [p.toggle!]: v })} />
                 ) : p.note ? (
                   <span className="onb-prov-note">{p.note}</span>
+                ) : p.dep && !available ? (
+                  /* head already shows the "needs {dep}" chip — don't double up */
+                  null
                 ) : (
                   <span className={`onb-chip${available ? " onb-chip--ok" : " onb-chip--warn"}`}>
                     {available ? "ready" : "optional"}
@@ -347,11 +383,12 @@ function ProvidersStep({
 }
 
 function ContentStep({
-  enabled, preset, depOk, onToggle, onPreset,
+  enabled, preset, deps, depOk, onToggle, onPreset,
   screenshotDir, onAddScreenshots, onRemoveScreenshots,
 }: {
   enabled: boolean;
   preset: PresetId | null;
+  deps: Record<string, boolean> | null;
   depOk: (id?: string) => boolean;
   onToggle: (on: boolean) => void;
   onPreset: (p: Preset) => void;
@@ -383,7 +420,9 @@ function ContentStep({
         <>
           <div className="onb-preset-grid">
             {PRESETS.map((p, i) => {
-              const blocked = !!p.requires && !depOk(p.requires);
+              // Disable presets with a hard dependency until the probe resolves,
+              // so a fast click can't apply OCR before we know tesseract is present.
+              const blocked = !!p.requires && (deps == null || !depOk(p.requires));
               return (
                 <button
                   key={p.id}

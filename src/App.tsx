@@ -320,7 +320,10 @@ export default function App() {
           config={onboardConfig}
           onComplete={() => {
             setShowOnboarding(false);
-            invoke<Config>("get_config").then(cfg => setContentEnabled(cfg.content.enabled));
+            invoke<Config>("get_config").then(cfg => {
+              setContentEnabled(cfg.content.enabled);
+              applyTheme(cfg.appearance); // keep whatever theme the wizard saved
+            });
             inputRef.current?.focus();
           }}
         />
