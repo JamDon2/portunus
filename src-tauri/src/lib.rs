@@ -161,6 +161,68 @@ fn launch_app(
     }
 }
 
+/// Reveal a file in the system file manager with the file itself selected/focused.
+/// Uses the freedesktop `org.freedesktop.FileManager1.ShowItems` D-Bus method, which
+/// is honored by Nautilus, Dolphin, Nemo, Thunar, etc. Falls back to opening the
+/// parent directory with `xdg-open` if the D-Bus call cannot be made.
+#[tauri::command]
+fn reveal_file(app: tauri::AppHandle, path: String) {
+    use std::os::unix::process::CommandExt;
+
+    let uri = format!("file://{}", encode_path_uri(&path));
+
+    let dbus = std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--type=method_call",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+            &format!("array:string:{uri}"),
+            "string:",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    let ok = matches!(dbus, Ok(status) if status.success());
+
+    if !ok {
+        // Fallback: open the parent directory (no file selection).
+        let parent = std::path::Path::new(&path)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".".to_string());
+        let _ = std::process::Command::new("xdg-open")
+            .arg(parent)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn();
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+/// Percent-encode a filesystem path for use in a `file://` URI. Encodes everything
+/// outside the RFC 3986 unreserved set plus `/`, which stays as the path separator.
+fn encode_path_uri(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for &b in path.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 #[tauri::command]
 fn is_apps_ready() -> bool {
     APPS_READY.load(Ordering::Acquire)
@@ -571,6 +633,7 @@ pub fn run() {
             // Core
             search,
             launch_app,
+            reveal_file,
             hide_window,
             is_apps_ready,
             get_config,

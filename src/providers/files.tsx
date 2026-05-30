@@ -19,8 +19,8 @@ registerProvider({
     }
     if (e.ctrlKey && !e.altKey && e.key === 'Enter' && result?.kind === 'file') {
       e.preventDefault();
-      const parent = result.subtitle ?? '.';
-      invoke('launch_app', { exec: `xdg-open "${parent}"`, id: undefined, kind: undefined });
+      const path = result.subtitle ? `${result.subtitle}/${result.title}` : result.title;
+      invoke('reveal_file', { path });
       ctx.setQuery('');
       ctx.setResults([]);
       return true;

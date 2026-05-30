@@ -710,8 +710,7 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [] }: 
   };
 
   const handleReveal = () => {
-    const parent = result.subtitle ?? '.';
-    invoke('launch_app', { exec: `xdg-open "${parent}"`, id: undefined, kind: undefined });
+    invoke('reveal_file', { path: filePath });
     onReveal?.();
   };
 
