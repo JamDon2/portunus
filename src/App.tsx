@@ -51,6 +51,7 @@ export default function App() {
   const mirrorRef = useRef<HTMLSpanElement>(null);
   const [inputWidth, setInputWidth] = useState(0);
   const queryRef = useRef(query);
+  const ghostRef = useRef<string | null>(null);
 
   useEffect(() => { queryRef.current = query; }, [query]);
   useEffect(() => { getVersion().then(setVersion); }, []);
@@ -267,9 +268,8 @@ export default function App() {
         // Accept the ghost completion if one is showing; otherwise keep focus
         // in the input (no focusable peers to tab to in the launcher).
         e.preventDefault();
-        const q = queryRef.current;
-        const ghost = ghostFor(q);
-        if (ghost) setQuery(q + ghost);
+        const ghost = ghostRef.current;
+        if (ghost) setQuery(queryRef.current + ghost);
       } else if (e.key === "Escape") {
         e.preventDefault();
         setQuery("");
@@ -306,7 +306,22 @@ export default function App() {
     [displayResults]
   );
 
-  const ghostSuffix = useMemo(() => ghostFor(query), [query]);
+  // Ghost-complete the dict word from the top prefix match in the results
+  // (e.g. "define dispos" → ghosts "al" for "disposal"). The first dict result
+  // is the literal typed word; the next prefix match is the completion.
+  const dictGhost = useMemo(() => {
+    const m = /^(?:define|dict) (\S+)$/.exec(query);
+    if (!m) return null;
+    const typed = m[1];
+    const lc = typed.toLowerCase();
+    const comp = results.find(
+      r => r.kind === "dict" && r.title.toLowerCase().startsWith(lc) && r.title.toLowerCase() !== lc
+    );
+    return comp ? comp.title.slice(typed.length) : null;
+  }, [query, results]);
+
+  const ghostSuffix = useMemo(() => ghostFor(query) ?? dictGhost, [query, dictGhost]);
+  useEffect(() => { ghostRef.current = ghostSuffix; }, [ghostSuffix]);
 
   const hintChip = useMemo((): string | null => {
     const q = query;

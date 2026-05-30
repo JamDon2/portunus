@@ -195,9 +195,9 @@ const STYLES = `
   font: 400 12px/1.5 "JetBrains Mono","Fira Code",monospace;
 }
 .dict-error-glyph {
-  font-size: 22px;
-  opacity: 0.3;
-  line-height: 1;
+  display: flex;
+  opacity: 0.32;
+  margin-bottom: 4px;
 }
 
 /* Hint */
@@ -336,22 +336,27 @@ function DefinitionView({ word }: { word: string }) {
     setData(null);
     setError(false);
     setLoading(true);
-    invoke<DictResult>('get_dict_definitions', { word })
-      .then(r => {
-        if (!cancelled) {
+    // Debounce: don't fire the (online) lookup for words we just scroll past.
+    // Only the word we settle on for ~180ms is fetched.
+    const timer = setTimeout(() => {
+      invoke<DictResult>('get_dict_definitions', { word })
+        .then(r => {
+          // Cache regardless of navigation so returning to this word is instant.
           dictCache.set(word, r);
-          setData(r);
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
+          if (!cancelled) {
+            setData(r);
+            setLoading(false);
+          }
+        })
+        .catch(() => {
           dictCache.set(word, null);
-          setError(true);
-          setLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
+          if (!cancelled) {
+            setError(true);
+            setLoading(false);
+          }
+        });
+    }, 180);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [word]);
 
   const copyFirst = () => {
@@ -366,7 +371,7 @@ function DefinitionView({ word }: { word: string }) {
     return (
       <div className="dict-preview">
         <div className="dict-error">
-          <span className="dict-error-glyph">∅</span>
+          <span className="dict-error-glyph"><NotFoundIcon /></span>
           <span>No definitions found for <strong style={{ color: 'var(--fg-mute)' }}>{word}</strong></span>
         </div>
       </div>
@@ -437,6 +442,17 @@ function DefinitionView({ word }: { word: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+function NotFoundIcon() {
+  return (
+    <svg width="38" height="38" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="10.5" cy="10.5" r="7.5" />
+      <line x1="21" y1="21" x2="15.8" y2="15.8" />
+      <line x1="7.5" y1="10.5" x2="13.5" y2="10.5" />
+    </svg>
   );
 }
 

@@ -29,3 +29,4 @@ src-tauri/gen/
 *.njsproj
 *.sln
 *.sw?
+src-tauri/tools/.cache/

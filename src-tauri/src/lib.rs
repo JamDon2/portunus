@@ -572,21 +572,23 @@ pub fn run() {
                     .unwrap()
                     .register(providers::calc::CalcProvider);
             }
-            if providers_cfg.dict {
-                let dict_provider = providers::dict::DictProvider::new();
-                if dict_provider.available {
-                    bg_registry.write().unwrap().register(dict_provider);
-                } else {
-                    eprintln!("[portunus] dict: `dict` not found — dictionary provider disabled");
-                }
-            }
-
             let handle = app.handle().clone();
             let shared_bg = Arc::clone(&shared_config);
             let startup_ci = Arc::clone(&content_state);
             let startup_cb = Arc::clone(&progress_cb);
             let startup_file_entries = Arc::clone(&file_entries);
             std::thread::spawn(move || {
+                // Built here, not in the setup closure: DictProvider::new() now
+                // builds an embedded word index (BK-tree), too heavy for the
+                // window-show path.
+                if providers_cfg.dict {
+                    let dict_provider = providers::dict::DictProvider::new();
+                    if dict_provider.available {
+                        bg_registry.write().unwrap().register(dict_provider);
+                    } else {
+                        eprintln!("[portunus] dict: `dict` not found — dictionary provider disabled");
+                    }
+                }
                 if providers_cfg.files {
                     providers::files::FileProvider::populate(&startup_file_entries, &files_cfg);
                     let file_provider = providers::files::FileProvider::with_entries(
