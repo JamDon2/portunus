@@ -21,7 +21,6 @@ const PROVIDERS: ProviderDef[] = [
   { key: "files",  label: "Files",         desc: "Indexed file search" },
   { key: "recent", label: "Recent files",  desc: "Recently-used files from ~/.local/share/recently-used.xbel" },
   { key: "calc",   label: "Calculator",    desc: "Inline math expression evaluator" },
-  { key: "dict",   label: "Dictionary",    desc: "Word definitions via dict", dep: "dict" },
 ];
 
 export default function ProvidersSection({ config, onChange }: Props) {

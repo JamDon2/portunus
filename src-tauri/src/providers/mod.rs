@@ -20,6 +20,9 @@ pub const SCORE_CLIPBOARD: f32 = 5_000_000.0;
 pub const SCORE_TIMER: f32 = 4_000_000.0;
 pub const SCORE_CALC: f32 = 3_000_000.0;
 pub const SCORE_DICT: f32 = 3_000_000.0;
+/// Sparse-fill dict rows — kept below files (1M) so they sink to the bottom and
+/// only matter when little else matched.
+pub const SCORE_DICT_FILL: f32 = 500_000.0;
 pub const SCORE_APP: f32 = 2_000_000.0;
 pub const SCORE_FILE: f32 = 1_000_000.0;
 pub const SCORE_FOLDER: f32 = 0.0;
@@ -131,6 +134,9 @@ pub struct PluginRegistry {
     max_results: usize,
     frecency: Option<Arc<FrecencyStore>>,
     frecency_weight: f32,
+    /// (fill_threshold, fill_max) for dict sparse-fill gating. None disables
+    /// gating (dict rows pass through untouched).
+    dict_fill: Option<(usize, usize)>,
 }
 
 impl PluginRegistry {
@@ -140,7 +146,14 @@ impl PluginRegistry {
             max_results,
             frecency: None,
             frecency_weight: 0.0,
+            dict_fill: None,
         }
+    }
+
+    /// Configure dict sparse-fill gating: `(fill_threshold, fill_max)`, or None
+    /// to disable gating.
+    pub fn set_dict_fill(&mut self, fill: Option<(usize, usize)>) {
+        self.dict_fill = fill;
     }
 
     pub fn register(&mut self, provider: impl Provider + 'static) {
@@ -173,6 +186,28 @@ impl PluginRegistry {
             .iter()
             .flat_map(|p| p.search(query))
             .collect();
+
+        // Dict sparse-fill gating: for a plain query, dict rows are fill
+        // candidates — keep them only when other results are sparse, capped at
+        // fill_max. Explicit "define"/"dict" queries bypass this entirely.
+        if let Some((fill_threshold, fill_max)) = self.dict_fill {
+            if !dict::is_explicit_dict_query(query) {
+                let is_dict = |r: &SearchResult| r.kind == "dict" || r.kind == "dict-hint";
+                let non_dict = results.iter().filter(|r| !is_dict(r)).count();
+                if non_dict >= fill_threshold {
+                    results.retain(|r| !is_dict(r));
+                } else {
+                    let mut kept = 0;
+                    results.retain(|r| {
+                        if !is_dict(r) {
+                            return true;
+                        }
+                        kept += 1;
+                        kept <= fill_max
+                    });
+                }
+            }
+        }
 
         // Penalize results inside (or being) hidden paths so configs/caches sink.
         for r in &mut results {

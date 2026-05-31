@@ -28,7 +28,13 @@ export interface Config {
     files: boolean;
     recent: boolean;
     calc: boolean;
-    dict: boolean;
+  };
+  dict: {
+    enabled: boolean;
+    fill_sparse: boolean;
+    correct_misspellings: boolean;
+    fill_threshold: number;
+    fill_max: number;
   };
   files: {
     dirs: DirEntry[];

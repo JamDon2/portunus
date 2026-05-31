@@ -19,6 +19,7 @@ pub struct Config {
     pub debug: DebugConfig,
     pub content: ContentConfig,
     pub appearance: AppearanceConfig,
+    pub dict: DictConfig,
 }
 
 impl Default for Config {
@@ -33,6 +34,7 @@ impl Default for Config {
             debug: DebugConfig::default(),
             content: ContentConfig::default(),
             appearance: AppearanceConfig::default(),
+            dict: DictConfig::default(),
         }
     }
 }
@@ -61,7 +63,6 @@ pub struct ProvidersConfig {
     pub files: bool,
     pub recent: bool,
     pub calc: bool,
-    pub dict: bool,
 }
 
 impl Default for ProvidersConfig {
@@ -71,7 +72,35 @@ impl Default for ProvidersConfig {
             files: true,
             recent: true,
             calc: true,
-            dict: true,
+        }
+    }
+}
+
+/// Dictionary provider settings. Moved out of `[providers]` so the sparse-fill
+/// behavior and scoring constants are tunable.
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct DictConfig {
+    /// Master on/off for the dict provider (explicit lookups + fill).
+    pub enabled: bool,
+    /// Fill sparse result lists with dictionary matches for the typed word.
+    pub fill_sparse: bool,
+    /// Allow edit-distance (typo) matches when filling; false = exact lemma only.
+    pub correct_misspellings: bool,
+    /// Only fill when fewer than this many non-dict results exist.
+    pub fill_threshold: usize,
+    /// Max dictionary rows added when filling.
+    pub fill_max: usize,
+}
+
+impl Default for DictConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            fill_sparse: true,
+            correct_misspellings: true,
+            fill_threshold: 3,
+            fill_max: 5,
         }
     }
 }

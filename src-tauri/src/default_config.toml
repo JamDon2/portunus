@@ -10,7 +10,6 @@ apps      = true       # .desktop application search
 files     = true       # file indexer (see [[files.dirs]])
 recent    = true       # recently-used files from ~/.local/share/recently-used.xbel
 calc      = true       # inline calculator
-dict      = true       # dictionary lookup (requires dictd; install: sudo pacman -S dictd)
 
 # Directories indexed by the file provider.
 # Each entry requires a `path`; `depth` defaults to 2.
@@ -21,6 +20,13 @@ depth = 2
 [[files.dirs]]
 path  = "~/Documents"
 depth = 2
+
+[dict]
+enabled              = true     # dictionary lookup (requires dictd; install: sudo pacman -S dictd)
+fill_sparse          = true     # fill sparse result lists with dictionary matches for the typed word
+correct_misspellings = true     # allow edit-distance (typo) matches; false = exact word only
+fill_threshold       = 3        # only fill when fewer than this many non-dict results exist
+fill_max             = 5        # max dictionary rows added when filling
 
 [recent]
 max_entries = 500      # how many XBEL bookmarks to load

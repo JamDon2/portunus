@@ -438,6 +438,7 @@ pub fn run() {
     let files_cfg = cfg.files.clone();
     let recent_cfg = cfg.recent.clone();
     let providers_cfg = cfg.providers.clone();
+    let dict_cfg = cfg.dict.clone();
     let max_results = cfg.general.max_results;
     let content_cfg = cfg.content.clone();
 
@@ -472,6 +473,12 @@ pub fn run() {
         }));
 
     let registry: Registry = Arc::new(RwLock::new(providers::PluginRegistry::new(max_results)));
+    if dict_cfg.enabled {
+        registry
+            .write()
+            .unwrap()
+            .set_dict_fill(Some((dict_cfg.fill_threshold, dict_cfg.fill_max)));
+    }
     let bg_registry = Arc::clone(&registry);
 
     let frecency_state: FrecencyState = if frecency_cfg.enabled {
@@ -645,8 +652,8 @@ pub fn run() {
                 // Built here, not in the setup closure: DictProvider::new() now
                 // builds an embedded word index (BK-tree), too heavy for the
                 // window-show path.
-                if providers_cfg.dict {
-                    let dict_provider = providers::dict::DictProvider::new();
+                if dict_cfg.enabled {
+                    let dict_provider = providers::dict::DictProvider::new(&dict_cfg);
                     if dict_provider.available {
                         bg_registry.write().unwrap().register(dict_provider);
                     } else {

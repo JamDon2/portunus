@@ -16,9 +16,15 @@ interface Props {
 
 export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults }: Props) {
   const selectedRef = useRef<HTMLDivElement>(null);
+  const selectedLabelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Scroll the row first so it's always visible, then the group label (if the
+    // selected row is first-in-group) so its header isn't clipped above the fold.
+    // The label is adjacent above the row, so scrolling it back in keeps the row
+    // visible too.
     selectedRef.current?.scrollIntoView({ block: "nearest" });
+    selectedLabelRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
   return (
@@ -36,14 +42,14 @@ export default function ResultsList({ results, selectedIndex, active, searching,
           <Fragment key={result.id}>
             {showLabel && (
               <div
-                ref={i === selectedIndex ? selectedRef : null}
+                ref={i === selectedIndex ? selectedLabelRef : null}
                 className={`result-group-label${i === 0 ? " first" : ""}`}
               >
                 <span>{label}</span>
               </div>
             )}
             <div
-              ref={i === selectedIndex && !showLabel ? selectedRef : null}
+              ref={i === selectedIndex ? selectedRef : null}
               className={`result-row${i === selectedIndex ? " selected" : ""}`}
               role="option"
               aria-selected={i === selectedIndex}

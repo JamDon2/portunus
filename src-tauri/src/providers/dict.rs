@@ -182,6 +182,23 @@ impl WordIndex {
         hits
     }
 
+    /// Sparse-fill candidate ranks for the typed word, ordered best-first.
+    /// Every returned rank is a real wordlist lemma (so `dict` resolves it).
+    /// `allow_typos` enables edit-distance corrections; otherwise only the
+    /// exact lemma (if present) is returned.
+    fn fill_matches(&self, word: &str, limit: usize, allow_typos: bool) -> Vec<u32> {
+        if allow_typos {
+            // corrections() is distance-then-frequency ordered; an exact match
+            // is distance 0 and therefore comes first.
+            return self.corrections(word, limit);
+        }
+        let lo = self.by_alpha.partition_point(|(w, _)| w.as_ref() < word);
+        match self.by_alpha.get(lo) {
+            Some((w, r)) if w.as_ref() == word => vec![*r],
+            _ => Vec::new(),
+        }
+    }
+
     /// Spell-correction ranks, ordered by (distance asc, frequency asc).
     fn corrections(&self, word: &str, limit: usize) -> Vec<u32> {
         // Tight tolerance for short words so e.g. "cat" doesn't pull car/can/cab/...
@@ -194,15 +211,59 @@ impl WordIndex {
     }
 }
 
+/// True if `query` is an explicit dictionary query: a prefix of "define"/"dict"
+/// (min 2 chars, no space) or a `define `/`dict `-prefixed lookup. The registry
+/// uses this to decide whether dict rows are explicit (always kept) or
+/// sparse-fill candidates (dropped when other results are plentiful).
+pub fn is_explicit_dict_query(query: &str) -> bool {
+    let q = query.trim_end();
+    let is_define_prefix = q.len() >= 2 && "define".starts_with(q) && !q.contains(' ');
+    let is_dict_prefix = q.len() >= 2 && "dict".starts_with(q) && !q.contains(' ');
+    is_define_prefix
+        || is_dict_prefix
+        || q.strip_prefix("define ").is_some()
+        || q.strip_prefix("dict ").is_some()
+}
+
 pub struct DictProvider {
     pub available: bool,
     index: WordIndex,
+    fill_sparse: bool,
+    correct_misspellings: bool,
+    fill_max: usize,
 }
 
 impl DictProvider {
-    pub fn new() -> Self {
+    pub fn new(cfg: &crate::config::DictConfig) -> Self {
         let available = Command::new("dict").arg("--version").output().is_ok();
-        Self { available, index: WordIndex::build() }
+        Self {
+            available,
+            index: WordIndex::build(),
+            fill_sparse: cfg.fill_sparse,
+            correct_misspellings: cfg.correct_misspellings,
+            fill_max: cfg.fill_max,
+        }
+    }
+
+    /// Sparse-fill rows for a plain (non-prefixed) query. Returns only words
+    /// that exist in the embedded wordlist — if the query is neither a lemma
+    /// nor (when enabled) close enough to correct, returns empty. Rows are
+    /// low-scored so the registry keeps them only when results are sparse.
+    fn fill_results(&self, query: &str) -> Vec<SearchResult> {
+        let q = query.trim();
+        if !self.fill_sparse || q.contains(' ') || q.chars().count() < 3 {
+            return vec![];
+        }
+        let q_lc = q.to_lowercase();
+        self.index
+            .fill_matches(&q_lc, self.fill_max, self.correct_misspellings)
+            .into_iter()
+            .enumerate()
+            .map(|(i, rank)| {
+                let w = self.index.word(rank);
+                dict_result(w, "WordNet dictionary", super::SCORE_DICT_FILL - i as f32 * 1e-3)
+            })
+            .collect()
     }
 }
 
@@ -239,7 +300,12 @@ impl Provider for DictProvider {
         } else if let Some(w) = q.strip_prefix("dict ") {
             w.trim()
         } else {
-            return vec![];
+            // Tier 4: no prefix — sparse-fill candidates for the typed word.
+            // Only words present in the embedded wordlist are returned (so the
+            // literal typed word is NOT emitted unless it's a real lemma). The
+            // registry decides whether to keep these based on how many other
+            // results exist.
+            return self.fill_results(q);
         };
 
         if word.is_empty() {
@@ -575,6 +641,35 @@ mod tests {
         let ranks = idx.corrections("recieve", 8);
         let words: Vec<&str> = ranks.iter().map(|r| idx.word(*r)).collect();
         assert!(words.contains(&"receive"), "got {words:?}");
+    }
+
+    #[test]
+    fn fill_matches_exact_only() {
+        let idx = WordIndex::build();
+        // Exact lemma resolves to itself; a typo resolves to nothing.
+        let exact = idx.fill_matches("receive", 5, false);
+        assert_eq!(exact.iter().map(|r| idx.word(*r)).collect::<Vec<_>>(), ["receive"]);
+        assert!(idx.fill_matches("recieve", 5, false).is_empty());
+        // A non-word resolves to nothing even in exact mode.
+        assert!(idx.fill_matches("zzzxqq", 5, false).is_empty());
+    }
+
+    #[test]
+    fn fill_matches_corrects_when_typos_allowed() {
+        let idx = WordIndex::build();
+        let words: Vec<&str> =
+            idx.fill_matches("recieve", 5, true).iter().map(|r| idx.word(*r)).collect();
+        assert!(words.contains(&"receive"), "got {words:?}");
+    }
+
+    #[test]
+    fn is_explicit_dict_query_detects_prefixes_and_lookups() {
+        assert!(is_explicit_dict_query("de"));
+        assert!(is_explicit_dict_query("dict"));
+        assert!(is_explicit_dict_query("define apple"));
+        assert!(is_explicit_dict_query("dict apple"));
+        assert!(!is_explicit_dict_query("apple"));
+        assert!(!is_explicit_dict_query("d"));
     }
 
     #[test]

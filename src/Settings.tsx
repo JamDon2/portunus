@@ -6,6 +6,7 @@ import { useTauriListener } from "./hooks/useTauriListener";
 import { Config, ContentDirEntry } from "./types";
 import GeneralSection from "./components/settings/GeneralSection";
 import ProvidersSection from "./components/settings/ProvidersSection";
+import DictSection from "./components/settings/DictSection";
 import FilesSection from "./components/settings/FilesSection";
 import SearchSection from "./components/settings/SearchSection";
 import FrecencySection from "./components/settings/FrecencySection";
@@ -16,7 +17,7 @@ import { applyTheme } from "./theme";
 import "./settings.css";
 import "./themes.css";
 
-type Section = "general" | "providers" | "files" | "search" | "frecency" | "content" | "debug" | "appearance";
+type Section = "general" | "providers" | "dict" | "files" | "search" | "frecency" | "content" | "debug" | "appearance";
 
 interface NavItem {
   id: Section;
@@ -41,6 +42,15 @@ const NAV: NavItem[] = [
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+    ),
+  },
+  {
+    id: "dict",
+    label: "Dictionary",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
       </svg>
     ),
   },
@@ -426,6 +436,7 @@ export default function Settings() {
               <>
                 {activeSection === "general"   && <GeneralSection   config={config} onChange={setConfig} />}
                 {activeSection === "providers" && <ProvidersSection config={config} onChange={setConfig} />}
+                {activeSection === "dict"      && <DictSection      config={config} onChange={setConfig} />}
                 {activeSection === "files"     && <FilesSection     config={config} onChange={setConfig} />}
                 {activeSection === "search"    && <SearchSection    config={config} onChange={setConfig} />}
                 {activeSection === "frecency"  && <FrecencySection  config={config} onChange={setConfig} />}

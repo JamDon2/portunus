@@ -136,16 +136,20 @@ pub fn rebuild_providers(
         notify_cb();
     }
 
-    if new_cfg.providers.dict != old_cfg.providers.dict {
+    if new_cfg.dict != old_cfg.dict {
         let mut reg = registry.write().unwrap();
-        if new_cfg.providers.dict {
-            let p = providers::dict::DictProvider::new();
+        if new_cfg.dict.enabled {
+            let p = providers::dict::DictProvider::new(&new_cfg.dict);
             if p.available {
-                reg.register(p);
+                reg.replace("dict", Some(Box::new(p)));
+            } else {
+                reg.replace("dict", None);
             }
+            reg.set_dict_fill(Some((new_cfg.dict.fill_threshold, new_cfg.dict.fill_max)));
             eprintln!("[config] dict provider enabled");
         } else {
             reg.replace("dict", None);
+            reg.set_dict_fill(None);
             eprintln!("[config] dict provider disabled");
         }
         notify_cb();
