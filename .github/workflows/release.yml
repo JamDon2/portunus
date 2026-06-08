@@ -42,6 +42,7 @@ jobs:
             libssl-dev \
             poppler-utils \
             libfuse2t64 \
+            patchelf \
             file desktop-file-utils \
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
