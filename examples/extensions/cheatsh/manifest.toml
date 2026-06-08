@@ -1,0 +1,16 @@
+api = 1
+name = "cheatsh"
+version = "0.1.0"
+description = "cheat.sh command lookup"
+author = "you"
+kinds = ["ext-cheatsh"]
+
+[permissions]
+network = ["cheat.sh"]
+clipboard = true
+open_url = true
+kv = true
+
+[limits]
+search_timeout_ms = 50
+activate_timeout_ms = 5000

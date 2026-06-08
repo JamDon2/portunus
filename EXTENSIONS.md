@@ -100,10 +100,142 @@ Called lazily when the user selects one of your results (500 ms budget).
 Return one of the declarative content types; the host renders it natively:
 
 ```jsonc
-{ "type": "markdown", "content": "## GFM markdown (raw HTML is not rendered)" }
-{ "type": "metadata", "items": [ { "label": "Version", "value": "1.2.0" } ] }
-{ "type": "image",    "mime": "image/png", "data_base64": "..." }   // ≤ 1 MB; png/jpeg/gif/webp only
-{ "type": "list",     "items": [ { "title": "...", "subtitle": "..." } ] }
+{ "type": "markdown",  "content": "## GFM markdown (raw HTML is not rendered)" }
+{ "type": "metadata",  "items": [ { "label": "Version", "value": "1.2.0" } ] }
+{ "type": "image",     "mime": "image/png", "data_base64": "..." }   // ≤ 1 MB; png/jpeg/gif/webp only
+{ "type": "list",      "items": [ { "title": "...", "subtitle": "...", "tag": "v2", "mono": true } ] }
+{ "type": "sections",  "items": [ { "heading": "Basic usage", "rows": [ ["cmd --flag", "description"], ["solo-cmd"] ] } ] }
+{ "type": "code",      "lang": "bash", "content": "echo hello" }
+{ "type": "html",      "content": "<style>…</style><div>…</div>" }   // ≤ 128 KB; see below
+```
+
+#### `list` options
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `title` | string | required |
+| `subtitle` | string? | muted second line |
+| `tag` | string? | small badge chip to the right of the title |
+| `mono` | bool | render `title` in monospace (default false) |
+
+#### `sections`
+
+Two-column command/description table, optionally grouped under headings. Ideal
+for cheat sheets, man pages, shortcut references.
+
+Each `rows` entry is a `Vec<String>`. **Two or more cells**: first cell is the
+command (monospace, accent colour); remaining cells are the description (muted).
+**Single cell**: spans both columns as a standalone code block.
+
+#### `code`
+
+Monospace preformatted block. `lang` is reserved for future syntax highlighting
+and is passed through unchanged; no highlighting is applied today.
+
+#### `html`
+
+Arbitrary HTML+CSS rendered in a **sandboxed `<iframe>`**. Use this when the
+declarative types can't express your layout (weather cards, file trees, CSS
+charts, custom metadata grids).
+
+**What the host injects** into every srcdoc before your content:
+
+```html
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline' data:; img-src data:;">
+<style>
+  :root { --fg:…; --fg-mute:…; --fg-dim:…; --fg-desc:…;
+          --bg:…; --bg-deep:…; --bg-card:…;
+          --accent:…; --accent-soft:…; --accent-border:… }
+  * { box-sizing: border-box; margin: 0; padding: 0 }
+  body { background: transparent; color: var(--fg);
+         font-size: 13px; line-height: 1.5;
+         font-family: system-ui, -apple-system, sans-serif }
+</style>
+```
+
+All current theme values are baked in at render time, so `var(--fg)`,
+`var(--accent)`, `var(--bg-deep)`, etc. work in your inline CSS.
+
+**What is allowed**: inline `<style>` blocks, inline `style=""` attributes,
+`data:` URIs (for embedded images), flexbox/grid, CSS custom properties,
+CSS animations.
+
+**What is blocked** (enforced by both `sandbox=""` and CSP):
+- JavaScript (no `<script>`, no event handlers, no `javascript:` URIs)
+- External network requests (`url()` to external hosts, `<img src="https://…">`)
+- Forms and navigation
+- Cookies and storage
+
+**Cap**: 128 KB. Larger content is rejected by the host and surfaces an error in
+Settings; the result still appears without a preview.
+
+#### Utility classes
+
+The host injects a small design-system sheet. Use these classes directly — no
+`<style>` block needed for common patterns.
+
+**Color**
+
+| Class | Effect |
+|---|---|
+| `.text-mute` | `--fg-mute` text |
+| `.text-dim` | `--fg-dim` text |
+| `.text-desc` | `--fg-desc` text |
+| `.text-accent` | `--accent` text |
+
+**Typography**
+
+| Class | Effect |
+|---|---|
+| `.text-xs` | 10 px, slight letter-spacing |
+| `.text-sm` | 11 px |
+| `.text-lg` | 16 px |
+| `.text-hero` | 42 px, weight 200 — for big numbers |
+| `.text-label` | 10 px uppercase, muted — section headers |
+| `.mono` | monospace stack, 12 px |
+| `.truncate` | single-line ellipsis |
+
+**Layout**
+
+| Class | Effect |
+|---|---|
+| `.row` | `flex; align-items:center; gap:8px` |
+| `.col` | `flex-direction:column; gap:6px` |
+| `.fill` | `flex:1; min-width:0` |
+| `.between` | `justify-content:space-between` |
+| `.wrap` | `flex-wrap:wrap` |
+
+**Surfaces**
+
+| Class | Effect |
+|---|---|
+| `.card` | `--bg-card` background, `--radius-sm` corners, 10/12 px padding |
+| `.surface` | `--bg-deep` background, same shape |
+| `.divider` | 1 px `--line` separator (use as `<hr>` or `<div>`) |
+
+**Badges & accents**
+
+| Class | Effect |
+|---|---|
+| `.tag` | small muted chip (`--accent-soft` fill) |
+| `.tag-accent` | small accent-filled chip (dark text) |
+| `.bar` | 3 px accent progress bar — set `width` inline |
+| `.accent-line` | left border in `--accent-border` + 8 px indent |
+
+**Example** (no custom CSS needed):
+```html
+<div class="card col" style="gap:12px">
+  <div class="row between">
+    <span class="text-label">Budapest</span>
+    <span class="tag">partly cloudy</span>
+  </div>
+  <div class="text-hero">22°</div>
+  <div class="bar" style="width:72%"></div>
+  <div class="row between text-sm text-mute">
+    <span>Mon 24°</span><span>Tue 19°</span><span>Wed 21°</span>
+  </div>
+</div>
 ```
 
 ### `refresh` (optional)

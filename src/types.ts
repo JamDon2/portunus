@@ -90,7 +90,10 @@ export type PreviewContent =
   | { type: "markdown"; content: string }
   | { type: "metadata"; items: { label: string; value: string }[] }
   | { type: "image"; mime: string; data_base64: string }
-  | { type: "list"; items: { title: string; subtitle?: string }[] };
+  | { type: "list"; items: { title: string; subtitle?: string; tag?: string; mono?: boolean }[] }
+  | { type: "sections"; items: { heading?: string; rows: string[][] }[] }
+  | { type: "code"; lang: string; content: string }
+  | { type: "html"; content: string };
 
 /** One installed extension, as reported by the `list_extensions` command. */
 export interface ExtensionInfo {

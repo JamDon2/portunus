@@ -323,13 +323,18 @@ pub fn extension_activate(
 }
 
 #[tauri::command]
-pub fn extension_preview(
+pub async fn extension_preview(
     registry: tauri::State<'_, Registry>,
     id: String,
     ext: ExtensionResult,
 ) -> Result<Option<PreviewContent>, String> {
+    // Resolve the provider synchronously (fast read-lock), then run the wasm
+    // call on the blocking thread pool so rapid navigation never stalls the
+    // Tauri async runtime while the extension does its network I/O.
     let provider = provider_for_id(&crate::util::read(&registry), &id)?;
-    provider.preview(ext)
+    tauri::async_runtime::spawn_blocking(move || provider.preview(ext))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Re-discovers the extensions dir and force-reloads wasm bytes. Wired to the

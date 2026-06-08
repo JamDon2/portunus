@@ -61,9 +61,13 @@ pub struct WasmProvider {
     limits: Limits,
     /// Compiled once at load; both instances derive from it cheaply.
     compiled: CompiledPlugin,
-    /// Interactive instance (search/activate/preview).
+    /// Interactive instance (search/activate).
     /// None = needs re-instantiation before the next call.
     instance: Mutex<Option<Plugin>>,
+    /// Dedicated preview instance — preview calls can block for hundreds of ms
+    /// (network I/O in the extension), which must never delay a search call or
+    /// stall rapid result navigation.
+    preview_instance: Mutex<Option<Plugin>>,
     /// Dedicated background instance for `refresh` — a refresh may hold its
     /// instance for seconds, which must never block a keystroke's search.
     /// Lazily created on first refresh; only extensions with `[background]`
@@ -108,13 +112,14 @@ impl WasmProvider {
             limits,
             compiled,
             instance: Mutex::new(None),
+            preview_instance: Mutex::new(None),
             bg_instance: Mutex::new(None),
             last_error: Mutex::new(None),
             fail_count: AtomicU32::new(0),
             benched: AtomicBool::new(false),
         };
-        let plugin = provider.instantiate()?;
-        *util::lock(&provider.instance) = Some(plugin);
+        *util::lock(&provider.instance) = Some(provider.instantiate()?);
+        *util::lock(&provider.preview_instance) = Some(provider.instantiate()?);
         Ok(provider)
     }
 
@@ -316,7 +321,7 @@ impl WasmProvider {
         let input = PreviewInput { result };
         let json = serde_json::to_string(&input).map_err(|e| e.to_string())?;
         let Some(raw) = self.call_with_budget(
-            &self.instance,
+            &self.preview_instance,
             "preview",
             json,
             Duration::from_millis(PREVIEW_TIMEOUT_MS),
@@ -335,6 +340,11 @@ impl WasmProvider {
             }
             if data_base64.len() > MAX_IMAGE_B64_BYTES {
                 return Err("preview: image exceeds the 1 MB cap".to_string());
+            }
+        }
+        if let PreviewContent::Html { content } = &content {
+            if content.len() > 128 * 1024 {
+                return Err("preview: html exceeds the 128 KB cap".to_string());
             }
         }
         Ok(Some(content))

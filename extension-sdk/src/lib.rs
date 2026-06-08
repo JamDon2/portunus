@@ -109,8 +109,22 @@ pub enum PreviewContent {
     Metadata { items: Vec<MetadataItem> },
     /// Inline image, base64-encoded. Capped at 1 MB by the host.
     Image { mime: String, data_base64: String },
-    /// Simple row list.
+    /// Simple row list with optional tag badges and monospace titles.
     List { items: Vec<ListItem> },
+    /// Arbitrary HTML rendered in a sandboxed iframe. No scripts execute; no
+    /// external network requests are allowed (CSP: `default-src 'none';
+    /// style-src 'unsafe-inline' data:; img-src data:`). The host injects
+    /// theme CSS variables and a base reset. Capped at 128 KB. Pure CSS/HTML
+    /// only — use for rich layouts (weather cards, file trees, charts) the
+    /// declarative types can't express.
+    Html { content: String },
+    /// Sequence of named sections, each a two-column command/description table.
+    /// First cell per row is styled as a command (monospace); remaining cells as
+    /// description text. Perfect for cheat sheets, man pages, shortcut references.
+    Sections { items: Vec<SectionItem> },
+    /// Monospace code block. `lang` is informational (no syntax highlighting added
+    /// yet — it is reserved for future use and passed through unchanged).
+    Code { lang: String, content: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,11 +133,28 @@ pub struct MetadataItem {
     pub value: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ListItem {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
+    /// Small badge chip shown to the right of the title (e.g. "installed", "v2.0").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// Render `title` in monospace font (useful for command names, paths, etc.).
+    #[serde(default)]
+    pub mono: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionItem {
+    /// Optional heading rendered above the rows in small-caps style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading: Option<String>,
+    /// Each row is a slice of cells. The first cell is the "command" (monospace,
+    /// full-colour); the rest are the description (muted). A single-cell row
+    /// spans both columns.
+    pub rows: Vec<Vec<String>>,
 }
 
 /// Guest-side helpers: safe wrappers around the Portunus host functions.
