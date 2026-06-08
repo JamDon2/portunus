@@ -4,7 +4,7 @@
 # clipboard/dict providers degrade gracefully when their optdepends are absent.
 
 pkgname=portunus
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Application launcher and power-user search for Wayland"
 arch=('x86_64')
