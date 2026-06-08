@@ -4,6 +4,7 @@ mod content_index;
 mod extensions;
 mod frecency;
 mod ipc;
+mod layer_shell;
 mod office;
 mod preview;
 mod provider_reload;
@@ -264,6 +265,11 @@ fn save_config(config: config::Config, state: tauri::State<ConfigState>) -> Resu
 
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle, section: Option<String>) {
+    // Hide the launcher so it doesn't sit on top of (or steal layer-shell
+    // keyboard focus from) the settings window.
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
@@ -455,6 +461,7 @@ pub fn run() {
     let providers_cfg = cfg.providers.clone();
     let dict_cfg = cfg.dict.clone();
     let max_results = cfg.general.max_results;
+    let layer_shell_enabled = cfg.general.layer_shell;
     let content_cfg = cfg.content.clone();
 
     // last_cfg is used by the config watcher and reload_fn as the diff baseline.
@@ -537,6 +544,9 @@ pub fn run() {
             runtime_assets::init(app.path().resource_dir().ok());
 
             if let Some(window) = app.get_webview_window("main") {
+                if layer_shell_enabled {
+                    layer_shell::apply(&window);
+                }
                 let _ = window.hide();
             }
 

@@ -65,7 +65,7 @@ Reports for the untested compositors are welcome, whether it worked or not, so I
 # ~/.config/hypr/hyprland.conf
 exec-once = /path/to/portunus
 
-windowrule = float on, stay_focused 1, no_blur 1, opacity 1 1, border_size 0, match:class portunus
+windowrule = pin on, float on, stay_focused 1, no_blur 1, opacity 1 1, border_size 0, match:class portunus
 bind = CTRL, SPACE, exec, /path/to/portunus --show
 bind = SUPER, V, exec, /path/to/portunus --clipboard
 ```

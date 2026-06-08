@@ -57,11 +57,14 @@ pub struct GeneralConfig {
     /// Set to true once the first-launch onboarding wizard has been completed
     /// (or skipped). When false, the launcher shows the wizard on next show.
     pub onboarding_completed: bool,
+    /// Use a wlr-layer-shell overlay surface on Wayland for compositor-agnostic
+    /// always-on-top launcher behavior. Linux/Wayland only; takes effect on restart.
+    pub layer_shell: bool,
 }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
-        Self { max_results: 20, onboarding_completed: false }
+        Self { max_results: 20, onboarding_completed: false, layer_shell: false }
     }
 }
 

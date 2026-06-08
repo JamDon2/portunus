@@ -7,6 +7,10 @@ import Settings from "./Settings";
 const root = document.getElementById("root") as HTMLElement;
 const isSettings = getCurrentWindow().label === "settings";
 
+// Mark the document so window-specific CSS (e.g. the opaque settings surface)
+// doesn't leak into the transparent launcher window, which shares this bundle.
+if (isSettings) document.documentElement.classList.add("settings-win");
+
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     {isSettings ? <Settings /> : <App />}

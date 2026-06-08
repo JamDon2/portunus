@@ -1,4 +1,5 @@
 import { Config } from "../../types";
+import Toggle from "./Toggle";
 
 interface Props {
   config: Config;
@@ -8,6 +9,9 @@ interface Props {
 export default function GeneralSection({ config, onChange }: Props) {
   const set = (max_results: number) =>
     onChange({ ...config, general: { ...config.general, max_results } });
+
+  const setLayerShell = (layer_shell: boolean) =>
+    onChange({ ...config, general: { ...config.general, layer_shell } });
 
   return (
     <div>
@@ -34,6 +38,16 @@ export default function GeneralSection({ config, onChange }: Props) {
             />
             <button className="settings-number-btn" onClick={() => set(Math.min(50, config.general.max_results + 1))}>+</button>
           </div>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <div className="settings-field-label">
+          <div className="settings-field-name">Layer-shell overlay</div>
+          <div className="settings-field-desc">Wayland only: float above everything via wlr-layer-shell (like wofi). Restart to apply.</div>
+        </div>
+        <div className="settings-field-control">
+          <Toggle label="Layer-shell overlay" checked={config.general.layer_shell} onChange={setLayerShell} />
         </div>
       </div>
     </div>

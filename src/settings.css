@@ -1,12 +1,21 @@
 /* Settings window styles - shares CSS vars with App.css */
 
 html, body, #root {
-  background: transparent;
   overflow: hidden;
   height: 100%;
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+/* Opaque, full-rect surface: the settings window is a normal toplevel, so a
+   transparent/rounded surface leaves the compositor's square border tracing
+   the wallpaper through the corners. Fill edge-to-edge instead. Scoped to the
+   settings window so it doesn't override the launcher's transparent surface. */
+html.settings-win,
+html.settings-win body,
+html.settings-win #root {
+  background: var(--bg-card);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -94,14 +103,11 @@ a:focus-visible,
   height: 100vh;
   display: flex;
   flex-direction: column;
-  padding: 8px;
 }
 
 .settings-card {
   flex: 1;
   background: var(--bg-card);
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
   overflow: hidden;
   display: grid;
   grid-template-rows: 44px 1fr 52px;

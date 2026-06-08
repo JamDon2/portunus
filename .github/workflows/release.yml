@@ -4,7 +4,11 @@ name: Release
 # Triggered by pushing a version tag (e.g. `git tag v0.1.0 && git push --tags`),
 # or run manually from the Actions tab. The AppImage bundles libpdfium, the
 # poppler tools, and the English tesseract data so PDF preview, content search,
-# and OCR work with nothing installed on the user's machine.
+# and OCR work with nothing installed on the user's machine. libgtk-layer-shell
+# is a link dependency of the binary, so linuxdeploy carries it in automatically
+# (the layer-shell launcher mode needs it present). bundleMediaFramework (set in
+# tauri.bundle.conf.json) bundles the GStreamer plugins below so WebKit audio
+# (the timer chime) works inside the AppImage's repointed GStreamer environment.
 
 on:
   push:
@@ -28,11 +32,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
+            libgtk-layer-shell-dev \
             libtesseract-dev libleptonica-dev \
             libssl-dev \
             poppler-utils \
             libfuse2 \
-            file desktop-file-utils
+            file desktop-file-utils \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav \
+            gstreamer1.0-pulseaudio
 
       - uses: oven-sh/setup-bun@v2
 

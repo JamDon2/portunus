@@ -22,6 +22,7 @@ export interface Config {
   general: {
     max_results: number;
     onboarding_completed: boolean;
+    layer_shell: boolean;
   };
   providers: {
     apps: boolean;

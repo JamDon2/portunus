@@ -35,3 +35,7 @@ notify-debouncer-full = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 extism = "1.30.0"
 portunus-ext-sdk = { path = "../extension-sdk", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"            # must match tao's gtk version (see Cargo.lock)
+gtk-layer-shell = { version = "0.8", features = ["v0_6"] } # wlr-layer-shell overlay; v0_6 for set_keyboard_mode

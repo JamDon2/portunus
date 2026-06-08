@@ -60,3 +60,4 @@ Packaged AppImage builds bundle libpdfium, the poppler tools, and English tesser
 - `cliphist` + `wl-clipboard` - Clipboard history provider. Not bundled.
 - `poppler` - PDF content indexing (not preview). Bundled in the AppImage; system binary used for source builds.
 - `tesseract` data - OCR (via `leptess`, always compiled in). English data bundled in the AppImage; other languages need the system `tesseract-data-<lang>`.
+- `libgtk-layer-shell` - wlr-layer-shell overlay surface for the launcher window (`layer_shell.rs`, opt-in via `[general] layer_shell`). Required at build time on Linux. Install on Arch: `pacman -S gtk-layer-shell`; Debian: `libgtk-layer-shell-dev`. Wayland-only at runtime; no-op on X11.
