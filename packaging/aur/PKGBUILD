@@ -1,0 +1,71 @@
+# Source build: links the host's own WebKitGTK/GTK instead of bundling them, so
+# this package never carries an old WebKit and never has the input lag the
+# AppImage can show on bleeding-edge systems. PDF preview, content OCR, and the
+# clipboard/dict providers degrade gracefully when their optdepends are absent.
+
+pkgname=portunus
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Application launcher and power-user search for Wayland"
+arch=('x86_64')
+url="https://github.com/SzilBalazs/portunus"
+license=('Apache-2.0')
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'gtk-layer-shell'   # binary links it; needed even though layer_shell is opt-in
+)
+optdepends=(
+  'pdfium-bin: PDF preview'
+  'poppler: PDF content indexing (pdftotext/pdftoppm)'
+  'tesseract: OCR of images/PDFs in the content index'
+  'tesseract-data-eng: English OCR language data'
+  'dictd: dictionary lookups (dict provider)'
+  'cliphist: clipboard history provider'
+  'wl-clipboard: clipboard history provider (paste)'
+)
+makedepends=(
+  'rust'
+  'cargo'
+  'bun-bin'
+  'webkit2gtk-4.1'
+  'gtk3'
+  'gtk-layer-shell'
+  'tesseract'
+  'leptonica'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  bun install --frozen-lockfile
+  # --no-bundle: build only the binary; the AppImage/deb bundlers are CI's job.
+  bun tauri build --no-bundle
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  install -Dm755 "src-tauri/target/release/$pkgname" \
+    "$pkgdir/usr/bin/$pkgname"
+
+  install -Dm644 "src-tauri/icons/128x128.png" \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/$pkgname.png"
+  install -Dm644 "src-tauri/icons/32x32.png" \
+    "$pkgdir/usr/share/icons/hicolor/32x32/apps/$pkgname.png"
+
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/$pkgname.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Portunus
+Comment=$pkgdesc
+Exec=$pkgname
+Icon=$pkgname
+Terminal=false
+StartupWMClass=$pkgname
+Categories=Utility;
+EOF
+
+  install -Dm644 LICENSE.txt "$pkgdir/usr/share/licenses/$pkgname/LICENSE.txt"
+}

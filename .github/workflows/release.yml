@@ -21,9 +21,14 @@ permissions:
 
 jobs:
   appimage:
-    # 22.04 ships WebKitGTK 4.1 and an older glibc, which keeps the AppImage
-    # runnable on a wide range of distros.
-    runs-on: ubuntu-22.04
+    # 24.04 ships a newer WebKitGTK 4.1. An AppImage bundles the whole GTK/WebKit
+    # stack (the canonical AppImage excludelist deliberately keeps gtk/webkit/glib
+    # bundled), so the bundled WebKit is only as new as this build base. A newer
+    # base means less input lag on bleeding-edge hosts (e.g. Arch). Trade-off:
+    # 24.04's glibc (2.39) means the AppImage won't run on distros older than it
+    # (Ubuntu 22.04, Debian 12) - those users should install the .deb below, which
+    # links the host's own WebKit and so never lags.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +41,7 @@ jobs:
             libtesseract-dev libleptonica-dev \
             libssl-dev \
             poppler-utils \
-            libfuse2 \
+            libfuse2t64 \
             file desktop-file-utils \
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
@@ -99,7 +104,13 @@ jobs:
           NO_STRIP: "1"
         run: bun tauri build --config src-tauri/tauri.bundle.conf.json
 
-      - name: Upload AppImage to release
+      - name: Upload packages to release
+        # The .deb links the host's system WebKit (Tauri auto-adds the dependency)
+        # so it never carries an old bundled WebKit and never lags - the no-lag
+        # native path for Debian/Ubuntu. The AppImage stays as the portable
+        # fallback. (`targets: "all"` in tauri.conf.json already produces the deb.)
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/bundle/appimage/*.AppImage
+          files: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
