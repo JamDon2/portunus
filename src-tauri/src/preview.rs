@@ -58,6 +58,26 @@ fn start_pdf_worker(shared: SharedConfig) -> PdfWorkerHandle {
             eprintln!("[pdf] failed to bind pdfium: {e}");
             e
         });
+        // Prime pdfium's font subsystem (fontconfig enumeration on Linux) by
+        // rendering a tiny embedded PDF once. That work otherwise lands on the
+        // user's first real preview, making it noticeably slower than the rest.
+        // Failures are non-fatal: a missed warmup just restores the old behavior.
+        if let Ok(pdfium) = &pdfium {
+            const WARMUP_PDF: &[u8] = include_bytes!("warmup.pdf");
+            let warmed = (|| -> Result<(), PdfiumError> {
+                let doc = pdfium.load_pdf_from_byte_slice(WARMUP_PDF, None)?;
+                doc.pages()
+                    .get(0)?
+                    .render_with_config(&PdfRenderConfig::new().set_target_width(800))?;
+                Ok(())
+            })();
+            if log_pdf() {
+                match warmed {
+                    Ok(()) => eprintln!("[pdf] warmup done"),
+                    Err(e) => eprintln!("[pdf] warmup failed: {e}"),
+                }
+            }
+        }
         while let Ok((path, page_idx, width, reply)) = rx.recv() {
             let log = log_pdf();
             let result = match &pdfium {
