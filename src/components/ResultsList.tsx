@@ -12,9 +12,11 @@ interface Props {
   onSelect: (index: number) => void;
   onLaunch: (result?: SearchResult) => void;
   launchableResults: SearchResult[];
+  /** Per-result dominant icon colour for the accent-bleed effect. */
+  accents: Map<string, string>;
 }
 
-export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults }: Props) {
+export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults, accents }: Props) {
   const selectedRef = useRef<HTMLDivElement>(null);
   const selectedLabelRef = useRef<HTMLDivElement>(null);
 
@@ -50,9 +52,9 @@ export default function ResultsList({ results, selectedIndex, active, searching,
             )}
             <div
               ref={i === selectedIndex ? selectedRef : null}
-              className={`result-row${i === selectedIndex ? " selected" : ""}`}
+              className={`result-row${i === selectedIndex ? " selected" : ""}${accents.has(result.id) ? " has-accent" : ""}`}
               data-kind={result.kind}
-              style={{ '--row-i': i } as CSSProperties}
+              style={{ '--row-i': i, '--row-accent': accents.get(result.id) } as CSSProperties}
               role="option"
               aria-selected={i === selectedIndex}
               onClick={() => {

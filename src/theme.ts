@@ -25,5 +25,6 @@ export function applyTheme(appearance: Config["appearance"]) {
   root.style.zoom = String(appearance.font_size / 13);
   root.dataset.animateResults = String(appearance.animate_results ?? true);
   root.dataset.showMetadata = String(appearance.show_metadata ?? true);
+  root.dataset.accentBleed = String(appearance.accent_bleed ?? true);
   if (appearance.theme === MATUGEN_THEME) void injectMatugenTheme();
 }

@@ -486,8 +486,54 @@ html, body, #root {
 
 .result-row:hover { background: var(--bg-row-hov); }
 .result-row.selected {
-  background: var(--bg-row-sel);
+  /* Toned a touch toward the row backdrop so the plain highlight reads softer
+     than the accent-tinted app rows. */
+  --sel-bg: color-mix(in srgb, var(--bg-row-sel) 72%, var(--bg-card));
+  background: var(--sel-bg);
   box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---------- accent bleed ----------
+   Each row carries its icon's dominant colour in --row-accent. With the effect
+   on, the selected row's rail + a soft horizontal wash adopt that hue, the icon
+   tile picks it up, and (below) the whole preview panel re-hues to match. The
+   color-mix fallbacks to --accent keep glyph-only / un-sampled rows graceful. */
+/* Only rows with a sampled icon colour get .has-accent (apps), so the bleed
+   stays apps-only; every other selected row keeps the plain toned highlight. */
+:root[data-accent-bleed="true"] .result-row.selected.has-accent {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--row-accent) 20%, var(--sel-bg)) 0%,
+    color-mix(in srgb, var(--row-accent) 6%, var(--sel-bg)) 100%
+  );
+  box-shadow: inset 3px 0 0 var(--row-accent);
+}
+
+:root[data-accent-bleed="true"] .result-row.selected.has-accent .result-icon {
+  background: color-mix(in srgb, var(--row-accent) 24%, var(--icon-bg-sel));
+  color: var(--row-accent);
+}
+
+:root[data-accent-bleed="true"] .result-row.selected.has-accent .result-icon-img {
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--row-accent) 55%, transparent));
+}
+
+/* Mirror the theme accent into an un-shadowed var so the preview override below
+   can fall back to it without a self-referential cycle. --bleed (set on .card by
+   App.tsx) wins when a selection supplies a colour; otherwise the theme accent
+   shows through. */
+.card {
+  --accent-theme: var(--accent);
+}
+
+/* Re-hue the entire preview panel to the selected result's colour. Scoping the
+   accent vars to .preview-col means every preview component (icon halo, buttons,
+   metadata accents, highlight bars) shifts automatically — derived soft/border
+   tints track whichever accent is effective. */
+:root[data-accent-bleed="true"] .preview-col {
+  --accent: var(--bleed, var(--accent-theme));
+  --accent-soft: color-mix(in srgb, var(--bleed, var(--accent-theme)) 13%, transparent);
+  --accent-border: color-mix(in srgb, var(--bleed, var(--accent-theme)) 50%, transparent);
 }
 
 .result-icon {

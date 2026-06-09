@@ -11,7 +11,7 @@ export default function AppearanceSection({ config, onChange }: Props) {
   const set = (patch: Partial<Config["appearance"]>) =>
     onChange({ ...config, appearance: { ...config.appearance, ...patch } });
 
-  const { theme, font_size, animate_results, show_metadata } = config.appearance;
+  const { theme, font_size, animate_results, show_metadata, accent_bleed } = config.appearance;
 
   return (
     <div>
@@ -80,6 +80,20 @@ export default function AppearanceSection({ config, onChange }: Props) {
             label="File metadata"
             checked={show_metadata ?? true}
             onChange={v => set({ show_metadata: v })}
+          />
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <div className="settings-field-label">
+          <div className="settings-field-name">Accent bleed</div>
+          <div className="settings-field-desc">Tint the selection and preview with the app's icon color</div>
+        </div>
+        <div className="settings-field-control">
+          <Toggle
+            label="Accent bleed"
+            checked={accent_bleed ?? true}
+            onChange={v => set({ accent_bleed: v })}
           />
         </div>
       </div>

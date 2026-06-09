@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -14,6 +14,7 @@ import FooterHints from "./components/FooterHints";
 import { pdfView } from "./components/FilePreview";
 import { dispatchLaunch, dispatchKeyDown, type LaunchContext } from "./providers/registry";
 import { useTauriListener } from "./hooks/useTauriListener";
+import { useIconAccents } from "./hooks/useIconAccents";
 import OnboardingWizard from "./components/onboarding/OnboardingWizard";
 import "./providers";
 import "./App.css";
@@ -347,6 +348,11 @@ export default function App() {
 
   const selected = displayResults[selectedIndex] ?? null;
 
+  // Dominant icon colour per result (accent bleed). The selected result's colour
+  // is hoisted to a card-level var so the preview panel re-hues with the selection.
+  const accents = useIconAccents(displayResults);
+  const bleed = (selected ? accents.get(selected.id) : undefined) ?? undefined;
+
   // Quicklook is modal: blur the search input while it's open so stray typing
   // can't mutate the query/results hidden behind the overlay; refocus on close.
   // The pinned result stays put regardless of what happens to the list behind it.
@@ -423,10 +429,14 @@ export default function App() {
           }}
         />
       )}
-      <div className="card" onMouseDown={e => {
-        const t = e.target as HTMLElement;
-        if (t !== inputRef.current && !t.closest('pre, code')) e.preventDefault();
-      }}>
+      <div
+        className="card"
+        style={{ '--bleed': bleed } as CSSProperties}
+        onMouseDown={e => {
+          const t = e.target as HTMLElement;
+          if (t !== inputRef.current && !t.closest('pre, code')) e.preventDefault();
+        }}
+      >
         <div className="card-clip">
         <div className="search-bar">
           {indexingProgress && (
@@ -478,6 +488,7 @@ export default function App() {
             onSelect={setSelectedIndex}
             onLaunch={launch}
             launchableResults={launchableResults}
+            accents={accents}
           />
           <div className="preview-col">
             <PreviewPanel

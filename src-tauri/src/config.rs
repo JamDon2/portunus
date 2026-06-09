@@ -267,11 +267,19 @@ pub struct AppearanceConfig {
     pub font_size: u32,
     pub animate_results: bool,
     pub show_metadata: bool,
+    /// Tint the selected row + preview panel with the app's dominant icon color.
+    pub accent_bleed: bool,
 }
 
 impl Default for AppearanceConfig {
     fn default() -> Self {
-        Self { theme: "warm-dark".to_string(), font_size: 13, animate_results: true, show_metadata: true }
+        Self {
+            theme: "warm-dark".to_string(),
+            font_size: 13,
+            animate_results: true,
+            show_metadata: true,
+            accent_bleed: true,
+        }
     }
 }
 

@@ -69,6 +69,7 @@ export interface Config {
     font_size: number;
     animate_results: boolean;
     show_metadata: boolean;
+    accent_bleed: boolean;
   };
   extensions: {
     /** Per-extension enable map keyed by name. Absent = disabled. */
