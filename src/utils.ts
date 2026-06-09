@@ -26,6 +26,22 @@ export function formatDate(ts: number): string {
   });
 }
 
+// Turn a raw .desktop Exec string into a bare binary name for display.
+// Drops env-prefix tokens (VAR=value) and field codes (%U %F %i ...), then
+// strips any leading path and surrounding quotes. Cosmetic only — never throws.
+export function cleanExec(exec: string): string {
+  const trimmed = exec.trim();
+  const tokens = trimmed.split(/\s+/);
+  for (const raw of tokens) {
+    if (/^%[a-zA-Z]$/.test(raw)) continue; // field code
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(raw)) continue; // env assignment
+    if (raw === "env") continue;
+    const bin = raw.replace(/^["']|["']$/g, "").split("/").pop();
+    if (bin) return bin;
+  }
+  return trimmed;
+}
+
 export function fmtRemaining(secs: number): string {
   if (secs <= 0) return "Done";
   const h = Math.floor(secs / 3600);
