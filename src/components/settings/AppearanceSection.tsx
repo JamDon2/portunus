@@ -1,10 +1,21 @@
 import { Config } from "../../types";
 import ThemeGrid from "./ThemeGrid";
 import Toggle from "./Toggle";
+import Select from "./Select";
 
 interface Props {
   config: Config;
   onChange: (c: Config) => void;
+}
+
+const ANIM_OPTIONS = [
+  { label: "Off",   value: "off"   },
+  { label: "Slide", value: "slide" },
+  { label: "FLIP",  value: "flip"  },
+] as const;
+
+function animLabel(v: Config["appearance"]["animate_results"]): string {
+  return ANIM_OPTIONS.find(o => o.value === v)?.label ?? "Slide";
 }
 
 export default function AppearanceSection({ config, onChange }: Props) {
@@ -59,13 +70,16 @@ export default function AppearanceSection({ config, onChange }: Props) {
       <div className="settings-field">
         <div className="settings-field-label">
           <div className="settings-field-name">Result animations</div>
-          <div className="settings-field-desc">Slide-in animation when results appear</div>
+          <div className="settings-field-desc">Off · Slide-in entrance · FLIP repositioning of retained rows</div>
         </div>
         <div className="settings-field-control">
-          <Toggle
-            label="Result animations"
-            checked={animate_results ?? true}
-            onChange={v => set({ animate_results: v })}
+          <Select
+            options={ANIM_OPTIONS.map(o => ({ label: o.label }))}
+            value={animLabel(animate_results)}
+            onChange={label => {
+              const opt = ANIM_OPTIONS.find(o => o.label === label);
+              if (opt) set({ animate_results: opt.value });
+            }}
           />
         </div>
       </div>

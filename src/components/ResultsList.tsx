@@ -20,6 +20,52 @@ export default function ResultsList({ results, selectedIndex, active, searching,
   const selectedRef = useRef<HTMLDivElement>(null);
   const selectedLabelRef = useRef<HTMLDivElement>(null);
   const colRef = useRef<HTMLDivElement>(null);
+  // FLIP: live element nodes keyed by a stable flip-key, plus their last-known
+  // offsetTop and any in-flight glide. When the result set re-ranks, retained
+  // elements glide from old to new position instead of snapping. Rows are keyed
+  // by result id ("r:<id>"); group labels by their anchoring result id
+  // ("g:<id>") — keying by label text would collide when the same kind appears
+  // in two separate groups (e.g. two "APPS" headers). Only active when
+  // appearance.animate_results === "flip".
+  const flipEls = useRef<Map<string, HTMLElement>>(new Map());
+  const flipTops = useRef<Map<string, number>>(new Map());
+  const flipAnims = useRef<Map<string, Animation>>(new Map());
+
+  const flipRef = (key: string) => (el: HTMLElement | null) => {
+    if (el) flipEls.current.set(key, el);
+    else flipEls.current.delete(key);
+  };
+
+  useLayoutEffect(() => {
+    const flip =
+      document.documentElement.dataset.animateResults === "flip" &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const next = new Map<string, number>();
+    for (const [key, el] of flipEls.current) {
+      const top = el.offsetTop;
+      next.set(key, top);
+      if (!flip) continue;
+      // "First" = where the element is *visually* right now, which for a glide
+      // interrupted mid-flight means its committed layout top plus the running
+      // animation's current translateY. Reading that (then cancelling the old
+      // glide) lets the new one start from the live position — no jump on fast
+      // typing.
+      const m = new DOMMatrixReadOnly(getComputedStyle(el).transform);
+      flipAnims.current.get(key)?.cancel();
+      flipAnims.current.delete(key);
+      const prev = flipTops.current.get(key);
+      if (prev === undefined) continue;
+      const delta = prev - top + m.m42;
+      if (Math.abs(delta) < 0.5) continue;
+      const anim = el.animate(
+        [{ transform: `translateY(${delta}px)` }, { transform: "translateY(0)" }],
+        { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+      );
+      flipAnims.current.set(key, anim);
+      anim.onfinish = () => { if (flipAnims.current.get(key) === anim) flipAnims.current.delete(key); };
+    }
+    flipTops.current = next;
+  }, [results]);
 
   // Geometry of the sliding-selection layer: tracks the selected row's box so a
   // single highlight element can glide/resize to it. `snap` disables the glide
@@ -34,8 +80,15 @@ export default function ResultsList({ results, selectedIndex, active, searching,
     // Row first so it's always visible, then the group label (if first-in-group)
     // so its header isn't clipped above the fold.
     const before = col.scrollTop;
-    el.scrollIntoView({ block: "nearest" });
-    selectedLabelRef.current?.scrollIntoView({ block: "nearest" });
+    // Scroll using layout offsets, not scrollIntoView: during a FLIP glide the
+    // selected row carries a transform, and scrollIntoView reads the transformed
+    // (moving) box — scrolling to a mid-animation target makes the list lurch.
+    // offsetTop is transform-independent. Anchor the top at the group label when
+    // first-in-group so the header isn't clipped above the fold.
+    const anchorTop = (selectedLabelRef.current ?? el).offsetTop;
+    const bottom = el.offsetTop + el.offsetHeight;
+    if (anchorTop < col.scrollTop) col.scrollTop = anchorTop;
+    else if (bottom > col.scrollTop + col.clientHeight) col.scrollTop = bottom - col.clientHeight;
     // A scroll keeps the row at the same screen spot, but the bar's content-space
     // position jumps a full row — gliding that fights the instant scroll and
     // makes the bar lurch. Snap instead; glide only for in-view moves.
@@ -73,14 +126,20 @@ export default function ResultsList({ results, selectedIndex, active, searching,
           <Fragment key={result.id}>
             {showLabel && (
               <div
-                ref={i === selectedIndex ? selectedLabelRef : null}
+                ref={el => {
+                  flipRef(`g:${result.id}`)(el);
+                  if (i === selectedIndex) selectedLabelRef.current = el;
+                }}
                 className={`result-group-label${i === 0 ? " first" : ""}`}
               >
                 <span>{label}</span>
               </div>
             )}
             <div
-              ref={i === selectedIndex ? selectedRef : null}
+              ref={el => {
+                flipRef(`r:${result.id}`)(el);
+                if (i === selectedIndex) selectedRef.current = el;
+              }}
               className={`result-row${i === selectedIndex ? " selected" : ""}${accents.has(result.id) ? " has-accent" : ""}`}
               data-kind={result.kind}
               style={{ '--row-i': i, '--row-accent': accents.get(result.id) } as CSSProperties}

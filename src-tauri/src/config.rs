@@ -260,12 +260,39 @@ impl Default for ContentConfig {
     }
 }
 
+/// Result-list animation tier. Serialized lowercase ("off"/"slide"/"flip").
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResultAnimation {
+    Off,
+    Slide,
+    Flip,
+}
+
+/// Accept the legacy boolean form (`true` → Slide, `false` → Off) as well as the
+/// new string enum, so upgrading doesn't fail the whole-config parse and reset
+/// every setting to defaults.
+fn de_result_animation<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ResultAnimation, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Compat {
+        Bool(bool),
+        Enum(ResultAnimation),
+    }
+    Ok(match Compat::deserialize(d)? {
+        Compat::Bool(true) => ResultAnimation::Slide,
+        Compat::Bool(false) => ResultAnimation::Off,
+        Compat::Enum(e) => e,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct AppearanceConfig {
     pub theme: String,
     pub font_size: u32,
-    pub animate_results: bool,
+    #[serde(deserialize_with = "de_result_animation")]
+    pub animate_results: ResultAnimation,
     pub show_metadata: bool,
     /// Tint the selected row + preview panel with the app's dominant icon color.
     pub accent_bleed: bool,
@@ -278,7 +305,7 @@ impl Default for AppearanceConfig {
         Self {
             theme: "warm-dark".to_string(),
             font_size: 13,
-            animate_results: true,
+            animate_results: ResultAnimation::Slide,
             show_metadata: true,
             accent_bleed: true,
             slide_selection: true,

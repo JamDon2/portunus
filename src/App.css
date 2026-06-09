@@ -484,7 +484,7 @@ html, body, #root {
   .result-row { animation: none; }
 }
 
-:root[data-animate-results="false"] .result-row { animation: none; }
+:root[data-animate-results="off"] .result-row { animation: none; }
 
 /* Static informational rows persist across keystrokes - don't replay the
    entrance animation each time a no-match query re-renders them. */
@@ -688,11 +688,14 @@ html, body, #root {
 
 /* ---------- app preview ---------- */
 
+/* Top-anchored, not centred: a fixed padding-top keeps the icon + name at the
+   same spot for every app, so stepping through results doesn't make them jump.
+   Optional rows below (subtitle, exec) sit in reserved-height slots. */
 .app-preview {
-  padding: 28px 22px 24px;
+  padding: 52px 22px 24px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 18px;
   flex: 1;
 }
@@ -705,6 +708,15 @@ html, body, #root {
   gap: 14px;
 }
 
+/* Reserve room for name (up to 2 lines) + subtitle (up to 2 lines) so the exec
+   row and Launch button hold their position regardless of text length. */
+.app-preview-text {
+  min-height: 66px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .app-preview-icon-stage {
   position: relative;
   display: flex;
@@ -715,11 +727,40 @@ html, body, #root {
 .app-preview-icon-stage::before {
   content: "";
   position: absolute;
+  top: 50%;
+  left: 50%;
   width: 180px;
   height: 180px;
+  transform: translate(-50%, -50%);
   background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
   z-index: -1;
   pointer-events: none;
+}
+
+/* Accent bleed on: trade the faint soft tint for a vivid coloured glow built
+   from the app's own sampled hue — a bright core, a wide halo, and a slow pulse
+   so the launcher reads with energy in the showcase. */
+:root[data-accent-bleed="true"] .app-preview-icon-stage::before {
+  width: 230px;
+  height: 230px;
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--accent) 60%, transparent) 0%, transparent 45%),
+    radial-gradient(circle, color-mix(in srgb, var(--accent) 28%, transparent) 0%, transparent 72%);
+  filter: blur(6px);
+  animation: app-glow-pulse 3.4s ease-in-out infinite;
+}
+
+:root[data-accent-bleed="true"] .app-preview-icon {
+  filter: drop-shadow(0 8px 26px color-mix(in srgb, var(--accent) 50%, rgba(0, 0, 0, 0.55)));
+}
+
+@keyframes app-glow-pulse {
+  0%, 100% { transform: translate(-50%, -50%) scale(1);    opacity: 0.78; }
+  50%      { transform: translate(-50%, -50%) scale(1.07); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-accent-bleed="true"] .app-preview-icon-stage::before { animation: none; }
 }
 
 .app-preview-icon {
@@ -765,6 +806,7 @@ html, body, #root {
 .app-preview-exec-row {
   display: flex;
   justify-content: center;
+  min-height: 22px;
 }
 
 .app-preview-exec {

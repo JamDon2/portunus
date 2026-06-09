@@ -27,16 +27,14 @@ export default function AppPreview({ result, onLaunch }: Props) {
             <div className="app-preview-icon-fallback">{result.title[0]}</div>
           )}
         </div>
-        <div>
+        <div className="app-preview-text">
           <div className="app-preview-name">{result.title}</div>
-          {result.subtitle && <div className="app-preview-sub">{result.subtitle}</div>}
+          <div className="app-preview-sub">{result.subtitle}</div>
         </div>
       </div>
-      {result.exec && (
-        <div className="app-preview-exec-row">
-          <span className="app-preview-exec">{cleanExec(result.exec)}</span>
-        </div>
-      )}
+      <div className="app-preview-exec-row">
+        {result.exec && <span className="app-preview-exec">{cleanExec(result.exec)}</span>}
+      </div>
       <div className="app-preview-actions">
         <button className="btn-primary" onClick={onLaunch} tabIndex={-1}>
           Launch <span className="btn-kbd"><EnterIcon /></span>

@@ -67,7 +67,7 @@ export interface Config {
   appearance: {
     theme: string;
     font_size: number;
-    animate_results: boolean;
+    animate_results: "off" | "slide" | "flip";
     show_metadata: boolean;
     accent_bleed: boolean;
     slide_selection: boolean;
