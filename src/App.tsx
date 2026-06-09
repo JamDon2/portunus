@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { Config, SearchResult, ExpiredTimer } from "./types";
 import { playTimerChime, audioCtxWarmup } from "./utils";
-import { applyTheme } from "./theme";
+import { applyTheme, injectMatugenTheme } from "./theme";
 import ResultsList from "./components/ResultsList";
 import PreviewPanel from "./components/PreviewPanel";
 import QuickLook from "./components/QuickLook";
@@ -81,11 +81,18 @@ export default function App() {
       setOnboardConfig(cfg);
       if (!cfg.general.onboarding_completed) setShowOnboarding(true);
     });
-    let unlisten: (() => void) | undefined;
+    const unlisteners: Array<() => void> = [];
     listen<Config["appearance"]>("appearance-changed", event => {
       applyTheme(event.payload);
-    }).then(fn => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then(fn => { unlisteners.push(fn); });
+    // matugen post_hook (portunus --reload-theme) → re-fetch + re-inject the
+    // external CSS, then re-apply the current theme so live edits show instantly.
+    listen("theme-css-changed", () => {
+      injectMatugenTheme().then(() => {
+        if (configRef.current) applyTheme(configRef.current.appearance);
+      });
+    }).then(fn => { unlisteners.push(fn); });
+    return () => { unlisteners.forEach(fn => fn()); };
   }, []);
 
   useLayoutEffect(() => {

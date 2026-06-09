@@ -34,7 +34,22 @@ export function buildThemes(): ThemeDef[] {
   return themes;
 }
 
-export const THEMES = buildThemes();
+/** Live swatches for the matugen theme, read from the injected CSS when active;
+ *  neutral placeholders otherwise (colors are dynamic, not known at build time). */
+function matugenSwatches(): string[] {
+  const placeholder = ["#3a3a3a", "#2a2a2a", "#888", "#ddd", "#999"];
+  if (typeof document === "undefined") return placeholder;
+  const cs = getComputedStyle(document.documentElement);
+  const vars = ["--bg-card", "--bg-bar", "--accent", "--fg", "--fg-mute"];
+  return vars.map((v, i) => cs.getPropertyValue(v).trim() || placeholder[i]);
+}
+
+export const THEMES: ThemeDef[] = [
+  ...buildThemes(),
+  // Synthetic entry: matugen colors come from an external file at runtime, so it
+  // isn't parsed from themes.css. Selecting it sets data-theme="matugen".
+  { id: "matugen", label: "Matugen", swatches: matugenSwatches() },
+];
 
 const STYLES = `
 .theme-grid {

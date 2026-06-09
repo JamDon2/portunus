@@ -21,6 +21,7 @@ FLAGS:
   --reindex           Rebuild the content search index
   --reload-config     Reload config from file without restarting
   --reload-extensions Re-discover and reload WASM extensions (picks up rebuilt wasm)
+  --reload-theme      Re-read the external matugen.css theme (matugen post_hook)
   --version, -V       Print version and exit
   --help, -h          Show this help message", env!("CARGO_PKG_VERSION"));
         return true;
@@ -49,6 +50,13 @@ FLAGS:
     }
     if std::env::args().any(|a| a == "--reload-extensions") {
         if !ipc::try_signal_running("reload-extensions") {
+            eprintln!("portunus: no running instance found");
+            std::process::exit(1);
+        }
+        return true;
+    }
+    if std::env::args().any(|a| a == "--reload-theme") {
+        if !ipc::try_signal_running("reload-theme") {
             eprintln!("portunus: no running instance found");
             std::process::exit(1);
         }

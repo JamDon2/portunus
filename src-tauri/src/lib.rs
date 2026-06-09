@@ -254,6 +254,15 @@ fn get_config(state: tauri::State<ConfigState>) -> config::Config {
     util::lock(&state).clone()
 }
 
+/// Read the external matugen theme CSS (`<config_dir>/matugen.css`) for the
+/// `matugen` theme. Returns `None` if the file is absent/unreadable, in which
+/// case the frontend leaves the `[data-theme="matugen"]` selector unmatched and
+/// vars fall back to the App.css `:root` defaults.
+#[tauri::command]
+fn get_custom_theme_css() -> Option<String> {
+    std::fs::read_to_string(config::config_dir().join("matugen.css")).ok()
+}
+
 #[tauri::command]
 fn save_config(config: config::Config, state: tauri::State<ConfigState>) -> Result<(), String> {
     let result = config.save();
@@ -795,6 +804,7 @@ pub fn run() {
             hide_window,
             is_apps_ready,
             get_config,
+            get_custom_theme_css,
             save_config,
             open_settings_window,
             trigger_full_reindex,

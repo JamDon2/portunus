@@ -384,10 +384,16 @@ impl Config {
 }
 
 fn config_path() -> PathBuf {
+    config_dir().join("config.toml")
+}
+
+/// `$XDG_CONFIG_HOME/portunus` (or `~/.config/portunus`). Holds `config.toml` and
+/// the external `matugen.css` theme file.
+pub fn config_dir() -> PathBuf {
     let config_home = std::env::var("XDG_CONFIG_HOME")
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
             format!("{home}/.config")
         });
-    PathBuf::from(config_home).join("portunus").join("config.toml")
+    PathBuf::from(config_home).join("portunus")
 }

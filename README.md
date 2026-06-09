@@ -85,6 +85,24 @@ bind = SUPER, V, exec, /path/to/portunus --clipboard
 
 On first launch Portunus writes a default config to `~/.config/portunus/config.toml`. Every key is documented inline. Config changes are hot-reloaded without a restart.
 
+### Themes
+
+Pick a theme in **Settings → Appearance**. Nine dark themes ship built-in.
+
+#### Matugen (Material You from your wallpaper)
+
+The **Matugen** theme pulls its colors from an external file, so [matugen](https://github.com/InioX/matugen) can recolor Portunus to match your wallpaper. Copy [`templates/portunus.css`](templates/portunus.css) into your matugen config and wire it up:
+
+```toml
+# ~/.config/matugen/config.toml
+[templates.portunus]
+input_path  = "~/.config/matugen/portunus.css"   # copy of templates/portunus.css
+output_path = "~/.config/portunus/matugen.css"
+post_hook   = "portunus --reload-theme"
+```
+
+Run `matugen image <wallpaper>` (add `--mode light` for a light scheme), then select **Matugen** in Settings → Appearance. Every subsequent matugen run recolors the launcher live via the `post_hook`. If `~/.config/portunus/matugen.css` is missing, the theme falls back to default colors.
+
 ## Building from source
 
 ### Dependencies
@@ -116,6 +134,7 @@ portunus [FLAG]
   --reindex           Rebuild the content search index
   --reload-config     Reload config from file without restarting
   --reload-extensions Re-discover and reload WASM extensions (picks up rebuilt wasm)
+  --reload-theme      Re-read the external matugen.css theme (matugen post_hook)
   --version, -V       Print version and exit
   --help, -h          Show this help message
 ```

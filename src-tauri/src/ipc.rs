@@ -71,6 +71,10 @@ pub fn start_socket_listener(
                     std::thread::spawn(move || reload_fn());
                 } else if cmd == "reload-extensions" {
                     std::thread::spawn(move || reload_extensions_fn());
+                } else if cmd == "reload-theme" {
+                    // Re-read the external matugen.css. Lightweight: no provider
+                    // rebuild, just nudge the frontend to re-fetch + re-inject.
+                    let _ = app.emit("theme-css-changed", ());
                 }
             });
         }
