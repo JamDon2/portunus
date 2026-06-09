@@ -815,6 +815,12 @@ a:focus-visible,
   background: var(--kbd-bg);
 }
 
+.settings-subsection {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
 .settings-deps {
   margin-top: 24px;
   padding-top: 18px;

@@ -6,6 +6,8 @@ export interface LaunchContext {
   setResults: (r: SearchResult[]) => void;
   requery: () => void;
   removeExpiredTimer: (id: number) => void;
+  /** Open the dedicated clipboard-history browser (clipboard-mode result). */
+  enterClipboardMode: () => void;
   config: Config | null;
 }
 

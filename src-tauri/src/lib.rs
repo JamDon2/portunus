@@ -86,6 +86,13 @@ fn check_dependencies() -> Vec<DepStatus> {
             install_hint: "wl-clipboard",
         },
         DepStatus {
+            id: "wtype",
+            label: "wtype",
+            feature: "Smart paste (auto Ctrl+V)",
+            available: binary_in_path("wtype"),
+            install_hint: "wtype",
+        },
+        DepStatus {
             id: "dict",
             label: "dict",
             feature: "Dictionary lookups",
@@ -825,6 +832,9 @@ pub fn run() {
             // Clipboard provider
             providers::clipboard::paste_clipboard,
             providers::clipboard::decode_clipboard_entry,
+            providers::clipboard::clipboard_list,
+            providers::clipboard::clipboard_delete,
+            providers::clipboard::clipboard_capabilities,
             // Dict provider
             providers::dict::get_dict_definitions,
             // Extensions

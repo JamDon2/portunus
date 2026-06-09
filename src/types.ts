@@ -37,6 +37,10 @@ export interface Config {
     fill_threshold: number;
     fill_max: number;
   };
+  clipboard: {
+    paste_mode: "auto" | "copy";
+    max_entries: number;
+  };
   files: {
     dirs: DirEntry[];
     show_dotfiles: boolean;
@@ -137,6 +141,27 @@ export interface SearchResult {
 export interface ExpiredTimer {
   id: number;
   label: string;
+}
+
+/** One clipboard history entry, as returned by the `clipboard_list` command. */
+export interface ClipboardEntry {
+  id: string;
+  /** "text" | "image" */
+  kind: string;
+  /** First-line snippet (text) or the cliphist binary-data label (image). */
+  preview: string;
+  /** "text" | "url" | "color" | "json" | "image" */
+  content_type: string;
+  /** Normalized CSS color when content_type === "color". */
+  color: string | null;
+  byte_size: number | null;
+  dimensions: [number, number] | null;
+  format: string | null;
+}
+
+export interface ClipboardCapabilities {
+  /** Enter pastes into the focused window (wtype on Wayland) vs copy-only. */
+  smart_paste: boolean;
 }
 
 export interface DepStatus {

@@ -1222,6 +1222,426 @@ mark.preview-hl {
   padding: 8px 0;
 }
 
+/* ---------- clipboard mode ---------- */
+
+@keyframes mode-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.99); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.clip-mode {
+  display: grid;
+  grid-template-rows: 38px 1fr;
+  min-height: 0;
+  animation: mode-in 0.18s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) { .clip-mode { animation: none; } }
+:root[data-animate-results="off"] .clip-mode { animation: none; }
+
+.clip-content {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  min-height: 0;
+}
+
+/* filter tabs */
+.clip-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-bar);
+  position: relative;
+}
+
+.clip-tab {
+  position: relative;
+  z-index: 1;
+  height: 24px;
+  padding: 0 11px;
+  border: none;
+  background: none;
+  border-radius: 999px;
+  font: 500 11.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--fg-mute);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.clip-tab:hover { color: var(--fg); }
+.clip-tab.active { color: var(--accent); }
+
+.clip-tab-count {
+  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-dim);
+}
+
+.clip-tab.active .clip-tab-count { color: color-mix(in srgb, var(--accent) 70%, var(--fg-dim)); }
+
+.clip-tab-indicator {
+  position: absolute;
+  z-index: 0;
+  top: 7px;
+  left: 0;
+  height: 24px;
+  background: var(--accent-soft);
+  border-radius: 999px;
+  transition:
+    transform 0.19s cubic-bezier(0.22, 1, 0.36, 1),
+    width 0.19s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) { .clip-tab-indicator { transition: none; } }
+
+/* entry list */
+.clip-list {
+  position: relative;
+  border-right: 1px solid var(--line-soft);
+  padding: 8px;
+  overflow-y: auto;
+  scroll-padding-top: 8px;
+}
+
+.clip-list::-webkit-scrollbar { width: 6px; }
+.clip-list::-webkit-scrollbar-thumb { background: var(--bg-input); border-radius: 3px; }
+.clip-list::-webkit-scrollbar-track { background: transparent; }
+
+.clip-row {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 28px 1fr 16px;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  content-visibility: auto;
+  contain-intrinsic-size: 40px;
+  animation: row-in 0.18s cubic-bezier(0.22, 1, 0.36, 1) calc(var(--row-i, 0) * 16ms) both;
+}
+
+@media (prefers-reduced-motion: reduce) { .clip-row { animation: none; } }
+:root[data-animate-results="off"] .clip-row { animation: none; }
+
+.clip-row:hover { background: var(--bg-row-hov); }
+
+@keyframes clip-row-out {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateX(-10px) scale(0.98); }
+}
+
+.clip-row.deleting {
+  animation: clip-row-out 0.15s cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+}
+
+/* sliding selection layer (own copy; row heights are fixed) */
+.clip-selection-bg {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 0;
+  z-index: 0;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  --sel-bg: color-mix(in srgb, var(--bg-row-sel) 72%, var(--bg-card));
+  background: var(--sel-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+  transition:
+    transform 0.19s cubic-bezier(0.22, 1, 0.36, 1),
+    height 0.19s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) { .clip-selection-bg { transition: none; } }
+
+:root[data-accent-bleed="true"] .clip-selection-bg.has-accent {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--row-accent) 26%, var(--sel-bg)) 0%,
+    color-mix(in srgb, var(--row-accent) 8%, var(--sel-bg)) 100%
+  );
+  box-shadow: inset 3px 0 0 var(--row-accent);
+}
+
+.clip-row-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.clip-glyph { background: var(--icon-bg); color: var(--icon-fg-mute); }
+.clip-row.selected .clip-glyph { background: var(--icon-bg-sel); color: var(--accent); }
+
+.clip-swatch {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.clip-thumb { overflow: hidden; background: var(--icon-bg); color: var(--icon-fg-mute); }
+.clip-thumb-img { width: 100%; height: 100%; object-fit: cover; }
+
+.clip-row-snippet {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clip-row-shortcut {
+  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-mute);
+  background: var(--kbd-bg);
+  border: 1px solid var(--border);
+  border-bottom: 2px solid var(--border-raised);
+  border-radius: 4px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.clip-list-more {
+  padding: 10px 12px;
+  font: 400 11px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-dim);
+}
+
+/* preview pane */
+.clip-preview-col { position: relative; display: flex; min-height: 0; }
+
+.clip-preview {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.clip-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.clip-preview-actions { display: flex; align-items: center; gap: 6px; }
+
+.clip-text-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--bg-deep);
+  position: relative;
+}
+
+.clip-text-wrap::-webkit-scrollbar { width: 4px; height: 4px; }
+.clip-text-wrap::-webkit-scrollbar-thumb { background: var(--bg-input); border-radius: 2px; }
+.clip-text-wrap::-webkit-scrollbar-track { background: transparent; }
+
+.clip-text-more {
+  font: 400 11px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-dim);
+  font-style: italic;
+  padding: 6px 2px 0;
+  flex-shrink: 0;
+}
+
+/* image stage with alpha checkerboard */
+.clip-img-stage {
+  flex: 1;
+  min-height: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background-color: var(--bg-deep);
+  --check: color-mix(in srgb, var(--bg-input) 70%, var(--bg-deep));
+  background-image:
+    linear-gradient(45deg, var(--check) 25%, transparent 25%, transparent 75%, var(--check) 75%),
+    linear-gradient(45deg, var(--check) 25%, transparent 25%, transparent 75%, var(--check) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+
+.clip-img-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+@keyframes clip-img-in { from { opacity: 0; } to { opacity: 1; } }
+.clip-img-in { animation: clip-img-in 0.18s ease-out; }
+
+/* color view */
+.clip-color { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+
+.clip-color-swatch {
+  height: 140px;
+  border-radius: var(--radius);
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  --check: color-mix(in srgb, var(--bg-input) 70%, var(--bg-deep));
+  background-image:
+    linear-gradient(45deg, var(--check) 25%, transparent 25%, transparent 75%, var(--check) 75%),
+    linear-gradient(45deg, var(--check) 25%, transparent 25%, transparent 75%, var(--check) 75%);
+  background-size: 14px 14px;
+  background-position: 0 0, 7px 7px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.clip-color-fill { position: absolute; inset: 0; }
+
+.clip-color-orig {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  font: 600 13px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: #fff;
+  background: color-mix(in srgb, var(--bg-deep) 82%, transparent);
+  padding: 5px 9px;
+  border-radius: 6px;
+}
+
+.clip-color-formats { display: flex; flex-direction: column; gap: 2px; }
+
+.clip-format-row {
+  display: grid;
+  grid-template-columns: 42px 1fr 28px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px;
+  border-radius: 6px;
+}
+
+.clip-format-row:hover { background: var(--bg-row-hov); }
+
+.clip-format-val {
+  font: 400 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clip-format-copy { width: 26px; height: 26px; }
+
+/* url view */
+.clip-url {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.clip-url-tile {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clip-url-host {
+  font: 600 15px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--fg);
+}
+
+.clip-url-full {
+  font: 400 11px/1.5 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-mute);
+  word-break: break-all;
+  max-width: 100%;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.clip-url-hint {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--fg-dim);
+  margin-top: auto;
+}
+
+/* binary card */
+.clip-binary {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--fg-mute);
+  background: var(--bg-deep);
+  border-radius: 4px;
+  font: 400 12px/1 "JetBrains Mono", "Fira Code", monospace;
+}
+
+/* empty states */
+.clip-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 24px;
+}
+
+.clip-empty-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clip-empty-title {
+  font: 600 14px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--fg);
+}
+
+.clip-empty-sub { font-size: 12px; color: var(--fg-mute); max-width: 320px; line-height: 1.5; }
+.clip-empty .app-preview-exec { margin-top: 6px; }
+
 /* ---------- folder contents ---------- */
 
 .folder-contents {

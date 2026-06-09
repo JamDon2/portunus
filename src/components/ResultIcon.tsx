@@ -36,7 +36,7 @@ export default function ResultIcon({ icon_path, iconDataUri, title, kind }: Prop
     );
   }
 
-  if (kind === "clipboard") {
+  if (kind === "clipboard-mode") {
     return (
       <div className="result-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
@@ -44,18 +44,6 @@ export default function ResultIcon({ icon_path, iconDataUri, title, kind }: Prop
           <path d="M8 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2h-2" />
           <line x1="8" y1="12" x2="16" y2="12" />
           <line x1="8" y1="16" x2="13" y2="16" />
-        </svg>
-      </div>
-    );
-  }
-
-  if (kind === "clipboard-image") {
-    return (
-      <div className="result-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
-          <polyline points="21 15 16 10 5 21" />
         </svg>
       </div>
     );

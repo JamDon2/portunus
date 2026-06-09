@@ -1,38 +1,179 @@
+use std::sync::OnceLock;
 use tauri::Manager;
 
 use super::{Provider, SearchResult, SCORE_CLIPBOARD};
+use crate::ConfigState;
+
+/// How long to wait after hiding the launcher before synthesizing Ctrl+V. On a
+/// layer-shell exclusive-keyboard surface the compositor needs a frame or two to
+/// return focus to the previously focused toplevel once our surface unmaps.
+const PASTE_FOCUS_DELAY_MS: u64 = 150;
+
+// ── capabilities ────────────────────────────────────────────────────────────
+
+/// Whether `wtype` is on PATH. Cached: PATH doesn't change within a session.
+fn wtype_available() -> bool {
+    static AVAIL: OnceLock<bool> = OnceLock::new();
+    *AVAIL.get_or_init(|| crate::util::binary_in_path("wtype"))
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ClipboardCapabilities {
+    /// Enter pastes into the focused window (wtype present on a Wayland session)
+    /// rather than only copying to the clipboard.
+    pub smart_paste: bool,
+}
 
 #[tauri::command]
-pub fn paste_clipboard(app: tauri::AppHandle, id: String) {
-    use std::process::{Command, Stdio};
-    if let Ok(decoded) = Command::new("cliphist").args(["decode", &id]).output() {
-        if decoded.status.success() {
-            if let Ok(mut child) = Command::new("wl-copy").stdin(Stdio::piped()).spawn() {
-                if let Some(stdin) = child.stdin.take() {
-                    use std::io::Write;
-                    let mut stdin = stdin;
-                    let _ = stdin.write_all(&decoded.stdout);
-                }
-                let _ = child.wait();
-            }
-        }
+pub fn clipboard_capabilities() -> ClipboardCapabilities {
+    ClipboardCapabilities {
+        smart_paste: wtype_available() && std::env::var("WAYLAND_DISPLAY").is_ok(),
     }
+}
+
+// ── paste / decode / delete ───────────────────────────────────────────────────
+
+/// Sniff the leading bytes for a known raster image format so wl-copy can offer
+/// the right MIME type (some targets paste nothing for a generic blob).
+fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() < 4 {
+        return None;
+    }
+    if bytes[0] == 0x89 && bytes[1] == 0x50 {
+        return Some("image/png");
+    }
+    if bytes[0] == 0xff && bytes[1] == 0xd8 {
+        return Some("image/jpeg");
+    }
+    if &bytes[0..4] == b"GIF8" {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes[0] == 0x42 && bytes[1] == 0x4D {
+        return Some("image/bmp");
+    }
+    None
+}
+
+#[tauri::command]
+pub fn paste_clipboard(
+    app: tauri::AppHandle,
+    id: String,
+    copy_only: Option<bool>,
+    config: tauri::State<ConfigState>,
+) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let paste_mode = config
+        .lock()
+        .map(|c| c.clipboard.paste_mode.clone())
+        .unwrap_or_else(|_| "auto".to_string());
+
+    let decoded = match Command::new("cliphist").args(["decode", &id]).output() {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            return;
+        }
+    };
+
+    // Tag images with their MIME so apps that inspect the offered type accept them.
+    let mut cmd = Command::new("wl-copy");
+    if let Some(mime) = image_mime(&decoded) {
+        cmd.args(["--type", mime]);
+    }
+    if let Ok(mut child) = cmd.stdin(Stdio::piped()).spawn() {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(&decoded);
+        }
+        // Wait so wl-copy has taken ownership of the selection before we hide.
+        let _ = child.wait();
+    }
+
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+    }
+
+    // Smart paste: after the launcher hides and focus returns to the prior window,
+    // synthesize Ctrl+V. Best-effort - on compositors without the virtual-keyboard
+    // protocol (e.g. GNOME) wtype exits non-zero and the user still has the copy.
+    let smart = copy_only != Some(true)
+        && paste_mode == "auto"
+        && wtype_available()
+        && std::env::var("WAYLAND_DISPLAY").is_ok();
+    if smart {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(PASTE_FOCUS_DELAY_MS));
+            let _ = Command::new("wtype")
+                .args(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
+                .status();
+        });
     }
 }
 
 #[tauri::command]
-pub fn decode_clipboard_entry(id: String) -> Result<Vec<u8>, String> {
+pub fn decode_clipboard_entry(id: String) -> Result<tauri::ipc::Response, String> {
     let out = std::process::Command::new("cliphist")
         .args(["decode", &id])
         .output()
         .map_err(|e| e.to_string())?;
     if out.status.success() {
-        Ok(out.stdout)
+        // Raw ArrayBuffer across IPC - a JSON number array would ~5x a screenshot.
+        Ok(tauri::ipc::Response::new(out.stdout))
     } else {
         Err(String::from_utf8_lossy(&out.stderr).to_string())
     }
+}
+
+#[tauri::command]
+pub fn clipboard_delete(id: String) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    // `cliphist delete` reads stdin, cuts at the first tab, and parses the prefix
+    // as the entry id; everything after the tab is ignored, so a bare "<id>\t"
+    // suffices - no need to reproduce the original content bytes.
+    let mut child = Command::new("cliphist")
+        .arg("delete")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(format!("{id}\t").as_bytes());
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("cliphist delete failed".to_string())
+    }
+}
+
+// ── listing + classification ──────────────────────────────────────────────────
+
+/// A clipboard entry enriched for the clipboard browser. `preview` is the
+/// (possibly truncated) cliphist list snippet; authoritative metadata for text
+/// entries comes from decoding the full content on the frontend.
+#[derive(serde::Serialize, Clone)]
+pub struct ClipboardEntry {
+    pub id: String,
+    /// "text" | "image"
+    pub kind: String,
+    pub preview: String,
+    /// "text" | "url" | "color" | "json" | "image"
+    pub content_type: String,
+    /// Normalized CSS color string when `content_type == "color"`.
+    pub color: Option<String>,
+    /// Image entries only: decoded byte size parsed from the cliphist label.
+    pub byte_size: Option<u64>,
+    /// Image entries only: pixel dimensions parsed from the label.
+    pub dimensions: Option<(u32, u32)>,
+    /// Image entries only: lowercase format token (e.g. "png").
+    pub format: Option<String>,
 }
 
 struct ClipEntry {
@@ -71,6 +212,151 @@ fn list_entries() -> Vec<ClipEntry> {
         .collect()
 }
 
+/// Classify a text clipboard snippet for the list view. Runs on the (possibly
+/// ~100-char-truncated) cliphist snippet, so it relies on signals that survive
+/// truncation: colors and urls are short and never truncated; json is a heuristic
+/// the frontend revalidates against the full decoded content.
+fn detect_content_type(snippet: &str) -> (String, Option<String>) {
+    let s = snippet.trim();
+    if let Some(color) = parse_color(s) {
+        return ("color".to_string(), Some(color));
+    }
+    if is_url(s) {
+        return ("url".to_string(), None);
+    }
+    if looks_like_json(s) {
+        return ("json".to_string(), None);
+    }
+    ("text".to_string(), None)
+}
+
+fn parse_color(s: &str) -> Option<String> {
+    if let Some(hex) = s.strip_prefix('#') {
+        let len = hex.len();
+        if (len == 3 || len == 6 || len == 8) && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(s.to_string());
+        }
+    }
+    let lower = s.to_lowercase();
+    if (lower.starts_with("rgb(") || lower.starts_with("rgba(")) && lower.ends_with(')') {
+        let open = lower.find('(').unwrap();
+        let body = &lower[open + 1..lower.len() - 1];
+        if !body.is_empty()
+            && body
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, ',' | '.' | ' ' | '%'))
+        {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
+fn is_url(s: &str) -> bool {
+    (s.starts_with("http://") || s.starts_with("https://"))
+        && s.len() > 8
+        && !s.chars().any(char::is_whitespace)
+}
+
+fn looks_like_json(s: &str) -> bool {
+    let t = s.trim_start();
+    t.starts_with("{\"")
+        || t.starts_with("[{")
+        || t.starts_with("[[")
+        || (t.starts_with('{') && t[1..].trim_start().starts_with('"'))
+}
+
+/// Parse a cliphist binary-data label like "83 KiB png 1068x904" into
+/// (byte_size, format, dimensions). Tolerant of token order and missing pieces.
+fn parse_image_label(label: &str) -> (Option<u64>, Option<String>, Option<(u32, u32)>) {
+    let tokens: Vec<&str> = label.split_whitespace().collect();
+    let mut byte_size = None;
+    let mut format = None;
+    let mut dimensions = None;
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = tokens[i];
+        if dimensions.is_none() {
+            if let Some((w, h)) = tok.split_once('x') {
+                if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
+                    dimensions = Some((w, h));
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        if byte_size.is_none() {
+            if let Ok(num) = tok.parse::<f64>() {
+                let unit = tokens.get(i + 1).copied().unwrap_or("");
+                let mult = match unit {
+                    "B" => Some(1.0),
+                    "KiB" => Some(1024.0),
+                    "MiB" => Some(1024.0 * 1024.0),
+                    "GiB" => Some(1024.0 * 1024.0 * 1024.0),
+                    _ => None,
+                };
+                if let Some(m) = mult {
+                    byte_size = Some((num * m) as u64);
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        if format.is_none()
+            && tok.chars().all(|c| c.is_ascii_alphabetic())
+            && !matches!(tok, "B" | "KiB" | "MiB" | "GiB")
+        {
+            format = Some(tok.to_lowercase());
+        }
+        i += 1;
+    }
+    (byte_size, format, dimensions)
+}
+
+#[tauri::command]
+pub fn clipboard_list(limit: usize) -> Result<Vec<ClipboardEntry>, String> {
+    if !crate::util::binary_in_path("cliphist") {
+        return Err("cliphist not found".to_string());
+    }
+    let out = list_entries()
+        .into_iter()
+        .take(limit.max(1))
+        .map(|e| match e.kind {
+            ClipKind::Text(content) => {
+                let first = content.lines().next().unwrap_or("").trim();
+                let (content_type, color) = detect_content_type(first);
+                let preview = if first.is_empty() { "(blank)".to_string() } else { first.to_string() };
+                ClipboardEntry {
+                    id: e.id,
+                    kind: "text".to_string(),
+                    preview,
+                    content_type,
+                    color,
+                    byte_size: None,
+                    dimensions: None,
+                    format: None,
+                }
+            }
+            ClipKind::Image { label } => {
+                let (byte_size, format, dimensions) = parse_image_label(&label);
+                ClipboardEntry {
+                    id: e.id,
+                    kind: "image".to_string(),
+                    preview: label,
+                    content_type: "image".to_string(),
+                    color: None,
+                    byte_size,
+                    dimensions,
+                    format,
+                }
+            }
+        })
+        .collect();
+    Ok(out)
+}
+
+// ── provider ────────────────────────────────────────────────────────────────
+
 pub struct ClipboardProvider;
 
 impl ClipboardProvider {
@@ -88,55 +374,77 @@ impl ClipboardProvider {
 }
 
 impl Provider for ClipboardProvider {
-    fn id(&self) -> &str { "clipboard" }
+    fn id(&self) -> &str {
+        "clipboard"
+    }
 
     fn search(&self, query: &str) -> Vec<SearchResult> {
         let q = query.trim().to_lowercase();
-        // Trigger: "clip" through "clipboard" (4-char minimum avoids false matches)
+        // Trigger: "clip" through "clipboard" (4-char minimum avoids false matches).
+        // Note: "clip <x>" prefixes (e.g. "clip grab") are hijacked into clipboard
+        // mode - the same tradeoff the inline provider had.
         const KEYWORD: &str = "clipboard";
-        if q.len() < 4 { return vec![]; }
-        let is_prefix = KEYWORD.starts_with(q.as_str());
-        let has_keyword = q.starts_with(KEYWORD);
-        if !is_prefix && !has_keyword { return vec![]; }
+        if q.len() < 4 {
+            return vec![];
+        }
+        if !KEYWORD.starts_with(q.as_str()) && !q.starts_with(KEYWORD) {
+            return vec![];
+        }
+        // A single command row opens the dedicated clipboard browser; entries are
+        // no longer listed inline (no max_results cap, images searchable there).
+        vec![SearchResult {
+            id: "clipboard:mode".to_string(),
+            title: "Clipboard History".to_string(),
+            subtitle: Some("Browse, paste and manage copied items".to_string()),
+            kind: "clipboard-mode".to_string(),
+            score: SCORE_CLIPBOARD,
+            exec: Some("clipboard:mode".to_string()),
+            ..Default::default()
+        }]
+    }
+}
 
-        let sub = if has_keyword {
-            q[KEYWORD.len()..].trim().to_string()
-        } else {
-            String::new()
-        };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        list_entries()
-            .into_iter()
-            .enumerate()
-            .filter_map(|(rank, entry)| {
-                let (title, subtitle, kind) = match &entry.kind {
-                    ClipKind::Text(content) => {
-                        if !sub.is_empty()
-                            && !content.to_lowercase().contains(sub.as_str())
-                        {
-                            return None;
-                        }
-                        let first = content.lines().next().unwrap_or("").trim();
-                        let title = if first.is_empty() { "(blank)" } else { first }.to_string();
-                        let lines = content.lines().count();
-                        let subtitle = if lines > 1 { Some(format!("{lines} lines")) } else { None };
-                        (title, subtitle, "clipboard")
-                    }
-                    ClipKind::Image { label } => {
-                        if !sub.is_empty() { return None; }
-                        (format!("Image · {label}"), None, "clipboard-image")
-                    }
-                };
-                Some(SearchResult {
-                    id: format!("clipboard:{}", entry.id),
-                    title,
-                    subtitle,
-                    kind: kind.to_string(),
-                    score: SCORE_CLIPBOARD - rank as f32,
-                    exec: Some(format!("clipboard:copy:{}", entry.id)),
-                    ..Default::default()
-                })
-            })
-            .collect()
+    #[test]
+    fn detects_hex_colors() {
+        assert_eq!(detect_content_type("#ff8800").0, "color");
+        assert_eq!(detect_content_type("#FFF").0, "color");
+        assert_eq!(detect_content_type("#11223344").0, "color");
+        assert_eq!(detect_content_type("#ggg").0, "text");
+        assert_eq!(detect_content_type("#12").0, "text");
+    }
+
+    #[test]
+    fn detects_rgb_colors() {
+        assert_eq!(detect_content_type("rgb(12, 34, 56)").0, "color");
+        assert_eq!(detect_content_type("rgba(0,0,0,0.5)").0, "color");
+        assert_eq!(detect_content_type("rgb(nope)").0, "text");
+    }
+
+    #[test]
+    fn detects_urls() {
+        assert_eq!(detect_content_type("https://example.com/x").0, "url");
+        assert_eq!(detect_content_type("http://a.bc").0, "url");
+        assert_eq!(detect_content_type("https://a b").0, "text");
+        assert_eq!(detect_content_type("see https://x.com").0, "text");
+    }
+
+    #[test]
+    fn detects_json() {
+        assert_eq!(detect_content_type("{\"a\":1}").0, "json");
+        assert_eq!(detect_content_type("[{\"a\":1}]").0, "json");
+        assert_eq!(detect_content_type("plain text").0, "text");
+    }
+
+    #[test]
+    fn parses_image_labels() {
+        assert_eq!(parse_image_label("83 KiB png 1068x904"), (Some(83 * 1024), Some("png".into()), Some((1068, 904))));
+        assert_eq!(parse_image_label("512 B jpeg 32x32"), (Some(512), Some("jpeg".into()), Some((32, 32))));
+        let (_, fmt, dims) = parse_image_label("png 64x64");
+        assert_eq!(fmt.as_deref(), Some("png"));
+        assert_eq!(dims, Some((64, 64)));
     }
 }

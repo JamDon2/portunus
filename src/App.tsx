@@ -3,8 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
-import { Config, SearchResult, ExpiredTimer } from "./types";
+import { Config, SearchResult, ExpiredTimer, ClipboardCapabilities } from "./types";
 import { playTimerChime, audioCtxWarmup } from "./utils";
+import ClipboardMode from "./components/clipboard/ClipboardMode";
 import { applyTheme, injectMatugenTheme } from "./theme";
 import ResultsList from "./components/ResultsList";
 import PreviewPanel from "./components/PreviewPanel";
@@ -23,7 +24,7 @@ import "./themes.css";
 const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'timer-hint', 'content-hint', 'content-disabled']);
 
 // Kinds whose preview is worth enlarging into the full-card Quicklook overlay.
-const QUICKLOOK_KINDS = new Set(['file', 'folder', 'clipboard-image']);
+const QUICKLOOK_KINDS = new Set(['file', 'folder']);
 
 // Greyed-out completion shown after a partial command word (e.g. "tim" -> "er").
 // Tab accepts it. Returns the suffix to append, or null when nothing completes.
@@ -73,6 +74,43 @@ export default function App() {
   const focusedRef = useRef(true);
   // Mirror of "Quicklook open" for use inside event-listener closures.
   const quicklookRef = useRef(false);
+
+  // Dedicated clipboard-history browser. While active the launcher's search effect
+  // and global key handler stand down; ClipboardMode owns input handling.
+  const [clipboardMode, setClipboardMode] = useState(false);
+  const clipboardModeRef = useRef(false);
+  useEffect(() => { clipboardModeRef.current = clipboardMode; }, [clipboardMode]);
+  const [clipCaps, setClipCaps] = useState<ClipboardCapabilities>({ smart_paste: false });
+  const capsFetched = useRef(false);
+  // Whether the browser was opened via `portunus --clipboard` (so Esc hides the
+  // window) vs typed into the launcher (so Esc returns to the launcher).
+  const clipFromFlag = useRef(false);
+
+  const enterClipboardMode = (seed = "", fromFlag = false) => {
+    if (!capsFetched.current) {
+      capsFetched.current = true;
+      invoke<ClipboardCapabilities>("clipboard_capabilities").then(setClipCaps).catch(() => {});
+    }
+    clipFromFlag.current = fromFlag;
+    setClipboardMode(true);
+    setQuery(seed);
+    setResults([]);
+    inputRef.current?.focus();
+  };
+
+  const exitClipboardMode = () => {
+    if (clipFromFlag.current) {
+      setClipboardMode(false);
+      setQuery("");
+      setResults([]);
+      invoke("hide_window");
+      return;
+    }
+    setClipboardMode(false);
+    setQuery("");
+    setResults([]);
+    inputRef.current?.focus();
+  };
 
   useEffect(() => { queryRef.current = query; }, [query]);
   useEffect(() => { getVersion().then(setVersion); }, []);
@@ -131,6 +169,11 @@ export default function App() {
 
   useTauriListener("window-show", () => {
     focusedRef.current = true;
+    // A plain `--show` always opens the clean launcher, never a stale clipboard
+    // session. (`--clipboard` uses window-show-query, which re-enters the mode.)
+    setClipboardMode(false);
+    setQuery("");
+    setResults([]);
     inputRef.current?.focus();
     audioCtxWarmup();
     invoke<Config>("get_config").then(cfg => { setContentEnabled(cfg.content.enabled); configRef.current = cfg; });
@@ -148,13 +191,26 @@ export default function App() {
   }, []);
 
   useTauriListener<string>("window-show-query", payload => {
+    audioCtxWarmup();
+    // `portunus --clipboard` sends "clipboard " - open the dedicated browser
+    // instead of pre-filling the launcher query.
+    if (payload.trim() === "clipboard") { enterClipboardMode("", true); return; }
     setQuery(payload);
     // Don't manually clear results - the query useEffect will re-search immediately.
     inputRef.current?.focus();
-    audioCtxWarmup();
   });
 
+  // Typed entry: "clip…" + space opens the browser, seeding the filter with the
+  // remainder (e.g. "clipboard foo" → mode filtered by "foo"). Same prefix the
+  // backend provider triggers on; mirrors the inline provider's old behavior.
   useEffect(() => {
+    if (clipboardMode) return;
+    const m = /^(clip|clipb|clipbo|clipboa|clipboar|clipboard)\s+(.*)$/i.exec(query);
+    if (m) enterClipboardMode(m[2], false);
+  }, [query, clipboardMode]);
+
+  useEffect(() => {
+    if (clipboardMode) { setSearching(false); return; }
     if (!query.trim()) { setResults([]); setSearching(false); setResolvedEmpty(false); return; }
     let cancelled = false;
     setSearching(true);
@@ -167,7 +223,7 @@ export default function App() {
       });
     }, 10);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [query]);
+  }, [query, clipboardMode]);
 
   useEffect(() => { setSelectedIndex(0); }, [query]);
 
@@ -255,6 +311,7 @@ export default function App() {
     setResults,
     requery,
     removeExpiredTimer: (id: number) => setExpiredTimers(prev => prev.filter(t => t.id !== id)),
+    enterClipboardMode: () => enterClipboardMode("", false),
     config: configRef.current,
   });
 
@@ -286,6 +343,8 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       // While the onboarding wizard is open it owns all input.
       if (showOnboardingRef.current) return;
+      // ClipboardMode owns all key handling while the browser is open.
+      if (clipboardModeRef.current) return;
       // Ignore keys when the window isn't focused - an always-on-top launcher can
       // otherwise still receive (and act on) keystrokes meant for another window.
       if (!focusedRef.current) return;
@@ -447,38 +506,63 @@ export default function App() {
               />
             </div>
           )}
-          <svg
-            className="search-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
+          {clipboardMode ? (
+            <svg
+              className="search-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="8" y="2" width="8" height="4" rx="1" />
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+            </svg>
+          ) : (
+            <svg
+              className="search-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+          )}
           <div className="search-input-area">
+            {clipboardMode && <span className="search-hint-chip" style={{ marginLeft: 0, marginRight: 10 }}>Clipboard</span>}
             <span ref={mirrorRef} className="input-mirror" aria-hidden="true">{query}</span>
             <input
               ref={inputRef}
               className="search-input"
               type="text"
-              placeholder={loading ? "Loading…" : "Search…"}
+              placeholder={clipboardMode ? "Search clipboard history…" : (loading ? "Loading…" : "Search…")}
               value={query}
               onChange={e => setQuery(e.target.value)}
               autoFocus
               spellCheck={false}
-              style={contentSized ? { width: inputWidth + 4 } : { flex: 1 }}
+              style={!clipboardMode && contentSized ? { width: inputWidth + 4 } : { flex: 1 }}
             />
-            {ghostSuffix && <span className="search-ghost">{ghostSuffix}</span>}
-            {hintChip && <span className="search-hint-chip">{hintChip}</span>}
-            {calcResult && <div className="calc-inline">= {calcResult.title}</div>}
-            {contentSized && <div className="search-spacer" />}
+            {!clipboardMode && ghostSuffix && <span className="search-ghost">{ghostSuffix}</span>}
+            {!clipboardMode && hintChip && <span className="search-hint-chip">{hintChip}</span>}
+            {!clipboardMode && calcResult && <div className="calc-inline">= {calcResult.title}</div>}
+            {!clipboardMode && contentSized && <div className="search-spacer" />}
           </div>
         </div>
 
+        {clipboardMode ? (
+          <ClipboardMode
+            query={query}
+            capabilities={clipCaps}
+            onExit={exitClipboardMode}
+            onClearQuery={() => setQuery("")}
+            onPasted={() => { setClipboardMode(false); setQuery(""); setResults([]); }}
+          />
+        ) : (
         <div className="body">
           <ResultsList
             results={displayResults}
@@ -500,8 +584,9 @@ export default function App() {
             />
           </div>
         </div>
+        )}
 
-        {quickResult && (
+        {quickResult && !clipboardMode && (
           <QuickLook
             result={quickResult}
             terms={previewTerms}
@@ -511,11 +596,18 @@ export default function App() {
         )}
 
         <div className="footer">
-          <FooterHints selected={selected} canComplete={ghostSuffix !== null} quicklookOpen={quickResult != null} />
+          <FooterHints selected={selected} canComplete={ghostSuffix !== null} quicklookOpen={quickResult != null} clipboardMode={clipboardMode} smartPaste={clipCaps.smart_paste} clipboardIdle={clipboardMode && query.trim() === ""} />
           <div className="footer-right">
             <button
               className="footer-settings-btn"
-              onClick={() => invoke("open_settings_window")}
+              onClick={() => {
+                // Leave clipboard mode / clear the query so the launcher is clean
+                // when it's next shown over (or instead of) the settings window.
+                setClipboardMode(false);
+                setQuery("");
+                setResults([]);
+                invoke("open_settings_window");
+              }}
               title="Settings"
               tabIndex={-1}
             >

@@ -19,6 +19,7 @@ pub struct Config {
     pub content: ContentConfig,
     pub appearance: AppearanceConfig,
     pub dict: DictConfig,
+    pub clipboard: ClipboardConfig,
     pub extensions: ExtensionsConfig,
 }
 
@@ -34,8 +35,27 @@ impl Default for Config {
             content: ContentConfig::default(),
             appearance: AppearanceConfig::default(),
             dict: DictConfig::default(),
+            clipboard: ClipboardConfig::default(),
             extensions: ExtensionsConfig::default(),
         }
+    }
+}
+
+/// Clipboard history browser settings.
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct ClipboardConfig {
+    /// "auto" = on Enter, paste into the previously focused window (synthesizes
+    /// Ctrl+V via wtype); "copy" = only copy to the clipboard and let the user
+    /// paste manually. Falls back to copy when wtype is unavailable.
+    pub paste_mode: String,
+    /// Maximum number of entries loaded into the clipboard browser.
+    pub max_entries: usize,
+}
+
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self { paste_mode: "auto".to_string(), max_entries: 250 }
     }
 }
 

@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { SearchResult } from "../types";
-import { EnterIcon } from "../icons";
+import { EnterIcon, DeleteIcon } from "../icons";
 
 interface Props {
   selected: SearchResult | null;
@@ -8,6 +8,12 @@ interface Props {
   canComplete: boolean;
   /** The Quicklook overlay is open, so Esc closes it and Shift+Enter dismisses. */
   quicklookOpen?: boolean;
+  /** In the dedicated clipboard browser; hints + paste-vs-copy wording change. */
+  clipboardMode?: boolean;
+  /** wtype is available, so Enter pastes into the focused window vs copy-only. */
+  smartPaste?: boolean;
+  /** The clipboard list is unfiltered + unsearched (idle), so show the Tab hint. */
+  clipboardIdle?: boolean;
 }
 
 // Reusable hint atoms
@@ -21,8 +27,27 @@ const Peek = () => <span className="hint"><kbd>shift</kbd><kbd><EnterIcon /></kb
 
 const Complete = () => <span className="hint"><kbd>Tab</kbd> complete</span>;
 
-function hints(selected: SearchResult | null, canComplete: boolean, quicklookOpen: boolean): ReactNode {
+function hints(
+  selected: SearchResult | null,
+  canComplete: boolean,
+  quicklookOpen: boolean,
+  clipboardMode: boolean,
+  smartPaste: boolean,
+  clipboardIdle: boolean,
+): ReactNode {
   const k = selected?.kind;
+
+  // Dedicated clipboard browser. Enter degrades to copy-and-close without wtype,
+  // so the bar must say "copy" not "paste" (and drop the redundant ctrl+enter).
+  if (clipboardMode) return <>
+    <Nav />
+    {smartPaste
+      ? <><span className="hint"><kbd><EnterIcon /></kbd> paste</span><span className="hint"><kbd>ctrl</kbd><kbd><EnterIcon /></kbd> copy</span></>
+      : <span className="hint"><kbd><EnterIcon /></kbd> copy</span>}
+    <span className="hint"><kbd>shift</kbd><kbd><DeleteIcon /></kbd> delete</span>
+    {clipboardIdle && <span className="hint"><kbd>Tab</kbd> filter</span>}
+    <span className="hint"><kbd>Esc</kbd> back</span>
+  </>;
 
   // While Quicklook is open the keys mean something different - keep the bar honest.
   if (quicklookOpen) return <>
@@ -37,7 +62,7 @@ function hints(selected: SearchResult | null, canComplete: boolean, quicklookOpe
   if (k === "timer-hint") return <><span className="hint"><kbd>|</kbd> start typing</span><Esc /></>;
   if (k === "timer-expired") return <><Nav /><span className="hint"><kbd><EnterIcon /></kbd> dismiss</span><Esc /></>;
 
-  if (k === "clipboard" || k === "clipboard-image") return <><Nav /><span className="hint"><kbd><EnterIcon /></kbd> paste</span>{k === "clipboard-image" && <Peek />}<Jump /><Esc /></>;
+  if (k === "clipboard-mode") return <><Nav /><Open /><Esc /></>;
 
   if (k === "calc") return <><Nav /><span className="hint"><kbd>ctrl</kbd><kbd>C</kbd> copy value</span><Esc /></>;
 
@@ -66,6 +91,6 @@ function hints(selected: SearchResult | null, canComplete: boolean, quicklookOpe
   return <><Nav /><Open /><Jump />{canComplete && <Complete />}<Esc /></>;
 }
 
-export default function FooterHints({ selected, canComplete, quicklookOpen = false }: Props) {
-  return <div className="hints">{hints(selected, canComplete, quicklookOpen)}</div>;
+export default function FooterHints({ selected, canComplete, quicklookOpen = false, clipboardMode = false, smartPaste = false, clipboardIdle = false }: Props) {
+  return <div className="hints">{hints(selected, canComplete, quicklookOpen, clipboardMode, smartPaste, clipboardIdle)}</div>;
 }

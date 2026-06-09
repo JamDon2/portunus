@@ -47,6 +47,14 @@ export const FolderOpenIcon = () => (
   </svg>
 );
 
+export const DeleteIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14">
+    <path d="M20 5H9l-6 7 6 7h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+    <line x1="17" y1="9" x2="11" y2="15" />
+    <line x1="11" y1="9" x2="17" y2="15" />
+  </svg>
+);
+
 export const CheckIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
     <polyline points="20 6 9 17 4 12" />
