@@ -39,7 +39,6 @@ html, body, #root {
   --line-soft:      #28231f;
   --border:         #3d3730;
   --border-raised:  #4a4038;
-  --card-edge:      #4a4239;
 
   --fg:             #e8dfd3;
   --fg-mute:        #8f857a;
@@ -107,7 +106,7 @@ html, body, #root {
      black over whatever is behind). A top-lit bevel does the work: a warm hairline
      border, an inset highlight catching the top edge as if lit from above, and a
      faint inset dark ring just inside it for crisp separation. */
-  border: 1px solid var(--card-edge);
+  border: 1px solid var(--border-raised);
   overflow: hidden;
   box-shadow:
     inset 0 1px 0 rgba(245, 238, 228, 0.10),
