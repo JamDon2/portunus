@@ -11,7 +11,7 @@ export default function AppearanceSection({ config, onChange }: Props) {
   const set = (patch: Partial<Config["appearance"]>) =>
     onChange({ ...config, appearance: { ...config.appearance, ...patch } });
 
-  const { theme, font_size, animate_results, show_metadata, accent_bleed } = config.appearance;
+  const { theme, font_size, animate_results, show_metadata, accent_bleed, slide_selection } = config.appearance;
 
   return (
     <div>
@@ -94,6 +94,20 @@ export default function AppearanceSection({ config, onChange }: Props) {
             label="Accent bleed"
             checked={accent_bleed ?? true}
             onChange={v => set({ accent_bleed: v })}
+          />
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <div className="settings-field-label">
+          <div className="settings-field-name">Sliding selection</div>
+          <div className="settings-field-desc">Glide the highlight between rows as you navigate</div>
+        </div>
+        <div className="settings-field-control">
+          <Toggle
+            label="Sliding selection"
+            checked={slide_selection ?? true}
+            onChange={v => set({ slide_selection: v })}
           />
         </div>
       </div>

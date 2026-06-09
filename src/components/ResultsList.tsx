@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, type CSSProperties } from "react";
+import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { SearchResult } from "../types";
 import { groupLabel, formatBytes, shortenPath } from "../utils";
 import ResultIcon from "./ResultIcon";
@@ -19,18 +19,47 @@ interface Props {
 export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults, accents }: Props) {
   const selectedRef = useRef<HTMLDivElement>(null);
   const selectedLabelRef = useRef<HTMLDivElement>(null);
+  const colRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    // Scroll the row first so it's always visible, then the group label (if the
-    // selected row is first-in-group) so its header isn't clipped above the fold.
-    // The label is adjacent above the row, so scrolling it back in keeps the row
-    // visible too.
-    selectedRef.current?.scrollIntoView({ block: "nearest" });
+  // Geometry of the sliding-selection layer: tracks the selected row's box so a
+  // single highlight element can glide/resize to it. `snap` disables the glide
+  // for moves that scrolled the list (see below). Labels paint above the bar
+  // (CSS) so it slides behind them. null = hidden.
+  const [indicator, setIndicator] = useState<{ top: number; height: number; snap: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const el = selectedRef.current;
+    const col = colRef.current;
+    if (!el || !col) { setIndicator(null); return; }
+    // Keep the selection in view, here (pre-paint) so we can tell if it scrolled.
+    // Row first so it's always visible, then the group label (if first-in-group)
+    // so its header isn't clipped above the fold.
+    const before = col.scrollTop;
+    el.scrollIntoView({ block: "nearest" });
     selectedLabelRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
+    // A scroll keeps the row at the same screen spot, but the bar's content-space
+    // position jumps a full row — gliding that fights the instant scroll and
+    // makes the bar lurch. Snap instead; glide only for in-view moves.
+    const scrolled = col.scrollTop !== before;
+    setIndicator({ top: el.offsetTop, height: el.offsetHeight, snap: scrolled });
+  }, [selectedIndex, results]);
+
+  const selectedResult = results[selectedIndex];
+  const selectedAccent = selectedResult ? accents.get(selectedResult.id) : undefined;
 
   return (
-    <div className="results-col" role="listbox">
+    <div className="results-col" ref={colRef} role="listbox">
+      {indicator && results.length > 0 && (
+        <div
+          className={`selection-bg${selectedAccent ? " has-accent" : ""}`}
+          aria-hidden="true"
+          style={{
+            transform: `translateY(${indicator.top}px)`,
+            height: indicator.height,
+            '--row-accent': selectedAccent,
+            transition: indicator.snap ? 'none' : undefined,
+          } as CSSProperties}
+        />
+      )}
       {active && results.length === 0 && !searching && (
         <div className="results-empty">No results</div>
       )}

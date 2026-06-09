@@ -412,6 +412,12 @@ html, body, #root {
   caret-color: var(--accent);
   letter-spacing: -0.01em;
   min-width: 2px;
+  /* Own compositing layer. The input lives inside .card-clip (clip-path), and
+     WebKit2GTK fails to push the dirty region up through that clipped layer when
+     a text selection collapses (shift+Home then End) - the old selection
+     rectangle is never repainted and a stale box stays over the first glyph.
+     Promoting the input to its own layer keeps its repaints self-contained. */
+  transform: translateZ(0);
 }
 
 .search-input::placeholder {
@@ -439,6 +445,7 @@ html, body, #root {
 /* ---------- results column ---------- */
 
 .results-col {
+  position: relative;
   border-right: 1px solid var(--line-soft);
   padding: 8px;
   overflow-y: auto;
@@ -516,6 +523,54 @@ html, body, #root {
 
 :root[data-accent-bleed="true"] .result-row.selected.has-accent .result-icon-img {
   filter: drop-shadow(0 0 8px color-mix(in srgb, var(--row-accent) 55%, transparent));
+}
+
+/* ---------- sliding selection ----------
+   A single highlight layer behind the rows that glides + resizes to the selected
+   row. Off by default styling (display:none); App.tsx flips data-slide-selection.
+   Geometry (translateY + height) is set inline from the measured selected row. */
+.selection-bg {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 0;
+  z-index: 0;
+  display: none;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  --sel-bg: color-mix(in srgb, var(--bg-row-sel) 72%, var(--bg-card));
+  background: var(--sel-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+  transition:
+    transform 0.19s cubic-bezier(0.22, 1, 0.36, 1),
+    height 0.19s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root[data-slide-selection="true"] .selection-bg { display: block; }
+
+/* App-tinted gradient on the sliding layer — only when accent bleed is on. */
+:root[data-accent-bleed="true"] .selection-bg.has-accent {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--row-accent) 20%, var(--sel-bg)) 0%,
+    color-mix(in srgb, var(--row-accent) 6%, var(--sel-bg)) 100%
+  );
+  box-shadow: inset 3px 0 0 var(--row-accent);
+}
+
+/* With the layer active, the row content and the group labels float above it
+   (so the bar slides *behind* a "FILES"/"APPS" header rather than covering it)
+   and the per-row highlight is dropped so only the layer paints background + rail. */
+:root[data-slide-selection="true"] .result-row { position: relative; z-index: 1; }
+:root[data-slide-selection="true"] .result-group-label { position: relative; z-index: 1; }
+:root[data-slide-selection="true"] .result-row.selected,
+:root[data-slide-selection="true"][data-accent-bleed="true"] .result-row.selected.has-accent {
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selection-bg { transition: none; }
 }
 
 /* Mirror the theme accent into an un-shadowed var so the preview override below

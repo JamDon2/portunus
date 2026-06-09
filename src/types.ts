@@ -70,6 +70,7 @@ export interface Config {
     animate_results: boolean;
     show_metadata: boolean;
     accent_bleed: boolean;
+    slide_selection: boolean;
   };
   extensions: {
     /** Per-extension enable map keyed by name. Absent = disabled. */

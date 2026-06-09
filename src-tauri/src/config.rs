@@ -269,6 +269,8 @@ pub struct AppearanceConfig {
     pub show_metadata: bool,
     /// Tint the selected row + preview panel with the app's dominant icon color.
     pub accent_bleed: bool,
+    /// Slide a single highlight layer between rows instead of a static per-row one.
+    pub slide_selection: bool,
 }
 
 impl Default for AppearanceConfig {
@@ -279,6 +281,7 @@ impl Default for AppearanceConfig {
             animate_results: true,
             show_metadata: true,
             accent_bleed: true,
+            slide_selection: true,
         }
     }
 }

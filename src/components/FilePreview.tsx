@@ -796,10 +796,15 @@ function MarkdownPreview({ path, terms }: { path: string; terms: string[] }) {
   useEffect(() => {
     let cancelled = false;
     setSource(null);
-    invoke<string>("read_text_preview", { path, terms })
-      .then(text => { if (!cancelled) setSource(text); })
-      .catch(() => { if (!cancelled) setSource(""); });
-    return () => { cancelled = true; };
+    // Debounce the fetch + (costly) ReactMarkdown render so arrowing quickly
+    // through .md files doesn't render every one passed over - same 80ms guard
+    // the PDF preview uses.
+    const t = setTimeout(() => {
+      invoke<string>("read_text_preview", { path, terms })
+        .then(text => { if (!cancelled) setSource(text); })
+        .catch(() => { if (!cancelled) setSource(""); });
+    }, 40);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [path, terms]);
 
   if (source === null) return <div className="text-preview-wrap" />;
