@@ -479,6 +479,11 @@ html, body, #root {
 
 :root[data-animate-results="false"] .result-row { animation: none; }
 
+/* Static informational rows persist across keystrokes - don't replay the
+   entrance animation each time a no-match query re-renders them. */
+.result-row[data-kind="content-hint"],
+.result-row[data-kind="content-disabled"] { animation: none; }
+
 .result-row:hover { background: var(--bg-row-hov); }
 .result-row.selected {
   background: var(--bg-row-sel);
@@ -1285,6 +1290,18 @@ mark.preview-hl {
   overflow-x: auto;
   margin: 0 0 10px;
 }
+.md-preview-wrap pre::-webkit-scrollbar { width: 10px; height: 10px; }
+.md-preview-wrap pre::-webkit-scrollbar-thumb {
+  background: var(--bg-input);
+  border-radius: 5px;
+  border: 2px solid var(--bg-deep);
+  background-clip: padding-box;
+  min-height: 32px;
+  min-width: 32px;
+}
+.md-preview-wrap pre::-webkit-scrollbar-thumb:hover { background: var(--fg-mute); background-clip: padding-box; }
+.md-preview-wrap pre::-webkit-scrollbar-track { background: transparent; }
+.md-preview-wrap pre::-webkit-scrollbar-corner { background: var(--bg-deep); }
 .md-preview-wrap pre code {
   background: none;
   padding: 0;

@@ -41,6 +41,10 @@ export default function App() {
   // True between scheduling a search and its results arriving, so the results
   // list can distinguish "still loading" from a genuine zero-result query.
   const [searching, setSearching] = useState(false);
+  // True only once a non-empty query has actually resolved with zero results.
+  // Gates the content-search hint so it never flashes on the first keystroke
+  // (stale empty results + pending debounce) yet stays mounted across re-searches.
+  const [resolvedEmpty, setResolvedEmpty] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   // The pinned result shown in Quicklook (null = closed). Pinning the result -
   // rather than tracking a boolean + selectedIndex - keeps the overlay on the
@@ -150,17 +154,17 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (!query.trim()) { setResults([]); setSearching(false); return; }
+    if (!query.trim()) { setResults([]); setSearching(false); setResolvedEmpty(false); return; }
     let cancelled = false;
     setSearching(true);
     const t = setTimeout(() => {
       invoke<SearchResult[]>("search", { query }).then(r => {
-        if (!cancelled) { setResults(r); setSearching(false); }
+        if (!cancelled) { setResults(r); setSearching(false); setResolvedEmpty(r.length === 0); }
       }).catch(() => {
         // Don't strand the UI in "searching": clear so the empty state can show.
-        if (!cancelled) { setResults([]); setSearching(false); }
+        if (!cancelled) { setResults([]); setSearching(false); setResolvedEmpty(true); }
       });
-    }, 40);
+    }, 10);
     return () => { cancelled = true; clearTimeout(t); };
   }, [query]);
 
@@ -186,9 +190,10 @@ export default function App() {
         return results;
       }
       if (results.length === 0) {
-        // Suggest content search only once the regular search has resolved with
-        // nothing - otherwise the hint flashes before the first debounce lands.
-        if (searching) return [];
+        // Suggest content search only once a search has actually resolved empty
+        // (not on the first-keystroke debounce gap). Kept mounted across
+        // re-searches so it doesn't unmount/remount and re-animate per keystroke.
+        if (!resolvedEmpty) return [];
         return [{
           id: "content:hint",
           title: "Search file contents",
@@ -208,7 +213,7 @@ export default function App() {
       score: 0,
       exec: `timer:dismiss:${t.id}`,
     }));
-  }, [query, results, expiredTimers, contentEnabled, searching]);
+  }, [query, results, expiredTimers, contentEnabled, resolvedEmpty]);
 
   // Results can shrink without the query changing (timer requery, search-invalidated).
   // Snap the selection back in bounds so the highlight/preview and Enter stay live.
@@ -460,7 +465,7 @@ export default function App() {
             {ghostSuffix && <span className="search-ghost">{ghostSuffix}</span>}
             {hintChip && <span className="search-hint-chip">{hintChip}</span>}
             {calcResult && <div className="calc-inline">= {calcResult.title}</div>}
-            <div className="search-spacer" />
+            {contentSized && <div className="search-spacer" />}
           </div>
         </div>
 

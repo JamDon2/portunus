@@ -51,6 +51,7 @@ export default function ResultsList({ results, selectedIndex, active, searching,
             <div
               ref={i === selectedIndex ? selectedRef : null}
               className={`result-row${i === selectedIndex ? " selected" : ""}`}
+              data-kind={result.kind}
               style={{ '--row-i': i } as CSSProperties}
               role="option"
               aria-selected={i === selectedIndex}
