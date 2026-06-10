@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ClipboardEntry } from "../../types";
 import { EnterIcon, CopyIcon, CheckIcon } from "../../icons";
-import { LinkIcon, ClipboardGlyphIcon } from "./clipIcons";
+import { LinkIcon, ClipboardGlyphIcon, ImageGlyphIcon, TextLinesIcon, JsonIcon } from "./clipIcons";
 import { getDecoded, peekDecoded, classifyFullText, textStats, type Decoded } from "./clipboardCache";
 import { formatBytes } from "../../utils";
 import hljs from "highlight.js/lib/core";
@@ -138,12 +138,9 @@ function ColorView({ value }: { value: string }) {
 }
 
 function UrlView({ url }: { url: string }) {
-  let host = url;
-  try { host = new URL(url).host; } catch { /* keep raw */ }
+  // Header already shows the link icon + host; body carries the full URL + hint.
   return (
     <div className="clip-url">
-      <div className="clip-url-tile"><LinkIcon /></div>
-      <div className="clip-url-host">{host}</div>
       <div className="clip-url-full">{url}</div>
       <div className="clip-url-hint"><kbd>ctrl</kbd><kbd>O</kbd> open in browser</div>
     </div>
@@ -248,6 +245,35 @@ export default function ClipboardEntryPreview({ entry, smartPaste, onPaste, onCo
     fullType === "json" ? "JSON" :
     "Text";
 
+  // Header icon tile + one-line descriptor, mirroring the launcher's file preview
+  // head (icon-wrap + title + tag) so the two inspectors read as the same surface.
+  const colorVal = decoded?.kind === "text" ? decoded.text.trim() : "";
+  const headIcon =
+    isImage ? <ImageGlyphIcon /> :
+    decoded?.kind === "binary" ? <ClipboardGlyphIcon size={18} /> :
+    fullType === "url" ? <LinkIcon /> :
+    fullType === "json" ? <JsonIcon /> :
+    fullType === "color" ? <div className="clip-swatch" style={{ width: "100%", height: "100%", borderRadius: 8, background: colorVal }} /> :
+    <TextLinesIcon />;
+
+  let tag: string | null = null;
+  if (isImage) {
+    const dims = entry.dimensions ? `${entry.dimensions[0]} × ${entry.dimensions[1]}` : null;
+    tag = [dims, entry.format?.toUpperCase(), entry.byte_size != null ? formatBytes(entry.byte_size) : null]
+      .filter(Boolean).join(" · ") || null;
+  } else if (decoded?.kind === "binary") {
+    tag = formatBytes(decoded.bytes);
+  } else if (decoded?.kind === "text") {
+    if (fullType === "color") {
+      tag = colorFormats(colorVal).find((f) => f.label === "HEX")?.value ?? colorVal;
+    } else if (fullType === "url") {
+      try { tag = new URL(colorVal).host; } catch { tag = null; }
+    } else {
+      const s = textStats(decoded.text);
+      tag = `${s.chars.toLocaleString()} chars · ${s.lines} lines`;
+    }
+  }
+
   let body: ReactNode;
   if (error && !decoded) {
     body = <div className="clipboard-preview-empty">Preview unavailable</div>;
@@ -268,9 +294,13 @@ export default function ClipboardEntryPreview({ entry, smartPaste, onPaste, onCo
 
   return (
     <div className="clip-preview">
-      <div className="clip-preview-head">
-        <span className="clipboard-preview-label">{label}</span>
-        <div className="clip-preview-actions">
+      <div className="file-preview-head">
+        <div className="file-preview-icon-wrap">{headIcon}</div>
+        <div className="file-preview-head-text">
+          <div className="file-preview-title">{label}</div>
+          {tag && <div className="file-preview-tag">{tag}</div>}
+        </div>
+        <div className="file-preview-actions">
           {fullType === "url" && (
             <button className="file-btn-icon" onClick={onOpenUrl} title="Open in browser (Ctrl+O)" tabIndex={-1}>
               <LinkIcon />
