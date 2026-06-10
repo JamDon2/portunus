@@ -21,11 +21,11 @@ Portunus is a Tauri 2 app: a Rust backend exposed via Tauri IPC to a React 19 / 
 
 `lib.rs` defines all Tauri commands: `search`, `search_content`, `launch_app`, `get_config`, `save_config`, `trigger_full_reindex`, `is_content_index_empty`, `open_settings_window`, `hide_window`, `is_apps_ready`.
 
-**Provider system** - `providers/mod.rs` defines the `Provider` trait and `PluginRegistry`. The built-in providers are: `apps`, `files`, `recent`, `clipboard`, `calc`, `dict`, `content` (plus WASM extensions). Each implements `id()` + `search(query) -> Vec<SearchResult>`. `PluginRegistry::search()` merges results, applies frecency bonuses, sorts by composite score, and truncates to `max_results` (default 9). The `content` provider is excluded from `search()`; it runs only via `PluginRegistry::search_content()`, the backend of the Tab-activated "Contents" mode (a launcher mode like clipboard - dedicated chip, Tab to toggle, Backspace to exit).
+**Provider system** - `providers/mod.rs` defines the `Provider` trait and `PluginRegistry`. The built-in providers are: `apps`, `files`, `clipboard`, `calc`, `dict`, `content` (plus WASM extensions). Each implements `id()` + `search(query) -> Vec<SearchResult>`. `PluginRegistry::search()` merges results, applies frecency bonuses, sorts by composite score, and truncates to `max_results` (default 9). The `content` provider is excluded from `search()`; it runs only via `PluginRegistry::search_content()`, the backend of the Tab-activated "Contents" mode (a launcher mode like clipboard - dedicated chip, Tab to toggle, Backspace to exit).
 
 **Scoring** - Composite score = category base + fuzzy score (nucleo-matcher) + frecency bonus. Base scores by kind: clipboard 5M, calc 3M, app 2M, file 1M, folder 0. Results with `nucleo_score < MIN_NUCLEO_SCORE` are filtered out.
 
-**Frecency** (`frecency.rs`) - SQLite DB at `$XDG_DATA_HOME/portunus/frecency.db`. Half-life exponential decay: `new_score = old_score × 2^(−elapsed_days / half_life) + 1.0`. Tracks `app`, `file`, `folder` kinds. `recent:` IDs are normalized to `file:` so both providers share one score.
+**Frecency** (`frecency.rs`) - SQLite DB at `$XDG_DATA_HOME/portunus/frecency.db`. Half-life exponential decay: `new_score = old_score × 2^(−elapsed_days / half_life) + 1.0`. Tracks `app`, `file`, `folder` kinds.
 
 **Content index** (`content_index.rs`) - SQLite full-text search over file contents. OCR via Tesseract (`leptess`) is always compiled in. Triggered by `trigger_full_reindex` command or watcher. Progress events emitted as `content-index-progress { indexed, total }`.
 
@@ -33,7 +33,7 @@ Portunus is a Tauri 2 app: a Rust backend exposed via Tauri IPC to a React 19 / 
 
 **IPC** (`ipc.rs`) - Unix socket at `$XDG_RUNTIME_DIR/portunus.sock` handles `--show`, `--clipboard`, `--reindex`, `--reload-config`, `--reload-extensions` CLI flags from a second instance.
 
-**Startup sequence** - `CalcProvider` registers synchronously. `FileProvider`, `RecentProvider`, and `AppProvider` load in a background thread. Tauri emits `apps-ready` when done; frontend shows a loading state until then.
+**Startup sequence** - `CalcProvider` registers synchronously. `FileProvider` and `AppProvider` load in a background thread. Tauri emits `apps-ready` when done; frontend shows a loading state until then.
 
 ### Frontend (`src/`)
 

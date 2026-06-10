@@ -116,7 +116,7 @@ impl Default for SearchResult {
 }
 
 /// Returns a configured `(Pattern, Matcher, char_buf)` for fuzzy matching `query`.
-/// All three fuzzy providers (apps, files, recent) use identical nucleo settings.
+/// The fuzzy providers (apps, files) use identical nucleo settings.
 pub fn fuzzy_setup(query: &str) -> (nucleo_matcher::pattern::Pattern, nucleo_matcher::Matcher, Vec<char>) {
     use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
     use nucleo_matcher::{Config, Matcher};

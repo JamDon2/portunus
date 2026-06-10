@@ -9,7 +9,7 @@ use crate::{
 
 /// Spawn a thread that calls `build()` to produce an optional provider, replaces
 /// it in the registry under `id`, logs `name`, then fires `notify_cb`.
-/// Used for the simple (recent, apps) rebuild cases where the only difference is
+/// Used for the simple (apps) rebuild cases where the only difference is
 /// what gets constructed.
 fn spawn_rebuild(
     registry: &Registry,
