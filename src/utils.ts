@@ -19,6 +19,80 @@ export function formatBytes(n: number): string {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
+// Extension → chip category for the folder preview. Categories map to colors
+// in App.css (`.folder-ext-chip[data-cat=...]`), built on the theme `--hljs-*`
+// tokens so they stay readable across every theme.
+const EXT_CATEGORY: Record<string, string> = {
+  // code
+  ts: "code", tsx: "code", js: "code", jsx: "code", mjs: "code", cjs: "code",
+  rs: "code", py: "code", go: "code", rb: "code", java: "code", kt: "code",
+  kts: "code", swift: "code", php: "code", lua: "code", c: "code", h: "code",
+  cpp: "code", cc: "code", cxx: "code", hh: "code", hpp: "code", sql: "code",
+  sh: "code", bash: "code", zsh: "code", vue: "code",
+  // web / markup
+  html: "web", htm: "web", css: "web", scss: "web", less: "web", svg: "web",
+  // data / config
+  json: "data", toml: "data", yaml: "data", yml: "data", xml: "data",
+  ini: "data", conf: "data", cfg: "data", env: "data", lock: "data",
+  // docs
+  md: "docs", txt: "docs", rst: "docs", log: "docs", pdf: "docs",
+  doc: "docs", docx: "docs", odt: "docs", csv: "docs", tsv: "docs",
+  xlsx: "docs", ods: "docs", pptx: "docs", odp: "docs",
+  // images
+  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image",
+  bmp: "image", tiff: "image", tif: "image", ico: "image", avif: "image",
+  // media
+  mp4: "media", mkv: "media", mov: "media", avi: "media", webm: "media",
+  mp3: "media", flac: "media", wav: "media", ogg: "media", m4a: "media",
+  // archives
+  zip: "archive", tar: "archive", gz: "archive", bz2: "archive", xz: "archive",
+  "7z": "archive", rar: "archive", zst: "archive",
+};
+
+// Well-known extensionless filenames get a chip too, so common build/meta
+// files don't fall back to the anonymous glyph.
+const SPECIAL_NAMES: Record<string, { label: string; cat: string }> = {
+  dockerfile: { label: "DOCK", cat: "code" },
+  containerfile: { label: "DOCK", cat: "code" },
+  makefile: { label: "MAKE", cat: "code" },
+  justfile: { label: "JUST", cat: "code" },
+  rakefile: { label: "RAKE", cat: "code" },
+  gemfile: { label: "GEM", cat: "code" },
+  procfile: { label: "PROC", cat: "code" },
+  license: { label: "LIC", cat: "docs" },
+  copying: { label: "LIC", cat: "docs" },
+  readme: { label: "DOC", cat: "docs" },
+  authors: { label: "DOC", cat: "docs" },
+  notice: { label: "DOC", cat: "docs" },
+  changelog: { label: "DOC", cat: "docs" },
+};
+
+// Short uppercase extension badge + category for a folder-listing file row.
+// Returns null for unknown extensionless names so the caller falls back to a
+// neutral file glyph.
+export function fileExtBadge(name: string): { label: string; cat: string } | null {
+  const special = SPECIAL_NAMES[name.toLowerCase()];
+  if (special) return special;
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return null; // no ext, or dotfile w/o ext
+  const ext = name.slice(dot + 1).toLowerCase();
+  if (!/^[a-z0-9]+$/.test(ext) || ext.length > 4) return null;
+  return { label: ext.toUpperCase(), cat: EXT_CATEGORY[ext] ?? "other" };
+}
+
+// "N folders · M files" summary for the folder-preview header. When the
+// backend 200-entry cap is hit, leads with "200+ items" instead of exact counts.
+export function folderSummary(entries: { is_dir: boolean }[], capped: boolean): string {
+  if (capped) return `200+ items`;
+  if (entries.length === 0) return "Empty";
+  const dirs = entries.filter(e => e.is_dir).length;
+  const files = entries.length - dirs;
+  const parts: string[] = [];
+  if (dirs) parts.push(`${dirs} folder${dirs === 1 ? "" : "s"}`);
+  if (files) parts.push(`${files} file${files === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+
 export function formatDate(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString("en-US", {
     year: "numeric", month: "short", day: "numeric",

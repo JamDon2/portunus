@@ -1,11 +1,11 @@
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, Fragment } from "react";
 import type { ReactNode, MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import { SearchResult } from "../types";
-import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable, isSvg, isCsv, isOfficeText, isSpreadsheet } from "../utils";
+import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable, isSvg, isCsv, isOfficeText, isSpreadsheet, fileExtBadge, folderSummary } from "../utils";
 import { highlightInElement, focusBestCluster, cellMatches, buildTermRegex } from "../highlight";
 
 /**
@@ -43,7 +43,7 @@ function highlightText(text: string, terms: string[]): ReactNode {
   if (last < text.length) out.push(text.slice(last));
   return out;
 }
-import { EnterIcon, CopyIcon, FolderOpenIcon, CheckIcon } from "../icons";
+import { EnterIcon, CopyIcon, FolderOpenIcon, CheckIcon, FolderFilledIcon, ChevronRightIcon, FileGlyphIcon } from "../icons";
 import hljs from "highlight.js/lib/core";
 import langRust       from "highlight.js/lib/languages/rust";
 import langTS         from "highlight.js/lib/languages/typescript";
@@ -696,48 +696,117 @@ function SpreadsheetPreview({ path, terms }: { path: string; terms: string[] }) 
   return <DataTable rows={rows} terms={terms} />;
 }
 
-// ── folder contents ───────────────────────────────────────────────────────────
+// ── folder preview ──────────────────────────────────────────────────────────
 
 interface FolderEntry { name: string; is_dir: boolean; size?: number; }
 
-function FolderContents({ path }: { path: string }) {
+// Backend `list_folder` caps the listing at this many entries (preview.rs).
+const FOLDER_LIST_CAP = 200;
+
+function FolderRow({ e }: { e: FolderEntry }) {
+  const isDot = e.name.startsWith(".");
+  const badge = e.is_dir ? null : fileExtBadge(e.name);
+  return (
+    <div className={`folder-entry${isDot ? " dotfile" : ""}${e.is_dir ? " is-dir" : ""}`}>
+      <span className="folder-entry-lead">
+        {e.is_dir ? (
+          <span className="folder-entry-glyph"><FolderFilledIcon size={13} /></span>
+        ) : badge ? (
+          <span className="folder-ext-chip" data-cat={badge.cat}>{badge.label}</span>
+        ) : (
+          <span className="folder-entry-glyph file"><FileGlyphIcon size={12} /></span>
+        )}
+      </span>
+      <span className="folder-entry-name">{e.name}</span>
+      {e.is_dir ? (
+        <span className="folder-entry-chevron"><ChevronRightIcon size={12} /></span>
+      ) : e.size != null ? (
+        <span className="folder-entry-size">{formatBytes(e.size)}</span>
+      ) : (
+        <span className="folder-entry-size" />
+      )}
+    </div>
+  );
+}
+
+function FolderContents({ entries }: { entries: FolderEntry[] }) {
+  // Backend sorts folders-first; drop a single divider at the folder→file boundary.
+  const firstFile = entries.findIndex(e => !e.is_dir);
+  const dividerAt = firstFile > 0 ? firstFile : -1; // only when both groups exist
+  const capped = entries.length >= FOLDER_LIST_CAP;
+  return (
+    <div className="folder-contents">
+      {entries.map((e, i) => (
+        <Fragment key={`${e.name}-${i}`}>
+          {i === dividerAt && <div className="folder-group-divider" />}
+          <FolderRow e={e} />
+        </Fragment>
+      ))}
+      {capped && <div className="folder-cap-note">Showing first {FOLDER_LIST_CAP} entries</div>}
+    </div>
+  );
+}
+
+function FolderPreview({ result, onLaunch, quicklook }: { result: SearchResult; onLaunch: () => void; quicklook: boolean }) {
+  const filePath = result.subtitle ? `${result.subtitle}/${result.title}` : result.title;
   const [entries, setEntries] = useState<FolderEntry[] | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setEntries(null);
-    invoke<FolderEntry[]>("list_folder", { path })
+    invoke<FolderEntry[]>("list_folder", { path: filePath })
       .then(e => { if (!cancelled) setEntries(e); })
       .catch(() => { if (!cancelled) setEntries([]); });
     return () => { cancelled = true; };
-  }, [path]);
+  }, [filePath]);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(filePath);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const capped = (entries?.length ?? 0) >= FOLDER_LIST_CAP;
+  const summary = entries === null ? "" : folderSummary(entries, capped);
 
   return (
-    <div className="folder-contents">
-      {entries === null && <div className="folder-contents-empty">Loading…</div>}
-      {entries !== null && entries.length === 0 && (
-        <div className="folder-contents-empty">Empty folder</div>
-      )}
-      {entries?.map(e => (
-        <div key={e.name} className="folder-entry">
-          <span className="folder-entry-icon">
-            {e.is_dir ? (
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="13" height="13">
-                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="13" height="13">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-              </svg>
-            )}
-          </span>
-          <span className="folder-entry-name">{e.name}</span>
-          {!e.is_dir && e.size != null && (
-            <span className="folder-entry-size">{formatBytes(e.size)}</span>
-          )}
+    <div className={`file-preview folder-preview${quicklook ? " file-preview-ql" : ""}`}>
+      {!quicklook && (
+        <div className="file-preview-head">
+          <div className="file-preview-icon-wrap"><FolderFilledIcon size={22} /></div>
+          <div className="file-preview-head-text">
+            <div className="file-preview-title">{result.title}</div>
+            <div className="file-preview-tag">{summary ? `Folder · ${summary}` : "Folder"}</div>
+          </div>
+          <div className="file-preview-actions">
+            <button className={`file-btn-icon${copied ? " copied" : ""}`} onClick={handleCopy} title="Copy path" tabIndex={-1}>
+              {copied ? <CheckIcon /> : <CopyIcon />}
+            </button>
+            <button className="btn-primary" onClick={onLaunch} tabIndex={-1}>
+              Open <span className="btn-kbd"><EnterIcon /></span>
+            </button>
+          </div>
         </div>
-      ))}
+      )}
+
+      {entries === null ? (
+        <div className="folder-contents folder-contents-loading">
+          {Array.from({ length: 7 }).map((_, i) => (
+            <div className="folder-skeleton-row" key={i}>
+              <span className="folder-skeleton-lead" />
+              <span className="folder-skeleton-name" style={{ width: `${40 + ((i * 17) % 45)}%` }} />
+            </div>
+          ))}
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="folder-empty">
+          <span className="folder-empty-glyph"><FolderOpenIcon /></span>
+          <span className="folder-empty-label">Empty folder</span>
+        </div>
+      ) : (
+        <FolderContents entries={entries} />
+      )}
     </div>
   );
 }
@@ -894,18 +963,19 @@ interface Props {
 
 export default function FilePreview({ result, onLaunch, onReveal, terms = [], quicklook = false }: Props) {
   const isFolder = result.kind === "folder";
-  const kind = fileKind(result.title, isFolder);
-  const tag = [kind, !isFolder && result.file_size != null ? formatBytes(result.file_size) : null]
+  if (isFolder) return <FolderPreview result={result} onLaunch={onLaunch} quicklook={quicklook} />;
+  const kind = fileKind(result.title, false);
+  const tag = [kind, result.file_size != null ? formatBytes(result.file_size) : null]
     .filter(Boolean)
     .join(" · ");
   const filePath = result.subtitle ? `${result.subtitle}/${result.title}` : result.title;
   const isPdf = kind === "PDF Document";
-  const isImage = !isFolder && isImagePreviewable(result.title);
-  const isSvgFile = !isFolder && isSvg(result.title);
-  const isCsvFile = !isFolder && isCsv(result.title);
-  const isOfficeTextFile = !isFolder && isOfficeText(result.title);
-  const isSpreadsheetFile = !isFolder && isSpreadsheet(result.title);
-  const textLang = !isFolder && !isImage && !isSvgFile && !isCsvFile && !isOfficeTextFile && !isSpreadsheetFile
+  const isImage = isImagePreviewable(result.title);
+  const isSvgFile = isSvg(result.title);
+  const isCsvFile = isCsv(result.title);
+  const isOfficeTextFile = isOfficeText(result.title);
+  const isSpreadsheetFile = isSpreadsheet(result.title);
+  const textLang = !isImage && !isSvgFile && !isCsvFile && !isOfficeTextFile && !isSpreadsheetFile
     ? textPreviewLang(result.title)
     : null;
 
@@ -922,11 +992,7 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], qu
     onReveal?.();
   };
 
-  const icon = isFolder ? (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="22" height="22">
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-    </svg>
-  ) : (
+  const icon = (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="22" height="22">
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <polyline points="14 2 14 8 20 8" />
@@ -947,11 +1013,9 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], qu
           <button className={`file-btn-icon${copied ? ' copied' : ''}`} onClick={handleCopy} title="Copy path" tabIndex={-1}>
             {copied ? <CheckIcon /> : <CopyIcon />}
           </button>
-          {!isFolder && (
-            <button className="file-btn-icon" onClick={handleReveal} title="Reveal in folder" tabIndex={-1}>
-              <FolderOpenIcon />
-            </button>
-          )}
+          <button className="file-btn-icon" onClick={handleReveal} title="Reveal in folder" tabIndex={-1}>
+            <FolderOpenIcon />
+          </button>
           <button className="btn-primary" onClick={onLaunch} tabIndex={-1}>
             Open <span className="btn-kbd"><EnterIcon /></span>
           </button>
@@ -967,7 +1031,6 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], qu
       {isSpreadsheetFile && <SpreadsheetPreview path={filePath} terms={terms} />}
       {textLang === "markdown" && <MarkdownPreview path={filePath} terms={terms} />}
       {textLang && textLang !== "markdown" && <TextPreview path={filePath} lang={textLang} terms={terms} />}
-      {isFolder && <FolderContents path={filePath} />}
 
       {!quicklook && (result.modified || result.created) && (
       <div className="file-preview-meta">
