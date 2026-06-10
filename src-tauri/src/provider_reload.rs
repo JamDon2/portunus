@@ -54,7 +54,9 @@ pub fn rebuild_providers(
 
     // ── Selectively rebuild index-backed providers ────────────────────────────
 
-    if new_cfg.files != old_cfg.files || new_cfg.providers.files != old_cfg.providers.files {
+    let files_index_changed = !new_cfg.files.index_eq(&old_cfg.files)
+        || new_cfg.providers.files != old_cfg.providers.files;
+    if files_index_changed {
         let files_cfg = new_cfg.files.clone();
         let old_files_cfg = old_cfg.files.clone();
         let was_enabled = old_cfg.providers.files;
@@ -90,6 +92,7 @@ pub fn rebuild_providers(
                             .cloned()
                             .collect(),
                         show_dotfiles: files_cfg.show_dotfiles,
+                        colored_icons: files_cfg.colored_icons,
                     };
                     let new_entries = providers::files::FileProvider::walk_dirs(&added_cfg);
                     fe.write().unwrap().extend(new_entries);
@@ -111,6 +114,9 @@ pub fn rebuild_providers(
             eprintln!("[config] files provider rebuilt");
             ncb();
         });
+    } else if new_cfg.files != old_cfg.files {
+        // Display-only change (colored_icons): no re-walk, just refresh the UI.
+        notify_cb();
     }
 
     if new_cfg.providers.apps != old_cfg.providers.apps {

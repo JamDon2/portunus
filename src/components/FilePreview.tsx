@@ -1,11 +1,12 @@
-import { useState, useEffect, useLayoutEffect, useRef, Fragment } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useContext, Fragment } from "react";
 import type { ReactNode, MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import { SearchResult } from "../types";
-import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable, isSvg, isCsv, isOfficeText, isSpreadsheet, fileExtBadge, folderSummary } from "../utils";
+import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable, isSvg, isCsv, isOfficeText, isSpreadsheet, fileCategory, folderSummary } from "../utils";
+import { ColoredIconsContext } from "../coloredIcons";
 import { highlightInElement, focusBestCluster, cellMatches, buildTermRegex } from "../highlight";
 
 /**
@@ -43,7 +44,7 @@ function highlightText(text: string, terms: string[]): ReactNode {
   if (last < text.length) out.push(text.slice(last));
   return out;
 }
-import { EnterIcon, CopyIcon, FolderOpenIcon, CheckIcon, FolderFilledIcon, ChevronRightIcon, FileGlyphIcon } from "../icons";
+import { EnterIcon, CopyIcon, FolderOpenIcon, CheckIcon, FolderFilledIcon, ChevronRightIcon, FileGlyphIcon, CategoryGlyph } from "../icons";
 import hljs from "highlight.js/lib/core";
 import langRust       from "highlight.js/lib/languages/rust";
 import langTS         from "highlight.js/lib/languages/typescript";
@@ -704,17 +705,18 @@ interface FolderEntry { name: string; is_dir: boolean; size?: number; }
 const FOLDER_LIST_CAP = 200;
 
 function FolderRow({ e }: { e: FolderEntry }) {
+  const colored = useContext(ColoredIconsContext);
   const isDot = e.name.startsWith(".");
-  const badge = e.is_dir ? null : fileExtBadge(e.name);
+  const cat = fileCategory(e.name);
   return (
     <div className={`folder-entry${isDot ? " dotfile" : ""}${e.is_dir ? " is-dir" : ""}`}>
       <span className="folder-entry-lead">
         {e.is_dir ? (
-          <span className="folder-entry-glyph"><FolderFilledIcon size={13} /></span>
-        ) : badge ? (
-          <span className="folder-ext-chip" data-cat={badge.cat}>{badge.label}</span>
+          <span className="folder-entry-glyph" data-cat={colored ? "folder" : undefined}><FolderFilledIcon size={13} /></span>
+        ) : colored ? (
+          <span className="folder-entry-glyph" data-cat={cat}><CategoryGlyph cat={cat} size={13} /></span>
         ) : (
-          <span className="folder-entry-glyph file"><FileGlyphIcon size={12} /></span>
+          <span className="folder-entry-glyph file"><FileGlyphIcon size={13} /></span>
         )}
       </span>
       <span className="folder-entry-name">{e.name}</span>

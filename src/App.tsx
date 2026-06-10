@@ -12,6 +12,7 @@ import QuickLook from "./components/QuickLook";
 import { deriveContentTerms } from "./highlight";
 import FooterHints from "./components/FooterHints";
 import { pdfView } from "./components/FilePreview";
+import { ColoredIconsContext } from "./coloredIcons";
 import { dispatchLaunch, dispatchKeyDown, type LaunchContext } from "./providers/registry";
 import { useTauriListener } from "./hooks/useTauriListener";
 import { useIconAccents } from "./hooks/useIconAccents";
@@ -57,6 +58,7 @@ export default function App() {
   const [version, setVersion] = useState("");
   const [indexingProgress, setIndexingProgress] = useState<{ indexed: number; total: number } | null>(null);
   const [contentEnabled, setContentEnabled] = useState(true);
+  const [coloredIcons, setColoredIcons] = useState(true);
   // Full config kept in a ref so the (effect-bound) keydown handler reads the
   // current value without re-subscribing. Refreshed on mount/show/invalidation.
   const configRef = useRef<Config | null>(null);
@@ -146,6 +148,7 @@ export default function App() {
     invoke<Config>("get_config").then(cfg => {
       applyTheme(cfg.appearance);
       setContentEnabled(cfg.content.enabled);
+      setColoredIcons(cfg.files.colored_icons);
       configRef.current = cfg;
       setOnboardConfig(cfg);
       if (!cfg.general.onboarding_completed) setShowOnboarding(true);
@@ -202,7 +205,7 @@ export default function App() {
     setQuery("");
     setResults([]);
     inputRef.current?.focus();
-    invoke<Config>("get_config").then(cfg => { setContentEnabled(cfg.content.enabled); configRef.current = cfg; });
+    invoke<Config>("get_config").then(cfg => { setContentEnabled(cfg.content.enabled); setColoredIcons(cfg.files.colored_icons); configRef.current = cfg; });
   });
 
   useEffect(() => {
@@ -320,7 +323,7 @@ export default function App() {
     requery();
     // Also refresh content.enabled so the disabled hint appears/disappears
     // immediately when the user toggles content search in Settings.
-    invoke<Config>("get_config").then(cfg => { setContentEnabled(cfg.content.enabled); configRef.current = cfg; });
+    invoke<Config>("get_config").then(cfg => { setContentEnabled(cfg.content.enabled); setColoredIcons(cfg.files.colored_icons); configRef.current = cfg; });
   });
 
   const makeCtx = (): LaunchContext => ({
@@ -497,6 +500,7 @@ export default function App() {
   const contentSized = ghostSuffix !== null || hintChip !== null || calcResult != null;
 
   return (
+    <ColoredIconsContext.Provider value={coloredIcons}>
     <div className="launcher">
       {showOnboarding && onboardConfig && (
         <OnboardingWizard
@@ -663,5 +667,6 @@ export default function App() {
         </div>
       </div>
     </div>
+    </ColoredIconsContext.Provider>
   );
 }

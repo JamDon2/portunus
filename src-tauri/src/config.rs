@@ -165,6 +165,7 @@ fn default_depth() -> usize {
 pub struct FilesConfig {
     pub dirs: Vec<DirEntry>,
     pub show_dotfiles: bool,
+    pub colored_icons: bool,
 }
 
 impl Default for FilesConfig {
@@ -177,7 +178,16 @@ impl Default for FilesConfig {
                 DirEntry { path: format!("{home}/.config/hypr"), depth: 2 },
             ],
             show_dotfiles: false,
+            colored_icons: true,
         }
+    }
+}
+
+impl FilesConfig {
+    /// True when the index-affecting fields match. `colored_icons` is a
+    /// display-only flag, so a change to it must not trigger a file re-walk.
+    pub fn index_eq(&self, other: &Self) -> bool {
+        self.dirs == other.dirs && self.show_dotfiles == other.show_dotfiles
     }
 }
 

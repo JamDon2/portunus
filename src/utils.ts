@@ -19,9 +19,9 @@ export function formatBytes(n: number): string {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
-// Extension → chip category for the folder preview. Categories map to colors
-// in App.css (`.folder-ext-chip[data-cat=...]`), built on the theme `--hljs-*`
-// tokens so they stay readable across every theme.
+// Extension → glyph category. Categories map to colors in App.css
+// (`.result-icon[data-cat=...]` and `.folder-entry-glyph[data-cat=...]`), built
+// on the theme `--hljs-*` tokens so they stay readable across every theme.
 const EXT_CATEGORY: Record<string, string> = {
   // code
   ts: "code", tsx: "code", js: "code", jsx: "code", mjs: "code", cjs: "code",
@@ -34,6 +34,7 @@ const EXT_CATEGORY: Record<string, string> = {
   // data / config
   json: "data", toml: "data", yaml: "data", yml: "data", xml: "data",
   ini: "data", conf: "data", cfg: "data", env: "data", lock: "data",
+  db: "data", sqlite: "data", sqlite3: "data",
   // docs
   md: "docs", txt: "docs", rst: "docs", log: "docs", pdf: "docs",
   doc: "docs", docx: "docs", odt: "docs", csv: "docs", tsv: "docs",
@@ -67,9 +68,8 @@ const SPECIAL_NAMES: Record<string, { label: string; cat: string }> = {
   changelog: { label: "DOC", cat: "docs" },
 };
 
-// Short uppercase extension badge + category for a folder-listing file row.
-// Returns null for unknown extensionless names so the caller falls back to a
-// neutral file glyph.
+// Resolves a filename to its glyph category (+ a short label). Returns null for
+// unknown extensionless names so callers fall back to the neutral glyph.
 export function fileExtBadge(name: string): { label: string; cat: string } | null {
   const special = SPECIAL_NAMES[name.toLowerCase()];
   if (special) return special;
@@ -78,6 +78,13 @@ export function fileExtBadge(name: string): { label: string; cat: string } | nul
   const ext = name.slice(dot + 1).toLowerCase();
   if (!/^[a-z0-9]+$/.test(ext) || ext.length > 4) return null;
   return { label: ext.toUpperCase(), cat: EXT_CATEGORY[ext] ?? "other" };
+}
+
+// Category for a file's glyph + color. Always resolves (unknown / extensionless
+// names -> "other", the neutral glyph). Shared by the result list and the folder
+// preview so both render identical glyphs.
+export function fileCategory(name: string): string {
+  return fileExtBadge(name)?.cat ?? "other";
 }
 
 // "N folders · M files" summary for the folder-preview header. When the

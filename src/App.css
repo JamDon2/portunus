@@ -605,7 +605,22 @@ html, body, #root {
   flex-shrink: 0;
 }
 
-.result-row.selected .result-icon { background: var(--icon-bg-sel); color: var(--accent); }
+/* Category-tinted file/folder glyphs. Colors track the same `--hljs-*` theme
+   tokens as the folder-preview glyphs (App.css `.folder-entry-glyph[data-cat]`),
+   so the list and the preview stay in lockstep across every theme. */
+.result-icon[data-cat="code"]    { color: var(--hljs-function); background: color-mix(in srgb, var(--hljs-function) 14%, transparent); }
+.result-icon[data-cat="web"]     { color: var(--hljs-builtin);  background: color-mix(in srgb, var(--hljs-builtin) 14%, transparent); }
+.result-icon[data-cat="data"]    { color: var(--hljs-number);   background: color-mix(in srgb, var(--hljs-number) 14%, transparent); }
+.result-icon[data-cat="docs"]    { color: var(--hljs-string);   background: color-mix(in srgb, var(--hljs-string) 14%, transparent); }
+.result-icon[data-cat="image"]   { color: var(--hljs-keyword);  background: color-mix(in srgb, var(--hljs-keyword) 14%, transparent); }
+.result-icon[data-cat="media"]   { color: var(--hljs-type);     background: color-mix(in srgb, var(--hljs-type) 14%, transparent); }
+.result-icon[data-cat="archive"] { color: var(--hljs-attr);     background: color-mix(in srgb, var(--hljs-attr) 14%, transparent); }
+.result-icon[data-cat="folder"]  { color: var(--accent);        background: var(--accent-soft); }
+
+/* Keep the category hue on the focused row (the most-looked-at one) — only
+   non-categorized icons (apps, clipboard, calc…) adopt the generic accent. */
+.result-row.selected .result-icon:not([data-cat]) { background: var(--icon-bg-sel); color: var(--accent); }
+.result-row.selected .result-icon[data-cat] { background-color: color-mix(in srgb, currentColor 22%, transparent); }
 
 .result-icon-img {
   width: 28px;
@@ -1644,14 +1659,26 @@ mark.preview-hl {
   height: 18px;
 }
 
+/* Category-tinted glyphs — same `data-cat` -> `--hljs-*` mapping as the result
+   list (`.result-icon[data-cat]`), so the folder preview and launcher render
+   identical icons. No `data-cat` (colored-icons off, or category "other") falls
+   back to the neutral colour below. */
 .folder-entry-glyph {
-  color: var(--accent);
+  color: var(--fg-dim);
   display: flex;
   align-items: center;
   justify-content: center;
   width: 26px;
 }
 .folder-entry-glyph.file { color: var(--fg-dim); }
+.folder-entry-glyph[data-cat="folder"]  { color: var(--accent); }
+.folder-entry-glyph[data-cat="code"]    { color: var(--hljs-function); }
+.folder-entry-glyph[data-cat="web"]     { color: var(--hljs-builtin); }
+.folder-entry-glyph[data-cat="data"]    { color: var(--hljs-number); }
+.folder-entry-glyph[data-cat="docs"]    { color: var(--hljs-string); }
+.folder-entry-glyph[data-cat="image"]   { color: var(--hljs-keyword); }
+.folder-entry-glyph[data-cat="media"]   { color: var(--hljs-type); }
+.folder-entry-glyph[data-cat="archive"] { color: var(--hljs-attr); }
 
 .folder-entry-name {
   font: 400 11.5px/1.4 "JetBrains Mono", "Fira Code", monospace;
@@ -1684,26 +1711,6 @@ mark.preview-hl {
   transform: translateX(0);
   color: var(--accent);
 }
-
-/* extension chip ----------------------------------------------------------- */
-
-.folder-ext-chip {
-  font: 600 8.5px/1 "JetBrains Mono", "Fira Code", monospace;
-  letter-spacing: 0.04em;
-  padding: 3px 4px;
-  min-width: 26px;
-  border-radius: 4px;
-  text-align: center;
-  color: var(--fg-mute);
-  background: color-mix(in srgb, var(--fg-mute) 12%, transparent);
-}
-.folder-ext-chip[data-cat="code"]    { color: var(--hljs-function); background: color-mix(in srgb, var(--hljs-function) 14%, transparent); }
-.folder-ext-chip[data-cat="web"]     { color: var(--hljs-builtin);  background: color-mix(in srgb, var(--hljs-builtin) 14%, transparent); }
-.folder-ext-chip[data-cat="data"]    { color: var(--hljs-number);   background: color-mix(in srgb, var(--hljs-number) 14%, transparent); }
-.folder-ext-chip[data-cat="docs"]    { color: var(--hljs-string);   background: color-mix(in srgb, var(--hljs-string) 14%, transparent); }
-.folder-ext-chip[data-cat="image"]   { color: var(--hljs-keyword);  background: color-mix(in srgb, var(--hljs-keyword) 14%, transparent); }
-.folder-ext-chip[data-cat="media"]   { color: var(--hljs-type);     background: color-mix(in srgb, var(--hljs-type) 14%, transparent); }
-.folder-ext-chip[data-cat="archive"] { color: var(--hljs-attr);     background: color-mix(in srgb, var(--hljs-attr) 14%, transparent); }
 
 /* divider + cap note ------------------------------------------------------- */
 

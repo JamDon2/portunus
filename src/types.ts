@@ -46,6 +46,7 @@ export interface Config {
   files: {
     dirs: DirEntry[];
     show_dotfiles: boolean;
+    colored_icons: boolean;
   };
   search: {
     min_quality: number;

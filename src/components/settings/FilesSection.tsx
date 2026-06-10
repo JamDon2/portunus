@@ -93,6 +93,16 @@ export default function FilesSection({ config, onChange }: Props) {
           <Toggle label="Show dotfiles" checked={config.files.show_dotfiles} onChange={v => setFiles({ show_dotfiles: v })} />
         </div>
       </div>
+
+      <div className="settings-field">
+        <div className="settings-field-label">
+          <div className="settings-field-name">Colored file icons</div>
+          <div className="settings-field-desc">Tint file and folder icons by type, with a distinct glyph per category. When off, all files use a plain monochrome document icon.</div>
+        </div>
+        <div className="settings-field-control">
+          <Toggle label="Colored file icons" checked={config.files.colored_icons} onChange={v => setFiles({ colored_icons: v })} />
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useState, useContext } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { BookIcon } from "../icons";
+import { BookIcon, CategoryGlyph, FileGlyphIcon } from "../icons";
+import { fileCategory } from "../utils";
+import { ColoredIconsContext } from "../coloredIcons";
 
 interface Props {
   icon_path?: string;
@@ -11,6 +13,7 @@ interface Props {
 
 export default function ResultIcon({ icon_path, iconDataUri, title, kind }: Props) {
   const [failed, setFailed] = useState(false);
+  const coloredIcons = useContext(ColoredIconsContext);
 
   // Extension-supplied icon (host-validated data: URI); on error falls
   // through to the kind glyph below.
@@ -72,7 +75,7 @@ export default function ResultIcon({ icon_path, iconDataUri, title, kind }: Prop
 
   if (kind === "folder") {
     return (
-      <div className="result-icon">
+      <div className="result-icon" data-cat={coloredIcons ? "folder" : undefined}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
           <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
         </svg>
@@ -92,12 +95,13 @@ export default function ResultIcon({ icon_path, iconDataUri, title, kind }: Prop
   }
 
   if (kind === "file") {
+    if (!coloredIcons) {
+      return <div className="result-icon"><FileGlyphIcon size={16} /></div>;
+    }
+    const cat = fileCategory(title);
     return (
-      <div className="result-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <polyline points="14 2 14 8 20 8" />
-        </svg>
+      <div className="result-icon" data-cat={cat}>
+        <CategoryGlyph cat={cat} size={16} />
       </div>
     );
   }
