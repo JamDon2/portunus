@@ -138,7 +138,7 @@ export default function ClipboardMode({ query, capabilities, onExit, onClearQuer
   const paste = (idx: number, copyOnly: boolean) => {
     const e = liveList()[idx];
     if (!e) return;
-    invoke("paste_clipboard", { id: e.id, copyOnly });
+    invoke("paste_clipboard", { id: e.id, copyOnly }).catch(err => console.error("[clipboard] paste failed:", err));
     onPasted();
   };
 
@@ -147,10 +147,10 @@ export default function ClipboardMode({ query, capabilities, onExit, onClearQuer
     if (!e) return;
     getDecoded(e.id).then((d) => {
       if (d.kind === "text") {
-        invoke("launch_app", { exec: `xdg-open "${d.text.trim()}"` });
+        invoke("launch_app", { exec: `xdg-open "${d.text.trim()}"` }).catch(err => console.error("[clipboard] open url failed:", err));
         onPasted();
       }
-    });
+    }).catch(err => console.error("[clipboard] decode failed:", err));
   };
 
   const remove = (idx: number) => {

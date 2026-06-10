@@ -399,7 +399,10 @@ impl Config {
                     Ok(_) => eprintln!("[config] wrote default config to {}", path.display()),
                     Err(e) => eprintln!("[config] could not write default config to {}: {e}", path.display()),
                 }
-                return Self::default();
+                // Return the parsed bundled config, not Self::default(): the two
+                // diverge (e.g. content dirs), so returning defaults would make the
+                // first session behave differently from every restart afterwards.
+                return toml::from_str::<Config>(DEFAULT_CONFIG).unwrap_or_default();
             }
         };
         match toml::from_str::<Config>(&content) {

@@ -802,7 +802,7 @@ function makeMdAnchor(baseDir: string): Components["a"] {
         ? href
         : href.startsWith("/") ? href
         : `${baseDir}/${href}`;
-      invoke("launch_app", { exec: `xdg-open "${target}"` });
+      invoke("launch_app", { exec: `xdg-open "${target}"` }).catch(err => console.error("[preview] open link failed:", err));
     };
     return <a href={href} onClick={onClick}>{children}</a>;
   };
@@ -918,7 +918,7 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], qu
   };
 
   const handleReveal = () => {
-    invoke('reveal_file', { path: filePath });
+    invoke('reveal_file', { path: filePath }).catch(err => console.error("[preview] reveal_file failed:", err));
     onReveal?.();
   };
 

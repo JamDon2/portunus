@@ -48,7 +48,7 @@ log_pdf     = false    # print pdfium load/render/encode steps to stderr
 enabled        = true
 half_life_days = 14.0  # frecency score halves every N days of non-use
 
-# Full-text content search - query must start with ! to activate (e.g. "! invoice 2024").
+# Full-text content search - press Tab to activate, then type your query (e.g. "invoice 2024").
 # system deps: poppler (pdftotext/pdftoppm), tesseract + tesseract-data-eng (OCR)
 # re-index on demand: portunus --reindex
 [content]

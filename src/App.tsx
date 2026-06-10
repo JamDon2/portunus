@@ -20,12 +20,12 @@ import "./providers";
 import "./App.css";
 import "./themes.css";
 
-const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'content-hint', 'content-disabled']);
+const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'content-hint', 'content-disabled', 'search-error']);
 
 // Kinds whose preview is worth enlarging into the full-card Quicklook overlay.
 const QUICKLOOK_KINDS = new Set(['file', 'folder']);
 
-// Greyed-out completion shown after a partial command word (e.g. "tim" -> "er").
+// Greyed-out completion shown after a partial command word (e.g. "def" -> "ine").
 // Tab accepts it. Returns the suffix to append, or null when nothing completes.
 function ghostFor(q: string): string | null {
   if (q.length < 2 || q.includes(' ')) return null;
@@ -45,6 +45,9 @@ export default function App() {
   // Gates the content-search hint so it never flashes on the first keystroke
   // (stale empty results + pending debounce) yet stays mounted across re-searches.
   const [resolvedEmpty, setResolvedEmpty] = useState(false);
+  // True when the last search invoke rejected, so the list can show an error row
+  // instead of masquerading the failure as a genuine zero-result query.
+  const [searchError, setSearchError] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   // The pinned result shown in Quicklook (null = closed). Pinning the result -
   // rather than tracking a boolean + selectedIndex - keeps the overlay on the
@@ -89,6 +92,8 @@ export default function App() {
       invoke<ClipboardCapabilities>("clipboard_capabilities").then(setClipCaps).catch(() => {});
     }
     clipFromFlag.current = fromFlag;
+    // Clipboard overrides content mode so only one chip is ever active.
+    setContentMode(false);
     setClipboardMode(true);
     setQuery(seed);
     setResults([]);
@@ -239,13 +244,16 @@ export default function App() {
     }
     let cancelled = false;
     setSearching(true);
+    setSearchError(false);
     const cmd = contentMode ? "search_content" : "search";
     const t = setTimeout(() => {
       invoke<SearchResult[]>(cmd, { query }).then(r => {
         if (!cancelled) { setResults(r); setSearching(false); setResolvedEmpty(r.length === 0); }
-      }).catch(() => {
-        // Don't strand the UI in "searching": clear so the empty state can show.
-        if (!cancelled) { setResults([]); setSearching(false); setResolvedEmpty(true); }
+      }).catch(e => {
+        // Surface the failure as an error row rather than an empty result, which
+        // would wrongly offer the "search file contents" hint.
+        console.error(`[search] ${cmd} failed:`, e);
+        if (!cancelled) { setResults([]); setSearching(false); setResolvedEmpty(false); setSearchError(true); }
       });
     }, 10);
     return () => { cancelled = true; clearTimeout(t); };
@@ -255,6 +263,15 @@ export default function App() {
 
   const displayResults = useMemo<SearchResult[]>(() => {
     if (!query.trim()) return [];
+    if (searchError) {
+      return [{
+        id: "search:error",
+        title: "Search failed",
+        subtitle: "Something went wrong - check the logs and try again",
+        kind: "search-error",
+        score: 0,
+      }];
+    }
     if (contentMode) {
       if (!contentEnabled) {
         return [{
@@ -283,7 +300,7 @@ export default function App() {
       }];
     }
     return results;
-  }, [query, results, contentEnabled, resolvedEmpty, contentMode]);
+  }, [query, results, contentEnabled, resolvedEmpty, contentMode, searchError]);
 
   // Results can shrink without the query changing (search-invalidated). Snap the
   // selection back in bounds so the highlight/preview and Enter stay live.
@@ -295,7 +312,8 @@ export default function App() {
     const q = queryRef.current;
     if (!q.trim()) return;
     const cmd = contentModeRef.current ? "search_content" : "search";
-    invoke<SearchResult[]>(cmd, { query: q }).then(setResults);
+    invoke<SearchResult[]>(cmd, { query: q }).then(setResults)
+      .catch(e => console.error(`[search] ${cmd} requery failed:`, e));
   };
 
   useTauriListener("search-invalidated", () => {
@@ -315,8 +333,9 @@ export default function App() {
 
   const launch = (result?: SearchResult) => {
     if (!result) return;
+    if (result.kind === "search-error") return;
     if (result.kind === "content-disabled") {
-      invoke("open_settings_window", { section: "content" });
+      invoke("open_settings_window", { section: "content" }).catch(e => console.error("[settings] open failed:", e));
       return;
     }
     if (result.kind === "content-hint") {
@@ -334,7 +353,8 @@ export default function App() {
     if (result.title.toLowerCase().endsWith(".pdf") && pdfView.path === fp) {
       exec = `xdg-open "file://${encodeURI(fp)}#page=${pdfView.page + 1}"`;
     }
-    invoke("launch_app", { exec, id: result.id, kind: result.kind });
+    invoke("launch_app", { exec, id: result.id, kind: result.kind })
+      .catch(e => console.error("[launch] launch_app failed:", e));
   };
 
   useEffect(() => {
@@ -627,7 +647,7 @@ export default function App() {
                 setContentMode(false);
                 setQuery("");
                 setResults([]);
-                invoke("open_settings_window");
+                invoke("open_settings_window").catch(e => console.error("[settings] open failed:", e));
               }}
               title="Settings"
               tabIndex={-1}

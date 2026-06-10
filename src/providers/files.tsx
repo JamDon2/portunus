@@ -20,7 +20,7 @@ registerProvider({
     if (e.ctrlKey && !e.altKey && e.key === 'Enter' && result?.kind === 'file') {
       e.preventDefault();
       const path = result.subtitle ? `${result.subtitle}/${result.title}` : result.title;
-      invoke('reveal_file', { path });
+      invoke('reveal_file', { path }).catch(e => console.error('[files] reveal_file failed:', e));
       ctx.setQuery('');
       ctx.setResults([]);
       return true;

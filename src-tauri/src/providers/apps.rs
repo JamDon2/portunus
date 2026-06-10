@@ -341,7 +341,7 @@ impl Provider for AppProvider {
 
     fn search(&self, query: &str) -> Vec<SearchResult> {
         let q = query.trim();
-        if q.is_empty() || q.starts_with('!') {
+        if q.is_empty() {
             return vec![];
         }
 
