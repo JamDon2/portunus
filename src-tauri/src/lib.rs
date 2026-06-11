@@ -7,6 +7,7 @@ mod frecency;
 mod ipc;
 mod layer_shell;
 mod office;
+mod paths;
 mod preview;
 mod provider_reload;
 mod providers;

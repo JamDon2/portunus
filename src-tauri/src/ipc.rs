@@ -3,8 +3,7 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 pub fn socket_path() -> std::path::PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(runtime_dir).join("portunus.sock")
+    crate::paths::xdg_runtime_dir().join("portunus.sock")
 }
 
 pub fn try_signal_running(cmd: &str) -> bool {

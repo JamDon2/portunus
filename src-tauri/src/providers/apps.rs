@@ -42,13 +42,10 @@ impl AppProvider {
 // ── loading ───────────────────────────────────────────────────────────────────
 
 fn xdg_data_dirs() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    let data_home =
-        std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{home}/.local/share"));
     let system_dirs = std::env::var("XDG_DATA_DIRS")
         .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string());
 
-    let mut dirs = vec![PathBuf::from(data_home)];
+    let mut dirs = vec![crate::paths::xdg_data_home()];
     dirs.extend(system_dirs.split(':').map(PathBuf::from));
     dirs
 }

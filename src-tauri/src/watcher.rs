@@ -91,13 +91,7 @@ pub fn start_config_watcher(
 ) {
     use notify_debouncer_full::notify::Watcher as _;
 
-    let config_dir = {
-        let config_home = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-            format!("{home}/.config")
-        });
-        std::path::PathBuf::from(config_home).join("portunus")
-    };
+    let config_dir = crate::paths::config_dir();
 
     std::thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel();

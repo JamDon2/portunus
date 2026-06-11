@@ -19,13 +19,7 @@ pub struct ExtensionKv {
 }
 
 fn db_path() -> PathBuf {
-    let data_home = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        format!("{home}/.local/share")
-    });
-    PathBuf::from(data_home)
-        .join("portunus")
-        .join("extension_kv.sqlite")
+    crate::paths::data_dir().join("extension_kv.sqlite")
 }
 
 impl ExtensionKv {

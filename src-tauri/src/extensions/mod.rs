@@ -24,11 +24,7 @@ use kv::ExtensionKv;
 pub struct ExtensionKvState(pub Arc<ExtensionKv>);
 
 pub fn extensions_dir() -> PathBuf {
-    let data_home = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        format!("{home}/.local/share")
-    });
-    PathBuf::from(data_home).join("portunus").join("extensions")
+    crate::paths::data_dir().join("extensions")
 }
 
 /// One on-disk extension: a validated manifest or the reason it failed.

@@ -61,11 +61,7 @@ pub struct ContentIndex {
 
 impl ContentIndex {
     pub fn open() -> rusqlite::Result<Self> {
-        let data_home = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-            format!("{home}/.local/share")
-        });
-        let dir = std::path::PathBuf::from(data_home).join("portunus");
+        let dir = crate::paths::data_dir();
         std::fs::create_dir_all(&dir).ok();
         let db_path = dir.join("content_index.db");
 

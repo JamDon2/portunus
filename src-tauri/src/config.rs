@@ -170,7 +170,7 @@ pub struct FilesConfig {
 
 impl Default for FilesConfig {
     fn default() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let home = crate::paths::home();
         Self {
             dirs: vec![
                 DirEntry { path: format!("{home}/Downloads"), depth: 2 },
@@ -277,7 +277,7 @@ impl ContentConfig {
 
 impl Default for ContentConfig {
     fn default() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let home = crate::paths::home();
         Self {
             enabled: false,
             dirs: vec![ContentDirEntry { path: format!("{home}/Documents"), depth: 3, extensions: None }],
@@ -455,10 +455,9 @@ impl Config {
     /// Expand a path string: replace a leading `~` with $HOME.
     pub fn expand_path(p: &str) -> PathBuf {
         if let Some(rest) = p.strip_prefix("~/") {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-            PathBuf::from(home).join(rest)
+            PathBuf::from(crate::paths::home()).join(rest)
         } else if p == "~" {
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()))
+            PathBuf::from(crate::paths::home())
         } else {
             PathBuf::from(p)
         }
@@ -472,10 +471,5 @@ fn config_path() -> PathBuf {
 /// `$XDG_CONFIG_HOME/portunus` (or `~/.config/portunus`). Holds `config.toml` and
 /// the external `matugen.css` theme file.
 pub fn config_dir() -> PathBuf {
-    let config_home = std::env::var("XDG_CONFIG_HOME")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-            format!("{home}/.config")
-        });
-    PathBuf::from(config_home).join("portunus")
+    crate::paths::config_dir()
 }
