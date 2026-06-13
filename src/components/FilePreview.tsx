@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useContext, Fragment } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useContext, useCallback, Fragment } from "react";
 import type { ReactNode, MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
@@ -161,6 +161,18 @@ let pdfQuicklookMounted = 0;
 const PDF_SYNC_EVENT = "portunus-pdf-sync";
 
 const PDF_QL_FIXED_ZOOM = 0.75;
+// Quicklook zoom factor bounds and per-keystroke multiplier (1.0 = the 0.75-of-width
+// baseline, shown as 100% in the HUD). Ctrl +/- step by ZOOM_STEP; Ctrl+wheel steps finer.
+const ZOOM_MIN = 0.4;
+const ZOOM_MAX = 2;
+const ZOOM_STEP = 1.25;
+const ZOOM_WHEEL_STEP = 1.1;
+// Above this render width (zoomed in), skip adjacent-page prefetch so the big visible
+// render isn't queued behind two equally-big neighbor renders on the single worker.
+const PDF_PREFETCH_MAX_WIDTH = 2000;
+// Zoom factor at which the page width exactly fills the reader (displayW === vp.w).
+// Switching pages clamps to this so the new page's full width is visible and centered.
+const PDF_FIT_WIDTH_ZOOM = 1 / PDF_QL_FIXED_ZOOM;
 
 // Cap the rendered-page cache; evict the oldest blob URLs (and revoke them) so a
 // long session of zooming/paging across PDFs doesn't leak detached bitmaps.
@@ -182,10 +194,12 @@ function getPdfUrl(path: string, page: number, width: number): Promise<string> {
   if (!pdfPromiseCache.has(key)) {
     pdfPromiseCache.set(
       key,
-      invoke<[number[], number]>("render_pdf_page", { path, page, width })
-        .then(([bytes, count]) => {
-          pdfPageCount.set(path, count);
-          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
+      // Raw ArrayBuffer across IPC (not a JSON number[], which ~5x's the payload and
+      // dominates render time at high zoom). Layout: u32 LE page-count header + JPEG.
+      invoke<ArrayBuffer>("render_pdf_page", { path, page, width })
+        .then((buf) => {
+          pdfPageCount.set(path, new DataView(buf).getUint32(0, true));
+          const url = URL.createObjectURL(new Blob([buf.slice(4)], { type: "image/jpeg" }));
           storePdfUrl(key, url);
           return url;
         })
@@ -222,6 +236,13 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
   // the current page - falling back to the content-match page for a fresh file.
   const startPage = () => (pdfView.path === path ? pdfView.page : page);
   const [cur, setCur] = useState(startPage);
+  // Quicklook zoom factor (1.0 = PDF_QL_FIXED_ZOOM of reader width). Persists across
+  // page flips; resets on remount (a fresh Quicklook open). Side preview ignores it.
+  const [zoom, setZoom] = useState(1);
+  const [grabbing, setGrabbing] = useState(false);
+  // Content-fraction under the cursor at the moment of a zoom, applied once the page
+  // has resized so the point under the pointer stays put. Null when no zoom is pending.
+  const zoomAnchor = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const [count, setCount] = useState<number | null>(() => pdfPageCount.get(path) ?? null);
   const [aspect, setAspect] = useState(() => pdfAspect.get(path) ?? 0);
   // On switching files, adopt the new path's cached aspect if known; otherwise
@@ -297,16 +318,60 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
   // contain-fits the page into the wrap (was pure CSS, but the highlight host
   // wrapper needs a definite box to align the overlay against).
   const displayW = quicklook
-    ? (vp.w > 0 ? Math.round(vp.w * PDF_QL_FIXED_ZOOM) : 0)
+    ? (vp.w > 0 ? Math.round(vp.w * PDF_QL_FIXED_ZOOM * zoom) : 0)
     : (vp.w > 0 && vp.h > 0 && aspect > 0 ? Math.floor(Math.min(vp.w, vp.h * aspect)) : 0);
   const displayH = aspect > 0 && displayW > 0 ? Math.round(displayW / aspect) : undefined;
-  // Side preview: render the bitmap at the actual on-screen size (× DPR) so it
-  // isn't upscaled - the page <img> is now sized to displayW, which can exceed
-  // the old fixed 800. Backend clamps to its max render width; 800 until measured.
+  // Render the bitmap at the actual on-screen size (× DPR) so it isn't upscaled -
+  // zooming grows displayW, which grows renderWidth, which re-renders sharp (backend
+  // clamps to its max render width). 800/1200 floors until measured.
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const renderWidth = quicklook
-    ? (displayW > 0 ? Math.max(1200, displayW) : 800)
+    ? (displayW > 0 ? Math.max(1200, Math.round(displayW * dpr)) : 800)
     : (displayW > 0 ? Math.max(800, Math.ceil(displayW * dpr)) : 800);
+  // The renderWidth at zoom 1 (the 0.75-of-reader baseline). When zoomed past it, the
+  // render effect paints this fast pass first, then the sharp full-width render.
+  const baseRenderWidth = quicklook && vp.w > 0
+    ? Math.max(1200, Math.round(vp.w * PDF_QL_FIXED_ZOOM * dpr))
+    : renderWidth;
+
+  // Change zoom while keeping a chosen point fixed: record the content-fraction under
+  // the anchor (cursor for wheel, viewport center for keys) from the current DOM, then
+  // clamp the factor. The [displayW, displayH] layout effect below re-applies the scroll
+  // once the page has resized. Stable identity (refs + setters), so listeners don't churn.
+  const zoomAnchored = useCallback(
+    (compute: (z: number) => number, clientX?: number, clientY?: number) => {
+      const el = wrapRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const px = clientX != null ? clientX - rect.left : el.clientWidth / 2;
+        const py = clientY != null ? clientY - rect.top : el.clientHeight / 2;
+        zoomAnchor.current = {
+          x: (el.scrollLeft + px) / (el.scrollWidth || 1),
+          y: (el.scrollTop + py) / (el.scrollHeight || 1),
+          px,
+          py,
+        };
+      }
+      setZoom((prev) => {
+        const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, compute(prev)));
+        // No size change → the layout effect won't fire; drop the stale anchor so it
+        // can't snap scroll on some later, unrelated relayout.
+        if (next === prev) zoomAnchor.current = null;
+        return next;
+      });
+    },
+    [],
+  );
+
+  // After a zoom resizes the page, restore scroll so the anchored point stays put.
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    const a = zoomAnchor.current;
+    if (!el || !a) return;
+    el.scrollLeft = a.x * el.scrollWidth - a.px;
+    el.scrollTop = a.y * el.scrollHeight - a.py;
+    zoomAnchor.current = null;
+  }, [displayW, displayH]);
 
   const key = pdfKey(path, cur, renderWidth);
   const [src, setSrc] = useState<string | null>(() => pdfUrlCache.get(key) ?? null);
@@ -319,6 +384,37 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
   const [reveal, setReveal] = useState(false);
   const skeletonShownRef = useRef(false);
   const [error, setError] = useState(false);
+
+  // A flip stays "pending" from the keypress until the new page's bitmap is actually
+  // shown. Only then do we clamp zoom to fit-width and reset scroll - applied in the
+  // same commit as the src swap so the old page never jumps before the new one renders
+  // (the render is debounced). resetScrollRef hands the scroll snap to a layout effect
+  // so it lands before paint.
+  const flipPendingRef = useRef(false);
+  const resetScrollRef = useRef(false);
+  const consumeFlip = () => {
+    if (!flipPendingRef.current) return;
+    flipPendingRef.current = false;
+    resetScrollRef.current = true;
+    setZoom((z) => Math.min(z, PDF_FIT_WIDTH_ZOOM));
+  };
+  // Mark the flip during render (not in an effect) so it's set before the render effect
+  // runs - the cached-swap path calls consumeFlip synchronously inside that effect.
+  const prevCurRef = useRef(cur);
+  if (quicklook && prevCurRef.current !== cur) {
+    prevCurRef.current = cur;
+    flipPendingRef.current = true;
+  }
+
+  // Snap a flipped-in page to its top-left before paint (no visible scroll jump). Keyed
+  // on src/displayW so it runs on the swap commit; guarded so zoom re-renders (where the
+  // anchor effect owns scroll) are untouched.
+  useLayoutEffect(() => {
+    if (!resetScrollRef.current) return;
+    resetScrollRef.current = false;
+    const el = wrapRef.current;
+    if (el) { el.scrollTop = 0; el.scrollLeft = 0; }
+  }, [src, displayW]);
 
   useEffect(() => { setCur(startPage()); }, [path, page]);
 
@@ -349,6 +445,7 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
       setSrc(cached); setLoaded(true); setRendering(false);
       setShowSkeleton(false); setReveal(false); setError(false);
       setCount(pdfPageCount.get(path) ?? null);
+      if (quicklook) consumeFlip();
       return;
     }
     let cancelled = false;
@@ -359,19 +456,40 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
       // feels instant and never blanks; just swap to the sharp bitmap when ready.
       setRendering(true);
       const renderTimer = setTimeout(() => {
-        getPdfUrl(path, cur, renderWidth)
-          .then(async (url) => {
-            try { const probe = new Image(); probe.src = url; await probe.decode(); } catch { /* onLoad covers it */ }
-            if (cancelled) return;
-            setSrc(url); setLoaded(true); setRendering(false);
-            setCount(pdfPageCount.get(path) ?? null);
-          })
-          .catch((e) => {
-            console.error("[pdf] render_pdf_page failed:", e);
-            if (cancelled) return;
-            setRendering(false);
-            if (!srcRef.current) setError(true); // only when there's nothing to show
-          });
+        let sharpShown = false;
+        const showSharp = () =>
+          getPdfUrl(path, cur, renderWidth)
+            .then(async (url) => {
+              try { const probe = new Image(); probe.src = url; await probe.decode(); } catch { /* onLoad covers it */ }
+              if (cancelled) return;
+              sharpShown = true;
+              setSrc(url); setLoaded(true); setRendering(false);
+              setCount(pdfPageCount.get(path) ?? null);
+              consumeFlip();
+            })
+            .catch((e) => {
+              console.error("[pdf] render_pdf_page failed:", e);
+              if (cancelled) return;
+              setRendering(false);
+              if (!srcRef.current) setError(true); // only when there's nothing to show
+            });
+
+        // Progressive zoom: a high-res render is slow, and after a page flip the kept
+        // image is the *previous* page. So first paint the fast baseline-width bitmap
+        // (CSS-upscaled to the zoomed size - correct page, a bit soft), then swap in the
+        // sharp render. The worker is FIFO, so the smaller baseline lands first; the
+        // `sharpShown` guard stops a (cached) sharp result from being clobbered by it.
+        if (renderWidth > baseRenderWidth) {
+          getPdfUrl(path, cur, baseRenderWidth)
+            .then((url) => {
+              if (cancelled || sharpShown) return;
+              setSrc(url); setLoaded(true);
+              setCount(pdfPageCount.get(path) ?? null);
+              consumeFlip();
+            })
+            .catch(() => { /* sharp pass is the real one */ });
+        }
+        showSharp();
       }, 80);
       return () => { cancelled = true; clearTimeout(renderTimer); };
     }
@@ -403,18 +521,14 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
     return () => { cancelled = true; clearTimeout(skeletonTimer); clearTimeout(renderTimer); };
   }, [key, path, cur, renderWidth, quicklook, vp.w]);
 
-  // Reset scroll to the top of the page when flipping pages, so the next page
-  // starts at its top rather than wherever the previous one was scrolled.
-  useEffect(() => {
-    if (!quicklook) return;
-    const el = wrapRef.current;
-    if (el) el.scrollTop = 0;
-  }, [cur, quicklook]);
 
   // Quicklook only: prefetch the adjacent pages at the current width so Ctrl+←/→
   // flips render instantly. Best-effort and cache-deduped; bounded to valid pages.
+  // Skip while zoomed in (large width): two extra big renders would flood the single
+  // pdfium worker and stall the page the user is actually looking at - flipping then
+  // renders on demand instead.
   useEffect(() => {
-    if (!quicklook || vp.w === 0) return;
+    if (!quicklook || vp.w === 0 || renderWidth > PDF_PREFETCH_MAX_WIDTH) return;
     const t = setTimeout(() => {
       for (const p of [cur - 1, cur + 1]) {
         if (p < 0 || (count != null && p > count - 1)) continue;
@@ -426,31 +540,87 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
     return () => clearTimeout(t);
   }, [quicklook, path, cur, renderWidth, count, vp.w]);
 
-  // Ctrl+←/→ flips pages, clamped to [0, count-1] once the count is known.
+  // Ctrl+←/→ flips pages; Ctrl +/-/0 zoom (Quicklook only). Clamped to [0, count-1].
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
-      if (!document.hasFocus()) return;
-      // While a Quicklook PDF is open, the background side preview ignores page-nav.
-      if (!quicklook && pdfQuicklookMounted > 0) return;
-      setCur((c) => {
-        // Until the page count is known, don't advance past the current page -
-        // otherwise rapid Ctrl+→ overshoots into a non-existent page and flashes
-        // "Preview unavailable" until the count arrives.
-        const max = count != null ? count - 1 : c;
-        return e.key === "ArrowRight" ? Math.min(c + 1, max) : Math.max(c - 1, 0);
-      });
+      if (!e.ctrlKey || !document.hasFocus()) return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        // While a Quicklook PDF is open, the background side preview ignores page-nav.
+        if (!quicklook && pdfQuicklookMounted > 0) return;
+        setCur((c) => {
+          // Until the page count is known, don't advance past the current page -
+          // otherwise rapid Ctrl+→ overshoots into a non-existent page and flashes
+          // "Preview unavailable" until the count arrives.
+          const max = count != null ? count - 1 : c;
+          return e.key === "ArrowRight" ? Math.min(c + 1, max) : Math.max(c - 1, 0);
+        });
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      // Zoom keys: Quicklook only (the side preview is fit-to-panel). Anchored to center.
+      if (!quicklook) return;
+      if (e.key === "=" || e.key === "+") zoomAnchored((z) => z * ZOOM_STEP);
+      else if (e.key === "-" || e.key === "_") zoomAnchored((z) => z / ZOOM_STEP);
+      else if (e.key === "0") zoomAnchored(() => 1);
+      else return;
       e.preventDefault();
       e.stopPropagation();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [count, quicklook]);
+  }, [count, quicklook, zoomAnchored]);
+
+  // Ctrl+wheel zooms toward the cursor. Native non-passive listener because React's
+  // onWheel is passive and can't preventDefault (which the WebView needs to not zoom).
+  useEffect(() => {
+    if (!quicklook) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return; // plain wheel = normal vertical scroll
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? ZOOM_WHEEL_STEP : 1 / ZOOM_WHEEL_STEP;
+      zoomAnchored((z) => z * factor, e.clientX, e.clientY);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [quicklook, zoomAnchored]);
+
+  // The page overflows the reader (zoomed past fit) → grab-to-pan is meaningful.
+  const isScrollable = quicklook && (displayW > vp.w + 1 || (displayH ?? 0) > vp.h + 1);
+
+  // Drag-to-pan the scroll container. Left button only, and only when scrollable so a
+  // plain click still falls through. Listeners live on window for the drag's duration.
+  const onPanStart = (e: ReactMouseEvent) => {
+    if (e.button !== 0 || !isScrollable) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    const sl = el.scrollLeft, st = el.scrollTop;
+    setGrabbing(true);
+    const onMove = (ev: MouseEvent) => {
+      el.scrollLeft = sl - (ev.clientX - startX);
+      el.scrollTop = st - (ev.clientY - startY);
+    };
+    const onUp = () => {
+      setGrabbing(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   if (quicklook) {
     return (
       <div className="pdf-ql-wrap" ref={outerRef}>
-        <div className="pdf-ql" ref={wrapRef}>
+        <div
+          className={`pdf-ql${isScrollable ? " is-scrollable" : ""}${grabbing ? " is-grabbing" : ""}`}
+          ref={wrapRef}
+          onMouseDown={onPanStart}
+        >
           {src && (
             <span className="pdf-hl-host">
               <img
@@ -480,7 +650,10 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
         </div>
         <div className="pdf-ql-hud">
           <span>{count != null ? `Page ${cur + 1} / ${count}` : `Page ${cur + 1}`}</span>
+          <span className="pdf-ql-hud-dot" />
+          <span>{Math.round(zoom * 100)}%</span>
           <span className="pdf-ql-hud-keys"><kbd>ctrl</kbd><kbd>←→</kbd> page</span>
+          <span className="pdf-ql-hud-keys"><kbd>ctrl</kbd><kbd>±/0</kbd> zoom</span>
           {terms.length > 0 && (
             <span className="pdf-ql-hud-keys"><kbd>ctrl</kbd><kbd>H</kbd> highlight {highlight ? "off" : "on"}</span>
           )}
@@ -544,9 +717,9 @@ function getImgUrl(path: string, width: number): Promise<string> {
   if (!imgPromiseCache.has(key)) {
     imgPromiseCache.set(
       key,
-      invoke<number[]>("render_image_preview", { path, width })
-        .then(bytes => {
-          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
+      invoke<ArrayBuffer>("render_image_preview", { path, width })
+        .then(buf => {
+          const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
           imgUrlCache.set(key, url);
           return url;
         })
@@ -968,10 +1141,10 @@ function MarkdownImage({ src, alt, baseDir }: { src?: string; alt?: string; base
     let cancelled = false;
     setResolved(null);
     const abs = src.startsWith("/") ? src : `${baseDir}/${src}`;
-    invoke<number[]>("render_image_preview", { path: abs })
-      .then(bytes => {
+    invoke<ArrayBuffer>("render_image_preview", { path: abs })
+      .then(buf => {
         if (cancelled) return;
-        const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
+        const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
         setResolved(url);
       })
       .catch(() => { if (!cancelled) setResolved(null); });

@@ -24,7 +24,7 @@ pub struct PdfWorkerHandle {
 /// (high-DPI / zoom) so A4 pages stay sharp and readable.
 const PDF_RENDER_WIDTH: u32 = 800;
 /// Hard ceiling so a runaway zoom can't allocate a multi-hundred-MB bitmap.
-const PDF_MAX_RENDER_WIDTH: u32 = 3000;
+const PDF_MAX_RENDER_WIDTH: u32 = 4000;
 
 /// Binds to pdfium, preferring the bundled library (AppImage) and falling back
 /// to the system library for a source build.
@@ -132,13 +132,17 @@ fn start_pdf_worker(shared: SharedConfig) -> PdfWorkerHandle {
                                 })?;
                             // Quality 90 (vs the encoder default of 75): text edges stay
                             // crisp when the page is enlarged for reading in Quicklook.
+                            // Drop to 82 for big zoomed renders: at that resolution the
+                            // quality loss is invisible but it markedly cuts encode time
+                            // and the bytes shipped across IPC, so zoom-in feels faster.
+                            let quality = if width >= 2000 { 82 } else { 90 };
                             let mut bytes = Vec::new();
                             bitmap
                                 .as_image()
                                 .into_rgb8()
                                 .write_with_encoder(JpegEncoder::new_with_quality(
                                     std::io::Cursor::new(&mut bytes),
-                                    90,
+                                    quality,
                                 ))
                                 .map_err(|e| {
                                     let msg = e.to_string();
@@ -178,20 +182,31 @@ pub async fn render_pdf_page(
     page: Option<u32>,
     width: Option<u32>,
     worker: tauri::State<'_, PdfWorkerHandle>,
-) -> Result<(Vec<u8>, u32), String> {
+) -> Result<tauri::ipc::Response, String> {
     let width = width
         .unwrap_or(PDF_RENDER_WIDTH)
         .clamp(PDF_RENDER_WIDTH, PDF_MAX_RENDER_WIDTH);
     let (reply_tx, reply_rx) = std::sync::mpsc::channel::<Result<(Vec<u8>, u32), String>>();
-    worker
-        .tx
-        .try_send(PdfJob::Render(path, page.unwrap_or(0), width, reply_tx))
-        .map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let tx = worker.tx.clone();
+    // Blocking `send` (on a blocking thread), not `try_send`: when the single pdfium
+    // worker is busy - e.g. a slow high-zoom render, plus the adjacent-page prefetches -
+    // the bounded queue fills, and `try_send` would drop the job. A dropped render leaves
+    // the stale page on screen while the page counter has already advanced. Waiting for a
+    // slot instead keeps the displayed page and the counter in sync.
+    let (bytes, count) = tauri::async_runtime::spawn_blocking(move || {
+        tx.send(PdfJob::Render(path, page.unwrap_or(0), width, reply_tx))
+            .map_err(|e| e.to_string())?;
         reply_rx.recv().unwrap_or_else(|e| Err(e.to_string()))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    // Raw bytes across IPC: a JSON number[] would ~5x the JPEG payload and dominate
+    // render time at high zoom. Prepend the page count as a u32 LE header that the
+    // frontend slices back off (see getPdfUrl).
+    let mut buf = Vec::with_capacity(4 + bytes.len());
+    buf.extend_from_slice(&count.to_le_bytes());
+    buf.extend_from_slice(&bytes);
+    Ok(tauri::ipc::Response::new(buf))
 }
 
 /// Returns normalized highlight rectangles for `terms` on one page of a PDF that
@@ -206,11 +221,12 @@ pub async fn pdf_match_rects(
     worker: tauri::State<'_, PdfWorkerHandle>,
 ) -> Result<Vec<[f32; 4]>, String> {
     let (reply_tx, reply_rx) = std::sync::mpsc::channel::<Result<Vec<[f32; 4]>, String>>();
-    worker
-        .tx
-        .try_send(PdfJob::Rects(path, page, terms, reply_tx))
-        .map_err(|e| e.to_string())?;
+    let tx = worker.tx.clone();
+    // Blocking `send` for the same reason as render_pdf_page: don't drop the job when the
+    // worker queue is momentarily full; wait for a slot.
     tauri::async_runtime::spawn_blocking(move || {
+        tx.send(PdfJob::Rects(path, page, terms, reply_tx))
+            .map_err(|e| e.to_string())?;
         reply_rx.recv().unwrap_or_else(|e| Err(e.to_string()))
     })
     .await
@@ -505,8 +521,11 @@ pub fn read_text_preview(path: String, terms: Option<Vec<String>>) -> Result<Str
 }
 
 #[tauri::command]
-pub async fn render_image_preview(path: String, width: Option<u32>) -> Result<Vec<u8>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn render_image_preview(
+    path: String,
+    width: Option<u32>,
+) -> Result<tauri::ipc::Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
         use image::ImageFormat;
         // Default 800 for the side preview; Quicklook requests a larger width so an
         // enlarged image stays crisp. Clamped to keep memory bounded.
@@ -521,10 +540,12 @@ pub async fn render_image_preview(path: String, width: Option<u32>) -> Result<Ve
         img.into_rgb8()
             .write_to(&mut std::io::Cursor::new(&mut bytes), ImageFormat::Jpeg)
             .map_err(|e| e.to_string())?;
-        Ok(bytes)
+        Ok::<Vec<u8>, String>(bytes)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    // Raw bytes across IPC, not a JSON number[] (see render_pdf_page).
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[derive(serde::Serialize)]

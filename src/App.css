@@ -210,6 +210,7 @@ html, body, #root {
 /* Grab cursor only when there's something to pan. */
 .pdf-ql.is-scrollable { cursor: grab; }
 .pdf-ql.is-scrollable.is-grabbing { cursor: grabbing; }
+.pdf-ql.is-grabbing { user-select: none; }
 .pdf-ql.is-grabbing .pdf-ql-page { pointer-events: none; }
 
 /* Same styled scrollbars as the text preview, instead of the OS default. */
