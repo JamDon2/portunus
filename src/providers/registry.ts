@@ -16,6 +16,8 @@ export interface PreviewProps {
   onReveal?: () => void;
   /** Matched content-search terms to highlight in the preview (empty otherwise). */
   terms?: string[];
+  /** Whether matched-term highlighting is enabled (Ctrl+H toggle; PDF overlay). */
+  highlight?: boolean;
   /** Rendered inside the full-card Quicklook overlay - enables large/scrollable layouts. */
   quicklook?: boolean;
 }

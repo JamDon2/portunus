@@ -2,8 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import FilePreview from '../components/FilePreview';
 import { registerProvider, isCopyKey, type PreviewProps } from './registry';
 
-function FilePreviewWrapper({ result, onLaunch, onReveal, terms, quicklook }: PreviewProps) {
-  return <FilePreview result={result} onLaunch={onLaunch} onReveal={onReveal} terms={terms} quicklook={quicklook} />;
+function FilePreviewWrapper({ result, onLaunch, onReveal, terms, highlight, quicklook }: PreviewProps) {
+  return <FilePreview result={result} onLaunch={onLaunch} onReveal={onReveal} terms={terms} highlight={highlight} quicklook={quicklook} />;
 }
 
 registerProvider({

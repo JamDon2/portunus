@@ -108,9 +108,44 @@ hljs.registerLanguage("plaintext",  langPlain);
 const pdfPromiseCache = new Map<string, Promise<string>>();
 const pdfUrlCache = new Map<string, string>();
 const pdfPageCount = new Map<string, number>();
+// Page aspect (w/h) per path, learned on first image load. Lets a revisited PDF
+// size its explicit-dims host correctly on the first paint, instead of falling
+// back to CSS (which can't height-contain inside the inline-block highlight host)
+// or stale-aspect squish for a frame while the new page decodes.
+const pdfAspect = new Map<string, number>();
 
 function pdfKey(path: string, page: number, width: number): string {
   return `${path}#${page}@${width}`;
+}
+
+// Normalized [x, y, w, h] highlight boxes (0..1, top-left origin) per page, from
+// the backend text layer. Keyed path#page#terms - width-independent (normalized),
+// so the side preview and Quicklook share entries. Deduped via a promise cache.
+type HlRect = [number, number, number, number];
+const pdfRectsPromiseCache = new Map<string, Promise<HlRect[]>>();
+const pdfRectsCache = new Map<string, HlRect[]>();
+
+function pdfRectsKey(path: string, page: number, terms: string[]): string {
+  return `${path}#${page}#${terms.join(" ")}`;
+}
+
+function getPdfRects(path: string, page: number, terms: string[]): Promise<HlRect[]> {
+  const key = pdfRectsKey(path, page, terms);
+  if (!pdfRectsPromiseCache.has(key)) {
+    pdfRectsPromiseCache.set(
+      key,
+      invoke<HlRect[]>("pdf_match_rects", { path, page, terms })
+        .then((rects) => {
+          pdfRectsCache.set(key, rects);
+          return rects;
+        })
+        .catch((e) => {
+          pdfRectsPromiseCache.delete(key);
+          throw e;
+        }),
+    );
+  }
+  return pdfRectsPromiseCache.get(key)!;
 }
 
 // Currently-previewed PDF page, read by App.launch to open at the right page.
@@ -163,14 +198,60 @@ function getPdfUrl(path: string, page: number, width: number): Promise<string> {
   return pdfPromiseCache.get(key)!;
 }
 
-function PdfPreview({ path, page, quicklook = false }: { path: string; page: number; quicklook?: boolean }) {
+// Overlay of normalized highlight boxes, positioned in percent so it tracks the
+// rendered page <img> at any width/zoom. `pointer-events:none` keeps scroll and
+// Quicklook grab-pan working through it.
+function PdfHighlightLayer({ rects }: { rects: HlRect[] }) {
+  if (!rects.length) return null;
+  return (
+    <div className="pdf-hl-layer">
+      {rects.map(([x, y, w, h], i) => (
+        <div
+          key={i}
+          className="pdf-hl-box"
+          style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PdfPreview({ path, page, terms = [], highlight = true, quicklook = false }: { path: string; page: number; terms?: string[]; highlight?: boolean; quicklook?: boolean }) {
   // `cur` is the displayed page; moves with Ctrl+←/→. Seed from the live page the
   // side preview last showed for this file (via pdfView) so opening Quicklook keeps
   // the current page - falling back to the content-match page for a fresh file.
   const startPage = () => (pdfView.path === path ? pdfView.page : page);
   const [cur, setCur] = useState(startPage);
   const [count, setCount] = useState<number | null>(() => pdfPageCount.get(path) ?? null);
-  const [aspect, setAspect] = useState(0);
+  const [aspect, setAspect] = useState(() => pdfAspect.get(path) ?? 0);
+  // On switching files, adopt the new path's cached aspect if known; otherwise
+  // keep the current value (a brief squish beats a 0 -> overflow flash) until load.
+  useEffect(() => { const a = pdfAspect.get(path); if (a) setAspect(a); }, [path]);
+
+  // Highlight boxes for the *displayed* page (empty when highlighting is off / no
+  // terms / no text layer). Keyed on `shown` - the {path, page} the visible <img>
+  // actually shows, set on image load - rather than the requested `path`/`cur`, so
+  // the boxes never update ahead of the image: navigating (or switching files)
+  // keeps the old boxes on the old image until the new page renders, then they
+  // swap together. path+page move as a pair so we never fetch a mismatched combo.
+  // Normalized, so width/zoom-independent; seeded from cache to avoid a fetch flash.
+  const termsKey = terms.join(" ");
+  const [shown, setShown] = useState(() => ({ path, page: startPage() }));
+  const [rects, setRects] = useState<HlRect[]>(
+    () => pdfRectsCache.get(pdfRectsKey(path, startPage(), terms)) ?? [],
+  );
+  useEffect(() => {
+    if (!highlight || !terms.length) { setRects([]); return; }
+    const cached = pdfRectsCache.get(pdfRectsKey(shown.path, shown.page, terms));
+    if (cached) { setRects(cached); return; }
+    let cancelled = false;
+    getPdfRects(shown.path, shown.page, terms)
+      .then(r => { if (!cancelled) setRects(r); })
+      .catch(e => { console.error("[pdf] pdf_match_rects failed:", e); if (!cancelled) setRects([]); });
+    return () => { cancelled = true; };
+    // termsKey stands in for the terms array (stable string identity).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown.path, shown.page, termsKey, highlight]);
 
   // Quicklook measures its reader surface to size renders; side preview uses the
   // fixed 800px default (downscaled to fit, so resolution is plenty).
@@ -185,16 +266,23 @@ function PdfPreview({ path, page, quicklook = false }: { path: string; page: num
   // the page into horizontal overflow.
   const SCROLLBAR_RESERVE = 14;
   useLayoutEffect(() => {
-    if (!quicklook) return;
     const outer = outerRef.current;
-    const inner = wrapRef.current;
-    if (!outer || !inner) return;
+    if (!outer) return;
     const measure = () => {
-      const cs = getComputedStyle(inner);
-      const px = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
-      const py = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-      const w = Math.max(0, outer.clientWidth - px - SCROLLBAR_RESERVE);
-      const h = Math.max(0, outer.clientHeight - py);
+      let w: number, h: number;
+      if (quicklook) {
+        const inner = wrapRef.current;
+        if (!inner) return;
+        const cs = getComputedStyle(inner);
+        const px = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+        const py = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        w = Math.max(0, outer.clientWidth - px - SCROLLBAR_RESERVE);
+        h = Math.max(0, outer.clientHeight - py);
+      } else {
+        // Side preview: the wrap is the fit box; the page is contained within it.
+        w = outer.clientWidth;
+        h = outer.clientHeight;
+      }
       // Skip no-op updates so a stable size can't churn renders / re-measures.
       setVp(prev => (prev.w === w && prev.h === h ? prev : { w, h }));
     };
@@ -204,9 +292,21 @@ function PdfPreview({ path, page, quicklook = false }: { path: string; page: num
     return () => ro.disconnect();
   }, [quicklook]);
 
-  const displayW = quicklook && vp.w > 0 ? Math.round(vp.w * PDF_QL_FIXED_ZOOM) : 0;
+  // Explicit display size for the page <img>, so the highlight host shrink-wraps
+  // it exactly. Quicklook uses a fixed zoom of the reader width; the side preview
+  // contain-fits the page into the wrap (was pure CSS, but the highlight host
+  // wrapper needs a definite box to align the overlay against).
+  const displayW = quicklook
+    ? (vp.w > 0 ? Math.round(vp.w * PDF_QL_FIXED_ZOOM) : 0)
+    : (vp.w > 0 && vp.h > 0 && aspect > 0 ? Math.floor(Math.min(vp.w, vp.h * aspect)) : 0);
   const displayH = aspect > 0 && displayW > 0 ? Math.round(displayW / aspect) : undefined;
-  const renderWidth = quicklook && displayW > 0 ? Math.max(1200, displayW) : 800;
+  // Side preview: render the bitmap at the actual on-screen size (× DPR) so it
+  // isn't upscaled - the page <img> is now sized to displayW, which can exceed
+  // the old fixed 800. Backend clamps to its max render width; 800 until measured.
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const renderWidth = quicklook
+    ? (displayW > 0 ? Math.max(1200, displayW) : 800)
+    : (displayW > 0 ? Math.max(800, Math.ceil(displayW * dpr)) : 800);
 
   const key = pdfKey(path, cur, renderWidth);
   const [src, setSrc] = useState<string | null>(() => pdfUrlCache.get(key) ?? null);
@@ -352,21 +452,27 @@ function PdfPreview({ path, page, quicklook = false }: { path: string; page: num
       <div className="pdf-ql-wrap" ref={outerRef}>
         <div className="pdf-ql" ref={wrapRef}>
           {src && (
-            <img
-              ref={imgRef}
-              src={src}
-              alt="PDF preview"
-              className="pdf-ql-page"
-              draggable={false}
-              style={displayW ? { width: displayW, height: displayH } : undefined}
-              onLoad={e => {
-                setLoaded(true);
-                const t = e.currentTarget;
-                if (t.naturalWidth && t.naturalHeight) {
-                  setAspect(t.naturalWidth / t.naturalHeight);
-                }
-              }}
-            />
+            <span className="pdf-hl-host">
+              <img
+                ref={imgRef}
+                src={src}
+                alt="PDF preview"
+                className="pdf-ql-page"
+                draggable={false}
+                style={displayW ? { width: displayW, height: displayH } : undefined}
+                onLoad={e => {
+                  setLoaded(true);
+                  setShown({ path, page: cur });
+                  const t = e.currentTarget;
+                  if (t.naturalWidth && t.naturalHeight) {
+                    const ratio = t.naturalWidth / t.naturalHeight;
+                    setAspect(ratio);
+                    pdfAspect.set(path, ratio);
+                  }
+                }}
+              />
+              <PdfHighlightLayer rects={rects} />
+            </span>
           )}
           {!src && !error && <div className="pdf-ql-spinner" />}
           {error && <span className="pdf-preview-msg">Preview unavailable</span>}
@@ -375,13 +481,16 @@ function PdfPreview({ path, page, quicklook = false }: { path: string; page: num
         <div className="pdf-ql-hud">
           <span>{count != null ? `Page ${cur + 1} / ${count}` : `Page ${cur + 1}`}</span>
           <span className="pdf-ql-hud-keys"><kbd>ctrl</kbd><kbd>←→</kbd> page</span>
+          {terms.length > 0 && (
+            <span className="pdf-ql-hud-keys"><kbd>ctrl</kbd><kbd>H</kbd> highlight {highlight ? "off" : "on"}</span>
+          )}
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`pdf-preview-wrap${showSkeleton && !loaded && !error ? " is-loading" : ""}`}>
+    <div ref={outerRef} className={`pdf-preview-wrap${showSkeleton && !loaded && !error ? " is-loading" : ""}`}>
       {!error && showSkeleton && (
         <div
           className="pdf-skeleton"
@@ -389,12 +498,25 @@ function PdfPreview({ path, page, quicklook = false }: { path: string; page: num
         />
       )}
       {src && (
-        <img
-          src={src}
-          alt="PDF preview"
-          className={reveal ? "pdf-img-revealed" : undefined}
-          onLoad={() => setLoaded(true)}
-        />
+        <span className="pdf-hl-host pdf-side-host" style={displayW ? { width: displayW, height: displayH } : undefined}>
+          <img
+            src={src}
+            alt="PDF preview"
+            className={reveal ? "pdf-img-revealed" : undefined}
+            style={displayW ? { width: displayW, height: displayH } : undefined}
+            onLoad={e => {
+              setLoaded(true);
+              setShown({ path, page: cur });
+              const t = e.currentTarget;
+              if (t.naturalWidth && t.naturalHeight) {
+                const ratio = t.naturalWidth / t.naturalHeight;
+                setAspect(ratio);
+                pdfAspect.set(path, ratio);
+              }
+            }}
+          />
+          <PdfHighlightLayer rects={rects} />
+        </span>
       )}
       {loaded && (
         <span className="pdf-page-label">
@@ -959,11 +1081,13 @@ interface Props {
   onReveal?: () => void;
   /** Matched content-search terms to highlight (empty for non-content searches). */
   terms?: string[];
+  /** Whether matched-term highlighting is enabled (Ctrl+H toggle; PDF overlay). */
+  highlight?: boolean;
   /** Rendered in the full-card Quicklook overlay - enables the large scrollable PDF reader. */
   quicklook?: boolean;
 }
 
-export default function FilePreview({ result, onLaunch, onReveal, terms = [], quicklook = false }: Props) {
+export default function FilePreview({ result, onLaunch, onReveal, terms = [], highlight = true, quicklook = false }: Props) {
   const isFolder = result.kind === "folder";
   if (isFolder) return <FolderPreview result={result} onLaunch={onLaunch} quicklook={quicklook} />;
   const kind = fileKind(result.title, false);
@@ -1031,7 +1155,7 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], qu
       </div>
       )}
 
-      {isPdf && <PdfPreview path={filePath} page={result.match_page ?? 0} quicklook={quicklook} />}
+      {isPdf && <PdfPreview path={filePath} page={result.match_page ?? 0} terms={terms} highlight={highlight} quicklook={quicklook} />}
       {isImage && <ImagePreview path={filePath} quicklook={quicklook} />}
       {isSvgFile && <SvgPreview path={filePath} />}
       {isCsvFile && <CsvPreview path={filePath} delim={result.title.toLowerCase().endsWith(".tsv") ? "\t" : ","} terms={terms} />}

@@ -17,6 +17,8 @@ interface Props {
   smartPaste?: boolean;
   /** The clipboard list is unfiltered + unsearched (idle), so show the Tab hint. */
   clipboardIdle?: boolean;
+  /** Whether PDF term-highlighting is on (Ctrl+H); drives the Contents-mode hint. */
+  pdfHighlight?: boolean;
 }
 
 // Reusable hint atoms
@@ -38,16 +40,21 @@ function hints(
   contentMode: boolean,
   smartPaste: boolean,
   clipboardIdle: boolean,
+  pdfHighlight: boolean,
 ): ReactNode {
   const k = selected?.kind;
+  const isPdf = selected?.title.toLowerCase().endsWith(".pdf") ?? false;
+  const Highlight = () => (
+    <span className="hint"><kbd>ctrl</kbd><kbd>H</kbd> highlight {pdfHighlight ? "off" : "on"}</span>
+  );
 
   // Full-text "Contents" mode: reuses the file row, but Tab flips back to name
   // search and Esc backs out of the mode (not the window).
   if (contentMode) {
-    const isPdf = selected?.title.toLowerCase().endsWith(".pdf") ?? false;
     return <>
       <Nav /><Open />
       {isPdf && <PdfPageNav />}
+      {isPdf && <Highlight />}
       {selected && isPreviewable(selected) && <Peek />}
       <span className="hint"><kbd>Tab</kbd> names</span>
       <span className="hint"><kbd>Esc</kbd> back</span>
@@ -84,7 +91,6 @@ function hints(
   if (k === "content-hint") return <><span className="hint"><kbd>Tab</kbd> search contents</span><Esc /></>;
 
   if (k === "file" || k === "folder") {
-    const isPdf = selected?.title.toLowerCase().endsWith(".pdf") ?? false;
     return (
       <><Nav /><Open />
         {/* Drop "copy path" for PDFs to make room for the page-nav hint. */}
@@ -102,6 +108,6 @@ function hints(
   return <><Nav /><Open /><Jump />{canComplete && <Complete />}<Esc /></>;
 }
 
-export default function FooterHints({ selected, canComplete, quicklookOpen = false, clipboardMode = false, contentMode = false, smartPaste = false, clipboardIdle = false }: Props) {
-  return <div className="hints">{hints(selected, canComplete, quicklookOpen, clipboardMode, contentMode, smartPaste, clipboardIdle)}</div>;
+export default function FooterHints({ selected, canComplete, quicklookOpen = false, clipboardMode = false, contentMode = false, smartPaste = false, clipboardIdle = false, pdfHighlight = true }: Props) {
+  return <div className="hints">{hints(selected, canComplete, quicklookOpen, clipboardMode, contentMode, smartPaste, clipboardIdle, pdfHighlight)}</div>;
 }

@@ -8,6 +8,8 @@ interface Props {
   onClose: () => void;
   /** Matched content-search terms to highlight in the preview. */
   terms?: string[];
+  /** Whether matched-term highlighting is enabled (PDF overlay). */
+  highlight?: boolean;
 }
 
 // Scrollable viewport inside a preview, by kind: PDF reader, text/code/markdown/csv,
@@ -24,7 +26,7 @@ const VIEWPORT_SELECTOR = '.pdf-ql, .text-preview-wrap, .folder-contents';
  * owns Esc / Shift+Enter (close/toggle); Ctrl combos (PDF page-flip, zoom) are
  * left to PdfPreview.
  */
-export default function QuickLook({ result, onLaunch, onClose, terms }: Props) {
+export default function QuickLook({ result, onLaunch, onClose, terms, highlight }: Props) {
   const Preview = getPreview(result.kind);
   const innerRef = useRef<HTMLDivElement>(null);
 
@@ -60,7 +62,7 @@ export default function QuickLook({ result, onLaunch, onClose, terms }: Props) {
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="quicklook-inner" ref={innerRef}>
-        <Preview key={result.kind} result={result} onLaunch={onLaunch} onReveal={onClose} terms={terms} quicklook />
+        <Preview key={result.kind} result={result} onLaunch={onLaunch} onReveal={onClose} terms={terms} highlight={highlight} quicklook />
       </div>
     </div>
   );

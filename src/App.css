@@ -1128,6 +1128,38 @@ kbd {
   animation: pdf-reveal 0.26s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 
+/* ---------- pdf search-term highlight overlay ---------- */
+
+/* Wraps the page <img> and shrink-wraps to its rendered box, so a percent-based
+   overlay maps exactly onto the page at any width/zoom and scrolls with it. */
+.pdf-hl-host {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+/* Side preview: the host is the centered flex child, bounded by the wrap (the
+   img's max-width/height:100% then resolve against the host). */
+.pdf-side-host {
+  max-width: 100%;
+  max-height: 100%;
+  z-index: 1;
+}
+
+.pdf-hl-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.pdf-hl-box {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  /* multiply keeps the dark glyphs legible through the tint on a white page. */
+  mix-blend-mode: multiply;
+  border-radius: 1px;
+}
+
 .pdf-preview-msg {
   font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg-dim);

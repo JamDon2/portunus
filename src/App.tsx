@@ -52,6 +52,8 @@ export default function App() {
   // rather than tracking a boolean + selectedIndex - keeps the overlay on the
   // same file even if background events reorder/extend the results underneath.
   const [quickResult, setQuickResult] = useState<SearchResult | null>(null);
+  // Matched-term highlighting in the PDF preview overlay; Ctrl+H toggles it.
+  const [highlight, setHighlight] = useState(true);
   const [loading, setLoading] = useState(true);
   const [version, setVersion] = useState("");
   const [indexingProgress, setIndexingProgress] = useState<{ indexed: number; total: number } | null>(null);
@@ -419,6 +421,18 @@ export default function App() {
         setQuery("");
         setResults([]);
         invoke("hide_window");
+      } else if (e.ctrlKey && !e.altKey && !e.metaKey
+                 && (e.code === "KeyH" || e.key === "h" || e.key === "H" || e.key === "Backspace")) {
+        // Toggle PDF search-term highlighting. Only meaningful in Contents mode
+        // (where there are terms to highlight); otherwise let the key fall through.
+        // WebKitGTK maps Ctrl+H to its "delete backward" editing command, so the
+        // keydown can surface as a Backspace event (key & code both "Backspace")
+        // rather than KeyH - hence the Backspace fallback, gated on Ctrl being held
+        // (a bare Backspace is handled above; Ctrl+Backspace = delete-word is rare
+        // in the content query and acceptable to repurpose here).
+        if (!contentModeRef.current) return;
+        e.preventDefault();
+        setHighlight(h => !h);
       } else {
         const ctx = makeCtx();
         // While Quicklook is open, key actions target the pinned result, not
@@ -623,6 +637,7 @@ export default function App() {
               onLaunch={() => launch(selected ?? undefined)}
               onReveal={() => { setQuery(""); setResults([]); }}
               terms={previewTerms}
+              highlight={highlight}
             />
           </div>
         </div>
@@ -632,13 +647,14 @@ export default function App() {
           <QuickLook
             result={quickResult}
             terms={previewTerms}
+            highlight={highlight}
             onLaunch={() => { launch(quickResult); setQuickResult(null); }}
             onClose={() => setQuickResult(null)}
           />
         )}
 
         <div className="footer">
-          <FooterHints selected={selected} canComplete={ghostSuffix !== null} quicklookOpen={quickResult != null} clipboardMode={clipboardMode} contentMode={contentMode} smartPaste={clipCaps.smart_paste} clipboardIdle={clipboardMode && query.trim() === ""} />
+          <FooterHints selected={selected} canComplete={ghostSuffix !== null} quicklookOpen={quickResult != null} clipboardMode={clipboardMode} contentMode={contentMode} smartPaste={clipCaps.smart_paste} clipboardIdle={clipboardMode && query.trim() === ""} pdfHighlight={highlight} />
           <div className="footer-right">
             <button
               className="footer-settings-btn"
