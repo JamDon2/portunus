@@ -1,51 +1,38 @@
 import { Config } from "../../types";
 import Toggle from "./Toggle";
+import SectionHeader from "./SectionHeader";
+import SettingsGroup from "./SettingsGroup";
+import SettingsField from "./SettingsField";
 
 interface Props {
   config: Config;
   onChange: (c: Config) => void;
 }
 
+const FIELDS: { key: keyof Config["debug"]; name: string; desc: string }[] = [
+  { key: "log_scores",  name: "Log match scores",  desc: "Print fuzzy match scores and thresholds for every candidate to stderr." },
+  { key: "log_watcher", name: "Log watcher events", desc: "Print filesystem watcher events and index update decisions to stderr." },
+  { key: "log_pdf",     name: "Log PDF rendering",  desc: "Print pdfium load/render/encode steps to stderr." },
+];
+
 export default function DebugSection({ config, onChange }: Props) {
   const set = (patch: Partial<Config["debug"]>) =>
     onChange({ ...config, debug: { ...config.debug, ...patch } });
 
   return (
-    <div>
-      <div className="settings-section-header">
-        <div className="settings-section-name">Debug</div>
-        <div className="settings-section-desc">Diagnostic output written to stderr. Useful when troubleshooting search quality or watcher issues.</div>
-      </div>
+    <div className="settings-section">
+      <SectionHeader
+        title="Debug"
+        desc="Diagnostic output written to stderr. Useful when troubleshooting search quality or watcher issues."
+      />
 
-      <div className="settings-field">
-        <div className="settings-field-label">
-          <div className="settings-field-name">Log match scores</div>
-          <div className="settings-field-desc">Print fuzzy match scores and thresholds for every candidate to stderr</div>
-        </div>
-        <div className="settings-field-control">
-          <Toggle label="Log match scores" checked={config.debug.log_scores} onChange={v => set({ log_scores: v })} />
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <div className="settings-field-label">
-          <div className="settings-field-name">Log watcher events</div>
-          <div className="settings-field-desc">Print filesystem watcher events and index update decisions to stderr</div>
-        </div>
-        <div className="settings-field-control">
-          <Toggle label="Log watcher events" checked={config.debug.log_watcher} onChange={v => set({ log_watcher: v })} />
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <div className="settings-field-label">
-          <div className="settings-field-name">Log PDF rendering</div>
-          <div className="settings-field-desc">Print pdfium load/render/encode steps to stderr</div>
-        </div>
-        <div className="settings-field-control">
-          <Toggle label="Log PDF rendering" checked={config.debug.log_pdf} onChange={v => set({ log_pdf: v })} />
-        </div>
-      </div>
+      <SettingsGroup>
+        {FIELDS.map(f => (
+          <SettingsField key={f.key} name={f.name} desc={f.desc}>
+            <Toggle label={f.name} checked={config.debug[f.key]} onChange={v => set({ [f.key]: v })} />
+          </SettingsField>
+        ))}
+      </SettingsGroup>
     </div>
   );
 }

@@ -14,6 +14,7 @@ import ContentSection from "./components/settings/ContentSection";
 import DebugSection from "./components/settings/DebugSection";
 import AppearanceSection from "./components/settings/AppearanceSection";
 import ExtensionsSection from "./components/settings/ExtensionsSection";
+import { DepsProvider } from "./components/settings/DepsContext";
 import { applyTheme } from "./theme";
 import "./settings.css";
 import "./themes.css";
@@ -121,6 +122,17 @@ const NAV: NavItem[] = [
       </svg>
     ),
   },
+];
+
+// Sidebar grouping: keeps all sections but clusters them under labeled dividers
+// so the nav scans as intent ("what do I want to change?") instead of a flat list.
+// A blank label renders no divider (the top group).
+const NAV_GROUPS: { label: string; ids: Section[] }[] = [
+  { label: "",               ids: ["general"] },
+  { label: "Search sources", ids: ["providers", "files", "content", "clipboard", "dict", "extensions"] },
+  { label: "Ranking",        ids: ["ranking"] },
+  { label: "Appearance",     ids: ["appearance"] },
+  { label: "Advanced",       ids: ["debug"] },
 ];
 
 const AUTOSAVE_DELAY_MS = 800;
@@ -428,19 +440,27 @@ export default function Settings() {
         <div className="settings-body">
           {/* Sidebar */}
           <div className="settings-sidebar" role="tablist" aria-orientation="vertical">
-            {NAV.map(item => (
-              <button
-                key={item.id}
-                role="tab"
-                aria-selected={activeSection === item.id}
-                id={`settings-tab-${item.id}`}
-                aria-controls="settings-tabpanel"
-                className={`settings-nav-item${activeSection === item.id ? " active" : ""}`}
-                onClick={() => setActiveSection(item.id)}
-              >
-                <span className="settings-nav-icon">{item.icon}</span>
-                {item.label}
-              </button>
+            {NAV_GROUPS.map(group => (
+              <div className="settings-nav-group" key={group.label || "top"}>
+                {group.label && <div className="settings-nav-group-label">{group.label}</div>}
+                {group.ids.map(id => {
+                  const item = NAV.find(n => n.id === id)!;
+                  return (
+                    <button
+                      key={item.id}
+                      role="tab"
+                      aria-selected={activeSection === item.id}
+                      id={`settings-tab-${item.id}`}
+                      aria-controls="settings-tabpanel"
+                      className={`settings-nav-item${activeSection === item.id ? " active" : ""}`}
+                      onClick={() => setActiveSection(item.id)}
+                    >
+                      <span className="settings-nav-icon">{item.icon}</span>
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
             ))}
           </div>
 
@@ -464,7 +484,8 @@ export default function Settings() {
                 {error ? `Error: ${error}` : "Loading…"}
               </div>
             ) : (
-              <>
+              <DepsProvider>
+                <div className="settings-section-wrap">
                 {activeSection === "general"   && <GeneralSection   config={config} onChange={setConfig} />}
                 {activeSection === "providers" && <ProvidersSection config={config} onChange={setConfig} />}
                 {activeSection === "clipboard" && <ClipboardSection config={config} onChange={setConfig} />}
@@ -485,7 +506,8 @@ export default function Settings() {
                 )}
                 {activeSection === "debug"      && <DebugSection      config={config} onChange={setConfig} />}
                 {activeSection === "appearance" && <AppearanceSection config={config} onChange={setConfig} />}
-              </>
+                </div>
+              </DepsProvider>
             )}
           </div>
         </div>

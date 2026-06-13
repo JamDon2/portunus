@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import rawCss from "../../themes.css?raw";
 
 export interface ThemeDef {
@@ -34,35 +36,38 @@ export function buildThemes(): ThemeDef[] {
   return themes;
 }
 
-/** Live swatches for the matugen theme, read from the injected CSS when active;
- *  neutral placeholders otherwise (colors are dynamic, not known at build time). */
-function matugenSwatches(): string[] {
-  const placeholder = ["#3a3a3a", "#2a2a2a", "#888", "#ddd", "#999"];
-  if (typeof document === "undefined") return placeholder;
-  const cs = getComputedStyle(document.documentElement);
-  const vars = ["--bg-card", "--bg-bar", "--accent", "--fg", "--fg-mute"];
-  return vars.map((v, i) => cs.getPropertyValue(v).trim() || placeholder[i]);
+const MATUGEN_PLACEHOLDER = ["#3a3a3a", "#2a2a2a", "#888", "#ddd", "#999"];
+const MATUGEN_VARS = ["bg-card", "bg-bar", "accent", "fg", "fg-mute"];
+
+/** Parse the matugen swatch colors out of the external matugen.css text. Unlike
+ *  the built-in themes (compiled into themes.css), matugen's colors live in an
+ *  external file generated at runtime, so they must be read from that CSS rather
+ *  than from computed styles (which only reflect the *active* theme). */
+function parseMatugenSwatches(css: string): string[] | null {
+  const sw = MATUGEN_VARS.map(name => {
+    const m = new RegExp(`--${name}:\\s*([^;\\n]+)`).exec(css);
+    return m ? m[1].trim() : null;
+  });
+  return sw.every(Boolean) ? (sw as string[]) : null;
 }
 
 export const THEMES: ThemeDef[] = [
   ...buildThemes(),
   // Synthetic entry: matugen colors come from an external file at runtime, so it
   // isn't parsed from themes.css. Selecting it sets data-theme="matugen".
-  { id: "matugen", label: "Matugen", swatches: matugenSwatches() },
+  { id: "matugen", label: "Matugen", swatches: MATUGEN_PLACEHOLDER },
 ];
 
 const STYLES = `
 .theme-grid {
   display: grid;
-  grid-template-columns: repeat(3, auto);
-  justify-content: start;
-  gap: 8px;
-  margin-top: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
 }
 
 .theme-card {
   position: relative;
-  padding: 11px 11px 10px;
+  padding: 13px 14px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--kbd-bg);
@@ -145,9 +150,20 @@ interface Props {
 
 /** Shared 3-column theme picker grid with color swatches (Settings + onboarding). */
 export default function ThemeGrid({ value, onSelect }: Props) {
+  // Matugen colors live in an external runtime file, so fetch + parse them once
+  // so its swatches show real colors regardless of the currently-active theme.
+  const [matugen, setMatugen] = useState<string[] | null>(null);
+  useEffect(() => {
+    invoke<string | null>("get_custom_theme_css")
+      .then(css => { if (css) setMatugen(parseMatugenSwatches(css)); })
+      .catch(() => {});
+  }, []);
+
   return (
     <div className="theme-grid">
-      {THEMES.map((t) => (
+      {THEMES.map((t) => {
+        const swatches = t.id === "matugen" && matugen ? matugen : t.swatches;
+        return (
         <button
           key={t.id}
           type="button"
@@ -156,7 +172,7 @@ export default function ThemeGrid({ value, onSelect }: Props) {
         >
           <div className="theme-card-label">{t.label}</div>
           <div className="theme-card-swatches">
-            {t.swatches.map((color, i) => (
+            {swatches.map((color, i) => (
               <span key={i} className="theme-swatch" style={{ background: color }} />
             ))}
           </div>
@@ -166,7 +182,8 @@ export default function ThemeGrid({ value, onSelect }: Props) {
             </svg>
           </span>
         </button>
-      ))}
+        );
+      })}
     </div>
   );
 }

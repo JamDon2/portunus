@@ -1,88 +1,113 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Config, DepStatus } from "../../types";
+import { useState } from "react";
+import { Config } from "../../types";
 import Toggle from "./Toggle";
+import SectionHeader from "./SectionHeader";
+import SettingsGroup from "./SettingsGroup";
+import SettingsField from "./SettingsField";
+import { useDeps } from "./DepsContext";
 
 interface Props {
   config: Config;
   onChange: (c: Config) => void;
 }
 
+/**
+ * Toggleable search sources, each bound to its real config path (so the toggle
+ * stays in sync with the same source's per-tab header master switch).
+ * `dep` names an optional tool the source needs to function.
+ * Content search lives in its own tab (staged reindex), so it's not duplicated
+ * here.
+ */
 interface ProviderDef {
-  key: keyof Config["providers"];
+  id: string;
   label: string;
   desc: string;
-  // Dependency id (from check_dependencies) this provider needs to function.
   dep?: string;
+  get: (c: Config) => boolean;
+  set: (c: Config, v: boolean) => Config;
 }
 
 const PROVIDERS: ProviderDef[] = [
-  { key: "apps",  label: "Applications", desc: "Search .desktop application entries" },
-  { key: "files", label: "Files",        desc: "Indexed file search" },
-  { key: "calc",  label: "Calculator",   desc: "Inline math expression evaluator" },
+  { id: "apps",  label: "Applications", desc: "Search .desktop application entries.",
+    get: c => c.providers.apps,  set: (c, v) => ({ ...c, providers: { ...c.providers, apps: v } }) },
+  { id: "files", label: "Files", desc: "Indexed file-name search across your directories.",
+    get: c => c.providers.files, set: (c, v) => ({ ...c, providers: { ...c.providers, files: v } }) },
+  { id: "calc",  label: "Calculator", desc: "Inline math expression evaluator.",
+    get: c => c.providers.calc,  set: (c, v) => ({ ...c, providers: { ...c.providers, calc: v } }) },
+  { id: "dict",  label: "Dictionary", desc: "Word definitions via dict.", dep: "dict",
+    get: c => c.dict.enabled,     set: (c, v) => ({ ...c, dict: { ...c.dict, enabled: v } }) },
 ];
 
+function CopyHint({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="settings-copy-hint"
+      title="Copy install command"
+      onClick={() => {
+        navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }).catch(() => {});
+      }}
+    >
+      <code>{text}</code>
+      <span className="settings-copy-hint-icon">{copied ? "✓" : "⧉"}</span>
+    </button>
+  );
+}
+
 export default function ProvidersSection({ config, onChange }: Props) {
-  const set = (key: keyof Config["providers"], value: boolean) =>
-    onChange({ ...config, providers: { ...config.providers, [key]: value } });
-
-  const [deps, setDeps] = useState<DepStatus[] | null>(null);
-  useEffect(() => {
-    invoke<DepStatus[]>("check_dependencies").then(setDeps).catch(() => setDeps([]));
-  }, []);
-
-  const depById = (id: string) => deps?.find(d => d.id === id);
+  const deps = useDeps();
 
   return (
-    <div>
-      <div className="settings-section-header">
-        <div className="settings-section-name">Providers</div>
-        <div className="settings-section-desc">Enable or disable individual search providers.</div>
-      </div>
+    <div className="settings-section">
+      <SectionHeader title="Search providers" desc="Enable or disable individual search sources." />
 
-      {PROVIDERS.map(({ key, label, desc, dep }) => {
-        const enabled = config.providers[key];
-        const status = dep ? depById(dep) : undefined;
-        const missing = enabled && status && !status.available;
-        return (
-          <div className="settings-field" key={key}>
-            <div className="settings-field-label">
-              <div className="settings-field-name">{label}</div>
-              <div className="settings-field-desc">{desc}</div>
-              {missing && (
+      <SettingsGroup>
+        {PROVIDERS.map(p => {
+          const enabled = p.get(config);
+          const dep = p.dep ? deps?.find(d => d.id === p.dep) : undefined;
+          const missing = enabled && dep && !dep.available;
+          return (
+            <SettingsField
+              key={p.id}
+              name={p.label}
+              desc={p.desc}
+              warn={missing && (
                 <div className="settings-dep-inline-warn">
-                  ⚠ Enabled but <code>{status!.label}</code> is missing. Install <code>{status!.install_hint}</code>
+                  ⚠ Enabled but <code>{dep!.label}</code> is missing. Install <code>{dep!.install_hint}</code>
                 </div>
               )}
-            </div>
-            <div className="settings-field-control">
-              <Toggle label={label} checked={enabled} onChange={v => set(key, v)} />
-            </div>
-          </div>
-        );
-      })}
+            >
+              <Toggle label={p.label} checked={enabled} onChange={v => onChange(p.set(config, v))} />
+            </SettingsField>
+          );
+        })}
+      </SettingsGroup>
 
-      <div className="settings-deps">
-        <div className="settings-deps-title">System dependencies</div>
-        <div className="settings-field-desc" style={{ marginBottom: 10 }}>
-          Optional tools that power individual features. Missing tools disable only their feature.
-        </div>
+      <SettingsGroup
+        title="System dependencies"
+        desc="Optional tools that power individual features. A missing tool disables only its feature."
+      >
         {deps === null ? (
-          <div className="settings-field-desc">Checking…</div>
+          <div className="settings-dep-empty">Checking…</div>
         ) : (
           deps.map(d => (
             <div className="settings-dep-row" key={d.id}>
               <span className={`settings-dep-dot${d.available ? " ok" : " missing"}`} />
               <span className="settings-dep-feature">{d.feature}</span>
-              <span className="settings-dep-tool">
-                {d.available
-                  ? <>{d.label} ✓</>
-                  : <>{d.label} missing. Install <code>{d.install_hint}</code></>}
-              </span>
+              {d.available ? (
+                <span className="settings-dep-tool">{d.label} ✓</span>
+              ) : (
+                <span className="settings-dep-tool settings-dep-tool--missing">
+                  {d.label} missing — <CopyHint text={d.install_hint} />
+                </span>
+              )}
             </div>
           ))
         )}
-      </div>
+      </SettingsGroup>
     </div>
   );
 }

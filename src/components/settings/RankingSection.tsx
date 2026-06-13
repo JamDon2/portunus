@@ -1,7 +1,10 @@
 import { Config } from "../../types";
 import Toggle from "./Toggle";
-import NumberField from "./NumberField";
 import Select from "./Select";
+import SectionHeader from "./SectionHeader";
+import SettingsGroup from "./SettingsGroup";
+import SettingsField from "./SettingsField";
+import Slider from "./Slider";
 
 interface Props {
   config: Config;
@@ -15,8 +18,7 @@ const STRICTNESS_OPTIONS = [
 ] as const;
 
 function strictnessLabel(v: number): string {
-  const match = STRICTNESS_OPTIONS.find(o => Math.abs(o.value - v) < 0.001);
-  return match?.label ?? `Custom (${v.toFixed(2)})`;
+  return STRICTNESS_OPTIONS.find(o => Math.abs(o.value - v) < 0.001)?.label ?? `Custom (${v.toFixed(2)})`;
 }
 
 export default function RankingSection({ config, onChange }: Props) {
@@ -28,26 +30,14 @@ export default function RankingSection({ config, onChange }: Props) {
   const fr = config.frecency;
 
   return (
-    <div>
-      <div className="settings-section-header">
-        <div className="settings-section-name">Ranking</div>
-        <div className="settings-section-desc">Control how results are ordered: history, match quality, and strictness.</div>
-      </div>
+    <div className="settings-section">
+      <SectionHeader title="Ranking" desc="Control how results are ordered: match quality and launch history." />
 
-      <NumberField
-        label="History boost"
-        desc="How strongly launch history promotes items you use often (0 = off, 100 = max). At 50+, frequently used files can rank above apps."
-        value={config.search.history_weight}
-        min={0} max={100} step={5}
-        onChange={v => setSearch({ history_weight: v })}
-      />
-
-      <div className="settings-field">
-        <div className="settings-field-label">
-          <div className="settings-field-name">Match strictness</div>
-          <div className="settings-field-desc">How closely the query must match. Loose shows more results; Strict filters aggressively.</div>
-        </div>
-        <div className="settings-field-control">
+      <SettingsGroup title="Match quality">
+        <SettingsField
+          name="Match strictness"
+          desc="How closely the query must match. Loose shows more results; Strict filters aggressively."
+        >
           <Select
             options={STRICTNESS_OPTIONS.map(o => ({ label: o.label }))}
             value={strictnessLabel(config.search.min_quality)}
@@ -56,31 +46,46 @@ export default function RankingSection({ config, onChange }: Props) {
               if (opt) setSearch({ min_quality: opt.value });
             }}
           />
-        </div>
-      </div>
+        </SettingsField>
+      </SettingsGroup>
 
-      <div className="settings-section-header" style={{ marginTop: 24 }}>
-        <div className="settings-section-name">History</div>
-        <div className="settings-section-desc">Tracks how often you launch items so they surface faster over time.</div>
-      </div>
+      <SettingsGroup
+        title="Launch history"
+        desc="Tracks how often you launch items so they surface faster over time. Stored in SQLite at $XDG_DATA_HOME/portunus/frecency.db."
+      >
+        <SettingsField
+          name="Track launch history"
+          desc="Remember frequently used apps and files and promote them in results."
+        >
+          <Toggle label="Track launch history" checked={fr.enabled} onChange={v => setFrecency({ enabled: v })} />
+        </SettingsField>
 
-      <div className="settings-field">
-        <div className="settings-field-label">
-          <div className="settings-field-name">Enable history</div>
-          <div className="settings-field-desc">Track launch history to surface frequently used apps and files. Stored in SQLite at $XDG_DATA_HOME/portunus/frecency.db</div>
-        </div>
-        <div className="settings-field-control">
-          <Toggle label="Enable history" checked={fr.enabled} onChange={v => setFrecency({ enabled: v })} />
-        </div>
-      </div>
+        <SettingsField
+          name="History boost"
+          desc="How strongly history promotes items you use often. At higher values, frequently used files can rank above apps."
+        >
+          <Slider
+            label="History boost"
+            value={config.search.history_weight}
+            min={0} max={100} step={5}
+            format={v => v === 0 ? "Off" : `${v}`}
+            onChange={v => setSearch({ history_weight: v })}
+          />
+        </SettingsField>
 
-      <NumberField
-        label="Half-life (days)"
-        desc="History score halves every N days of non-use. Shorter = fades faster; longer = longer memory."
-        value={fr.half_life_days}
-        min={1} max={365} step={1}
-        onChange={v => setFrecency({ half_life_days: v })}
-      />
+        <SettingsField
+          name="Half-life"
+          desc="History score halves after this many days of non-use. Shorter fades faster; longer remembers longer."
+        >
+          <Slider
+            label="Half-life (days)"
+            value={fr.half_life_days}
+            min={1} max={365} step={1}
+            format={v => `${Math.round(v)} d`}
+            onChange={v => setFrecency({ half_life_days: v })}
+          />
+        </SettingsField>
+      </SettingsGroup>
     </div>
   );
 }

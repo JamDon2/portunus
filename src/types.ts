@@ -41,7 +41,6 @@ export interface Config {
     paste_mode: "auto" | "copy";
     max_entries: number;
     ocr_images: boolean;
-    ocr_language: string;
   };
   files: {
     dirs: DirEntry[];

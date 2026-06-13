@@ -397,7 +397,7 @@ pub fn index_clipboard_ocr(
 ) {
     let (enabled, lang) = config
         .lock()
-        .map(|c| (c.clipboard.ocr_images, c.clipboard.ocr_language.clone()))
+        .map(|c| (c.clipboard.ocr_images, c.content.ocr_language.clone()))
         .unwrap_or((false, "eng".to_string()));
     if !enabled || !crate::util::binary_in_path("cliphist") {
         return;

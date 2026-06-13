@@ -870,20 +870,19 @@ a:focus-visible,
 .settings-reindex-strip {
   /* Pin to the top of the scroll viewport so the staged-changes warning and the
      live reindex progress stay visible even when the user scrolls down to the
-     directory list. Full-bleed (negative horizontal margins cancel the content
-     padding) with an opaque background so scrolling content can't show through. */
+     directory list. Lives within the content column (rounded card) with an
+     opaque background so scrolling content can't show through. */
   position: sticky;
   top: 0;
   z-index: 5;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 28px;
-  margin: 0 -28px 14px;
+  padding: 10px 14px;
+  margin: 0 0 14px;
+  border-radius: 10px;
   background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg-card);
   border: 1px solid var(--accent-border);
-  border-left: none;
-  border-right: none;
   font-size: 12px;
   color: var(--fg);
 }
@@ -1033,3 +1032,254 @@ a:focus-visible,
 
 .btn-settings-save:hover { filter: brightness(1.08); }
 .btn-settings-save:disabled { opacity: 0.5; cursor: default; }
+
+/* ============================================================================
+   Refactor: grouped sidebar, constrained column, cards, sliders, master toggle
+   ============================================================================ */
+
+/* ---------- sidebar groups ---------- */
+
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav-group + .settings-nav-group {
+  margin-top: 14px;
+}
+
+.settings-nav-group-label {
+  font: 600 9.5px/1 "JetBrains Mono", "Fira Code", monospace;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  padding: 4px 10px 5px;
+}
+
+/* ---------- constrained content column ---------- */
+
+.settings-section-wrap {
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.settings-section {
+  animation: settings-section-in 0.22s ease-out;
+}
+
+@keyframes settings-section-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- section header with master toggle ---------- */
+
+.settings-section-header--master {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.settings-section-head-text { min-width: 0; }
+
+.settings-section-master {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-top: 2px;
+}
+
+.settings-section-master-state {
+  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  transition: color 0.15s;
+}
+
+.settings-section-master-state.on { color: var(--accent); }
+
+/* ---------- grouped cards ---------- */
+
+.settings-group-block { margin-bottom: 18px; }
+.settings-group-block:last-child { margin-bottom: 0; }
+
+.settings-group-title {
+  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+  margin: 2px 2px 8px;
+}
+
+.settings-group-desc {
+  font-size: 11.5px;
+  color: var(--fg-desc);
+  line-height: 1.5;
+  margin: 0 2px 10px;
+}
+
+.settings-group {
+  background: var(--bg-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  padding: 2px 16px;
+}
+
+/* Field rows: keep the divider but tighten the first/last inside a card. */
+.settings-group > .settings-field:last-child { border-bottom: none; }
+
+/* Non-field content (tag editor, dir list, dep rows, theme grid) gets its own
+   breathing room since it doesn't carry the field divider rhythm. */
+.settings-group > .settings-ext-editor { margin: 12px 0; }
+.settings-group > .settings-dir-list { margin: 12px 0; }
+
+/* ---------- slider ---------- */
+
+.settings-slider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 190px;
+}
+
+.settings-slider-input {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  border-radius: 3px;
+  /* Filled track up to --pct, neutral after. */
+  background: linear-gradient(to right,
+    var(--accent) 0, var(--accent) var(--pct, 0%),
+    var(--toggle-bg) var(--pct, 0%), var(--toggle-bg) 100%);
+  outline: none;
+  cursor: pointer;
+}
+
+.settings-slider-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-deep);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  cursor: pointer;
+  transition: transform 0.12s;
+}
+
+.settings-slider-input::-webkit-slider-thumb:hover { transform: scale(1.15); }
+
+.settings-slider-value {
+  flex-shrink: 0;
+  min-width: 52px;
+  text-align: right;
+  font: 500 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--accent);
+}
+
+/* ---------- number stepper row (with suffix) ---------- */
+
+.settings-number-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-number-suffix {
+  font-size: 11px;
+  color: var(--fg-mute);
+}
+
+/* ---------- disabled section body ---------- */
+
+.settings-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+  filter: saturate(0.6);
+  transition: opacity 0.15s;
+}
+
+/* ---------- keyboard chip ---------- */
+
+.settings-kbd {
+  font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+/* ---------- dependency panel extras ---------- */
+
+.settings-dep-empty {
+  font-size: 12px;
+  color: var(--fg-desc);
+  padding: 6px 0;
+}
+
+.settings-dep-row:first-child { padding-top: 10px; }
+.settings-dep-row:last-child { padding-bottom: 10px; }
+
+.settings-dep-feature { width: 168px; }
+
+.settings-dep-tool--missing { color: var(--danger-fg); }
+
+.settings-copy-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--kbd-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: var(--fg-mute);
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.settings-copy-hint:hover { border-color: var(--accent); color: var(--accent); }
+.settings-copy-hint code { font-family: monospace; font-size: 10.5px; background: none; padding: 0; }
+.settings-copy-hint-icon { font-size: 11px; opacity: 0.7; }
+
+/* ---------- extension rows ---------- */
+
+.settings-ext-version { font-size: 11px; font-weight: 400; color: var(--fg-dim); }
+.settings-ext-new { font-size: 11px; font-weight: 500; color: var(--accent); }
+
+.settings-ext-perms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.settings-ext-perms code {
+  font-family: monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--kbd-bg);
+  color: var(--fg-mute);
+}
+
+/* ---------- secondary button ---------- */
+
+.settings-btn-secondary {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-raised);
+  background: var(--kbd-bg);
+  color: var(--fg);
+  font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.settings-btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
