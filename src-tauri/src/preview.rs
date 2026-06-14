@@ -223,13 +223,22 @@ fn start_image_ocr_worker() -> ImageOcrHandle {
     ImageOcrHandle { tx, generation }
 }
 
-/// Boxes of words whose (lowercased) text prefix-matches any needle — same
-/// word-prefix rule as the PDF path / `line_term_mask`. Shared by the cached and
-/// on-demand paths so they highlight identically.
-fn match_word_boxes(words: &[crate::content_index::WordBox], needles: &[String]) -> Vec<[f32; 4]> {
+/// Boxes of words whose content key matches a query key — the same
+/// `porter unicode61` keying the index used (see `content_match`). Shared by the
+/// cached and on-demand paths so they highlight identically. `keys` are query keys
+/// from `normalize_terms`.
+fn match_word_boxes(words: &[crate::content_index::WordBox], keys: &[String]) -> Vec<[f32; 4]> {
+    // Stored OCR words are verbatim Tesseract tokens and can carry attached
+    // punctuation ("report.", "(note)"), which would never stem - so tokenize each
+    // and match any contained token. Set membership avoids an O(words*keys) scan.
+    let set: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
     words
         .iter()
-        .filter(|(w, _)| needles.iter().any(|n| w.starts_with(n.as_str())))
+        .filter(|(w, _)| {
+            crate::content_match::tokenize(w)
+                .iter()
+                .any(|(_, t)| set.contains(crate::content_match::match_key(t).as_str()))
+        })
         .map(|(_, rect)| *rect)
         .collect()
 }
@@ -359,13 +368,10 @@ pub async fn pdf_match_rects(
 /// repeated-word queries (e.g. "the on the the on the"): without it each duplicate
 /// needle re-scans the page and stamps the same boxes again.
 fn normalize_terms<I: IntoIterator<Item = String>>(terms: I) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    terms
-        .into_iter()
-        .map(|t| t.to_lowercase())
-        .filter(|t| t.chars().count() >= 2)
-        .filter(|t| seen.insert(t.clone()))
-        .collect()
+    // Drop 1-char noise, then key each term the way the content index tokenized it
+    // (`porter unicode61`) so highlight / box / section matching agrees with FTS.
+    // `query_keys` folds, stems, dedups, and drops empties.
+    crate::content_match::query_keys(terms.into_iter().filter(|t| t.chars().count() >= 2))
 }
 
 /// Largest vertical gap (in points) between consecutive chars of one match before
@@ -440,30 +446,31 @@ fn page_match_rects(
     // stop scanning - and log it rather than silently truncating.
     const MAX_RECTS: usize = 400;
 
+    // Walk whole words; a word is highlighted when its content key matches a query
+    // key - the same `porter unicode61` keying the index used. `chars`/`bounds` are
+    // index-aligned, so a word's char span [start, end) maps straight to its bounds.
     let is_word = |c: char| c.is_alphanumeric();
+    // Membership set so each word is one hash lookup, not an O(needles) scan.
+    let key_set: std::collections::HashSet<&str> = needles.iter().map(String::as_str).collect();
     let mut rects: Vec<[f32; 4]> = Vec::new();
     let mut capped = false;
-    'needles: for needle in &needles {
-        let nchars: Vec<char> = needle.chars().collect();
-        let mut i = 0;
-        while i + nchars.len() <= chars.len() {
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_word(chars[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && is_word(chars[i]) {
+            i += 1;
+        }
+        let word: String = chars[start..i].iter().collect();
+        if key_set.contains(crate::content_match::match_key(&word).as_str()) {
             if rects.len() >= MAX_RECTS {
                 capped = true;
-                break 'needles;
+                break;
             }
-            // Word boundary: match must start a word (prefix match like the regex).
-            let at_boundary = i == 0 || !is_word(chars[i - 1]);
-            if at_boundary && chars[i..i + nchars.len()] == nchars[..] {
-                // Extend over the rest of the word (the `[\p{L}\p{N}]*` tail).
-                let mut end = i + nchars.len();
-                while end < chars.len() && is_word(chars[end]) {
-                    end += 1;
-                }
-                push_rects(&bounds[i..end], page_w, page_h, &mut rects);
-                i = end;
-            } else {
-                i += 1;
-            }
+            push_rects(&bounds[start..i], page_w, page_h, &mut rects);
         }
     }
     if log {
@@ -547,17 +554,27 @@ pub fn read_spreadsheet_preview(path: String) -> Result<Vec<Vec<String>>, String
 const PREVIEW_MAX_LINES: usize = 300;
 const PREVIEW_MAX_BYTES: usize = 32 * 2048;
 
-/// Bit `i` is set when `terms[i]` word-prefix-matches a word on the line. Caps at
-/// 64 terms. Word-prefix / case-insensitive matching mirrors the porter-stemmer-ish
-/// matching used for highlighting (`run` matches `running`).
-fn line_term_mask(line: &str, terms: &[String]) -> u64 {
-    let lower = line.to_lowercase();
+/// Bit `i` is set when a word on the line keys to query key `i` (`key_idx` maps
+/// query key -> bit, capped at 64). Keying mirrors the index (`porter unicode61`),
+/// so `running` matches a `run` query but `category` does not match `cat`. `memo`
+/// caches word -> bit across lines so repeated words aren't re-stemmed.
+fn line_term_mask(
+    line: &str,
+    key_idx: &std::collections::HashMap<&str, usize>,
+    memo: &mut std::collections::HashMap<String, Option<usize>>,
+) -> u64 {
     let mut mask = 0u64;
-    for (i, t) in terms.iter().take(64).enumerate() {
-        if lower
-            .split(|c: char| !c.is_alphanumeric())
-            .any(|w| w.starts_with(t.as_str()))
-        {
+    for (_, w) in crate::content_match::tokenize(line) {
+        let bit = match memo.get(w) {
+            Some(&cached) => cached,
+            None => {
+                let key = crate::content_match::match_key(w);
+                let found = key_idx.get(key.as_str()).copied();
+                memo.insert(w.to_string(), found);
+                found
+            }
+        };
+        if let Some(i) = bit {
             mask |= 1 << i;
         }
     }
@@ -614,7 +631,20 @@ pub fn read_text_preview(path: String, terms: Option<Vec<String>>) -> Result<Str
         lines.push(line.map_err(|e| e.to_string())?);
     }
 
-    let masks: Vec<u64> = lines.iter().map(|l| line_term_mask(l, &terms)).collect();
+    // Map each query key to its bit (cap 64), then mask each line; `memo` avoids
+    // re-stemming repeated words across the scan.
+    let key_idx: std::collections::HashMap<&str, usize> = terms
+        .iter()
+        .take(64)
+        .enumerate()
+        .map(|(i, k)| (k.as_str(), i))
+        .collect();
+    let mut memo: std::collections::HashMap<String, Option<usize>> =
+        std::collections::HashMap::new();
+    let masks: Vec<u64> = lines
+        .iter()
+        .map(|l| line_term_mask(l, &key_idx, &mut memo))
+        .collect();
 
     // Slide a CLUSTER_LINES window; track distinct terms covered. `counts[i]` is how
     // many lines in the window carry term `i`; `distinct` is how many terms have a

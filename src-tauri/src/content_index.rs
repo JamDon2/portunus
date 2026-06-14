@@ -50,17 +50,18 @@ pub struct ContentQuery {
 /// pathological common-term cost. When the query is *only* stopwords we keep them
 /// but mark it unranked so the search avoids the whole-corpus bm25 scan.
 pub fn parse_content_query(raw: &str) -> Option<ContentQuery> {
-    let cleaned: String = raw
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' })
-        .collect();
-
-    // Dedup case-insensitively, preserving first-seen order and original casing.
+    // Tokenize + fold exactly like the index (`unicode61`): maximal alphanumeric
+    // runs, apostrophe is a separator, diacritics folded. Do NOT stem here - the
+    // FTS `MATCH` applies the porter wrapper itself; stemming twice risks drift.
+    // Drop sub-2-char tokens (matches the frontend `deriveContentTerms` filter) so
+    // possessives/contractions like `user's` don't inject a junk `s`/`t` term that
+    // ANDs into the query and shrinks results. Dedup on the normalized form.
     let mut seen = HashSet::new();
     let mut tokens: Vec<String> = Vec::new();
-    for tok in cleaned.split_whitespace() {
-        if seen.insert(tok.to_lowercase()) {
-            tokens.push(tok.to_string());
+    for (_, tok) in crate::content_match::tokenize(raw) {
+        let norm = crate::content_match::normalize(tok);
+        if norm.chars().count() >= 2 && seen.insert(norm.clone()) {
+            tokens.push(norm);
         }
     }
     if tokens.is_empty() {
@@ -69,7 +70,7 @@ pub fn parse_content_query(raw: &str) -> Option<ContentQuery> {
 
     let meaningful: Vec<String> = tokens
         .iter()
-        .filter(|t| !STOPWORDS.contains(&t.to_lowercase().as_str()))
+        .filter(|t| !STOPWORDS.contains(&t.as_str()))
         .cloned()
         .collect();
 
@@ -382,20 +383,22 @@ impl ContentIndex {
             })
             .ok()?;
 
+        // Key the query terms exactly as the index did (`porter unicode61`), so
+        // coverage counts the same matches FTS ranked on - not a prefix guess.
+        let query_keys = crate::content_match::query_keys(terms.iter().cloned());
+
         // Pages arrive in ascending order; keep the first that strictly beats the best
         // coverage so far - that yields max distinct terms, earliest page on ties.
         let mut best: Option<(u32, u32)> = None; // (coverage, page)
         for (page, text) in rows.flatten() {
-            // Split + lowercase the page once, then test term coverage against the
-            // word list. The old code re-split (and the whole-page `to_lowercase`
-            // fed) the text once per term - O(text_len * terms) per page; this is
-            // O(text_len + words * terms) with a single allocation pass.
-            let lower = text.to_lowercase();
-            let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
-            let cov = terms
+            // Key every word on the page once, then count how many distinct query
+            // keys it covers - O(words) stems per page (best_page runs once per
+            // preview open, not per keystroke).
+            let page_keys: HashSet<String> = crate::content_match::tokenize(&text)
                 .iter()
-                .filter(|t| words.iter().any(|w| w.starts_with(t.as_str())))
-                .count() as u32;
+                .map(|(_, w)| crate::content_match::match_key(w))
+                .collect();
+            let cov = query_keys.iter().filter(|k| page_keys.contains(*k)).count() as u32;
             if best.is_none_or(|(bc, _)| cov > bc) {
                 best = Some((cov, page as u32));
             }

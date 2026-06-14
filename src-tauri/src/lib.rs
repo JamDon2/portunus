@@ -2,6 +2,7 @@ mod cli;
 mod clipboard_ocr;
 mod config;
 mod content_index;
+mod content_match;
 mod extensions;
 mod frecency;
 mod ipc;
@@ -112,6 +113,15 @@ async fn content_match_page(
         .await
         .ok()
         .flatten())
+}
+
+/// Keys each word the way the content index tokenized it (`porter unicode61`):
+/// `normalize` + Porter stem. The frontend highlighter calls this so its
+/// matching agrees exactly with the index - no Porter re-implementation in JS.
+/// Index-preserving: `out[i]` is the key for `words[i]`.
+#[tauri::command]
+fn content_match_keys(words: Vec<String>) -> Vec<String> {
+    words.iter().map(|w| content_match::match_key(w)).collect()
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -885,6 +895,7 @@ pub fn run() {
             search,
             search_content,
             content_match_page,
+            content_match_keys,
             launch_app,
             reveal_file,
             hide_window,

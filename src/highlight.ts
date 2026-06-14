@@ -1,54 +1,123 @@
 // Matched-term highlighting for content-mode (full-text) previews.
 //
-// The query terms are derived the same way the Rust content provider tokenizes
-// them (see src-tauri/src/providers/content.rs), and matching is word-prefix /
-// case-insensitive to mirror the porter stemmer used by the FTS index - so
-// searching `run` highlights `running`.
+// The content index tokenizes with FTS5 `porter unicode61`. To highlight and jump
+// to exactly what it matched, this module keys words the SAME way - but instead of
+// re-implementing Porter in JS, it delegates to the backend `content_match_keys`
+// command (which wraps `content_match::match_key`). Two words match iff they share
+// a key. Keys are cached per-word for the session so repeated words / re-opens skip
+// the round-trip. Because keying is async, the highlight functions are async too;
+// `focusBestCluster` stays sync by reading the key stamped on each `<mark>`.
+
+import { invoke } from "@tauri-apps/api/core";
 
 const HL_CLASS = "preview-hl";
 
-/** Tokenizes a content-mode query into the terms the content index matched on. */
+/** word -> match key, session-lived so repeats and re-opens skip the backend call.
+ * Bounded so browsing many large documents can't grow it without limit; eviction is
+ * insertion-order (Map keeps it) - approximate LRU, and evicted words are simply
+ * re-fetched on demand. */
+const keyCache = new Map<string, string>();
+const KEY_CACHE_MAX = 20_000;
+
+/** A token and its byte offsets within the source string. */
+export interface Token {
+  start: number;
+  end: number;
+  word: string;
+}
+
+/** Splits text into `[\p{L}\p{N}]+` runs (apostrophe/punctuation separate), mirroring
+ * unicode61's token boundaries. Offsets are into `text`. */
+export function tokenize(text: string): Token[] {
+  const re = /[\p{L}\p{N}]+/gu;
+  const out: Token[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    out.push({ start: m.index, end: m.index + m[0].length, word: m[0] });
+  }
+  return out;
+}
+
+/** Tokenizes a content-mode query into the candidate terms to highlight. */
 export function deriveContentTerms(query: string): string[] {
-  const q = query.trim();
-  if (!q) return [];
-  const terms = q
-    // Same cleaning as content.rs: keep alphanumerics + apostrophe, split on the rest.
-    .replace(/[^\p{L}\p{N}']+/gu, " ")
-    .split(/\s+/)
-    .filter((t) => t.length >= 2);
-  // Dedup: a repeated-word query ("the on the the on the") would otherwise make the
-  // PDF highlight backend re-scan and re-stamp the same boxes once per duplicate.
-  return [...new Set(terms)];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const { word } of tokenize(query)) {
+    if (word.length < 2) continue; // single-char terms are highlight noise
+    const lower = word.toLowerCase();
+    if (seen.has(lower)) continue; // dedup; backend collapses casing anyway
+    seen.add(lower);
+    out.push(word);
+  }
+  return out;
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Ensures match keys for `words` are cached, with one batched backend call for the
+ * misses (deduped). Safe to call repeatedly; cached words cost nothing. */
+export async function ensureKeys(words: Iterable<string>): Promise<void> {
+  const miss: string[] = [];
+  const seen = new Set<string>();
+  for (const w of words) {
+    if (!keyCache.has(w) && !seen.has(w)) {
+      seen.add(w);
+      miss.push(w);
+    }
+  }
+  if (!miss.length) return;
+  const keys = await invoke<string[]>("content_match_keys", { words: miss });
+  miss.forEach((w, i) => keyCache.set(w, keys[i] ?? ""));
+  while (keyCache.size > KEY_CACHE_MAX) {
+    const oldest = keyCache.keys().next().value;
+    if (oldest === undefined) break;
+    keyCache.delete(oldest);
+  }
 }
 
-/** Word-prefix, case-insensitive regex over all terms, or null if none. */
-export function buildTermRegex(terms: string[]): RegExp | null {
-  if (!terms.length) return null;
-  const alt = terms.map(escapeRegex).join("|");
-  return new RegExp(`\\b(?:${alt})[\\p{L}\\p{N}]*`, "giu");
+/** Cached match key for `word`, or undefined if not fetched yet (call `ensureKeys`). */
+export function keyOf(word: string): string | undefined {
+  return keyCache.get(word);
 }
 
-/** True if any term word-prefix-matches the given cell/text. */
-export function cellMatches(text: string, terms: string[]): boolean {
-  const re = buildTermRegex(terms);
-  return re ? re.test(text) : false;
+/** Builds the query-key set from already-cached keys (sync; call `ensureKeys` first). */
+function querySet(terms: string[]): Set<string> {
+  const set = new Set<string>();
+  for (const t of terms) {
+    const k = keyOf(t);
+    if (k) set.add(k);
+  }
+  return set;
+}
+
+/** The set of match keys for `terms` (fetches them first). */
+export async function loadQueryKeys(terms: string[]): Promise<Set<string>> {
+  await ensureKeys(terms);
+  return querySet(terms);
+}
+
+/** True if any word in `text` keys to a query key in `qkeys`. Sync: requires the
+ * words to have been keyed already (e.g. via `ensureKeys`). */
+export function cellMatches(text: string, qkeys: Set<string>): boolean {
+  if (!qkeys.size) return false;
+  for (const { word } of tokenize(text)) {
+    const k = keyOf(word);
+    if (k !== undefined && qkeys.has(k)) return true;
+  }
+  return false;
 }
 
 /**
- * Wraps matched terms in `<mark class="preview-hl">` inside `el`, walking text
- * nodes so it works over highlight.js / ReactMarkdown output (whose HTML can't
- * be safely string-replaced). Returns the first mark element, for scrolling.
+ * Wraps matched words in `<mark class="preview-hl">` inside `el`, walking text nodes
+ * so it works over highlight.js / ReactMarkdown output (whose HTML can't be safely
+ * string-replaced). A word matches when its key is among the query keys. Each mark is
+ * stamped with `data-hlkey` so `focusBestCluster` can group by distinct key without
+ * re-keying. Returns the first mark element, for scrolling.
  */
-export function highlightInElement(
+export async function highlightInElement(
   el: HTMLElement,
   terms: string[],
-): HTMLElement | null {
-  const re = buildTermRegex(terms);
-  if (!re) return null;
+  shouldCancel?: () => boolean,
+): Promise<HTMLElement | null> {
+  if (!terms.length) return null;
 
   // Collect text nodes first; we mutate the DOM as we go.
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
@@ -68,62 +137,65 @@ export function highlightInElement(
     textNodes.push(n as Text);
   }
 
+  // Key the query terms plus every word in the subtree in one batched call.
+  const tokensByNode = textNodes.map((n) => tokenize(n.nodeValue ?? ""));
+  const allWords: string[] = terms.slice();
+  for (const toks of tokensByNode) for (const t of toks) allWords.push(t.word);
+  await ensureKeys(allWords);
+  // The await is a backend round-trip; bail before touching the DOM if the caller
+  // (e.g. a preview that navigated away) cancelled in the meantime.
+  if (shouldCancel?.()) return null;
+
+  const qkeys = querySet(terms);
+  if (!qkeys.size) return null;
+
   let first: HTMLElement | null = null;
-  for (const node of textNodes) {
+  textNodes.forEach((node, ni) => {
     const text = node.nodeValue ?? "";
-    re.lastIndex = 0;
-    if (!re.test(text)) continue;
-    re.lastIndex = 0;
+    const hits = tokensByNode[ni].filter((t) => {
+      const k = keyOf(t.word);
+      return k !== undefined && qkeys.has(k);
+    });
+    if (!hits.length) return;
 
     const frag = document.createDocumentFragment();
     let last = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+    for (const h of hits) {
+      if (h.start > last) frag.appendChild(document.createTextNode(text.slice(last, h.start)));
       const mark = document.createElement("mark");
       mark.className = HL_CLASS;
-      mark.textContent = m[0];
+      mark.textContent = text.slice(h.start, h.end);
+      mark.dataset.hlkey = keyOf(h.word) ?? "";
       frag.appendChild(mark);
       if (!first) first = mark;
-      last = m.index + m[0].length;
-      if (m[0].length === 0) re.lastIndex++; // guard against zero-width loops
+      last = h.end;
     }
     if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
     node.parentNode?.replaceChild(frag, node);
-  }
+  });
   return first;
 }
 
-/** Index of the first term that word-prefix-matches `text`, or -1. */
-function termOf(text: string, terms: string[]): number {
-  const w = text.toLowerCase();
-  return terms.findIndex((t) => w.startsWith(t.toLowerCase()));
-}
-
 /**
- * Of all `mark.preview-hl` in `el`, returns the one starting the section that
- * covers the most DISTINCT terms within PROXIMITY_PX vertically; earliest wins ties.
- * Falls back to the first mark (or null). Pairs with the backend's coverage-window
- * selection so the scroll lands on the densest section, not the first lone term.
+ * Of all `mark.preview-hl` in `el`, returns the one starting the section that covers
+ * the most DISTINCT keys within PROXIMITY_PX vertically; earliest wins ties. Reads the
+ * `data-hlkey` stamped by `highlightInElement` (no re-keying). Pairs with the backend's
+ * coverage-window selection so the scroll lands on the densest section.
  */
-export function focusBestCluster(
-  el: HTMLElement,
-  terms: string[],
-): HTMLElement | null {
-  if (!terms.length) return null;
+export function focusBestCluster(el: HTMLElement): HTMLElement | null {
   const PROXIMITY_PX = 240;
   const marks = Array.from(
     el.querySelectorAll<HTMLElement>(`mark.${HL_CLASS}`),
-  ).map((m) => ({ el: m, top: m.offsetTop, term: termOf(m.textContent ?? "", terms) }));
+  ).map((m) => ({ el: m, top: m.offsetTop, key: m.dataset.hlkey ?? "" }));
   if (!marks.length) return null;
 
   let best = marks[0].el;
   let bestDistinct = -1;
   let bestTop = Infinity;
   for (const m of marks) {
-    const seen = new Set<number>();
+    const seen = new Set<string>();
     for (const o of marks) {
-      if (Math.abs(o.top - m.top) <= PROXIMITY_PX && o.term >= 0) seen.add(o.term);
+      if (Math.abs(o.top - m.top) <= PROXIMITY_PX && o.key) seen.add(o.key);
     }
     if (seen.size > bestDistinct || (seen.size === bestDistinct && m.top < bestTop)) {
       bestDistinct = seen.size;

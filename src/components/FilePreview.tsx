@@ -7,7 +7,7 @@ import type { Components } from "react-markdown";
 import { SearchResult } from "../types";
 import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable, isSvg, isCsv, isOfficeText, isSpreadsheet, fileCategory, folderSummary } from "../utils";
 import { ColoredIconsContext } from "../coloredIcons";
-import { highlightInElement, focusBestCluster, cellMatches, buildTermRegex } from "../highlight";
+import { highlightInElement, focusBestCluster, cellMatches, tokenize, keyOf, ensureKeys, loadQueryKeys } from "../highlight";
 
 /**
  * After the referenced element renders, wraps matched terms in `<mark>` and
@@ -17,30 +17,39 @@ import { highlightInElement, focusBestCluster, cellMatches, buildTermRegex } fro
  */
 function useTermHighlight<T extends HTMLElement>(terms: string[], dep: unknown) {
   const ref = useRef<T>(null);
-  // Layout effect so the marks + scroll land before the browser paints - using a
-  // plain effect leaves one frame of un-highlighted, top-scrolled content (a jump).
+  // Keying is async (one backend round-trip), so marks + scroll land just after the
+  // first paint. The caller remounts this subtree via `key` on content/term change,
+  // so a late-resolving highlight only ever mutates the current, React-untouched DOM.
   useLayoutEffect(() => {
-    if (!ref.current || !terms.length) return;
-    highlightInElement(ref.current, terms);
-    focusBestCluster(ref.current, terms)?.scrollIntoView({ block: "center" });
+    const el = ref.current;
+    if (!el || !terms.length) return;
+    let cancelled = false;
+    highlightInElement(el, terms, () => cancelled).then(() => {
+      if (cancelled) return;
+      focusBestCluster(el)?.scrollIntoView({ block: "center" });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [dep, terms]);
   return ref;
 }
 
-/** Splits text into nodes with matched terms wrapped in `<mark class="preview-hl">`. */
-function highlightText(text: string, terms: string[]): ReactNode {
-  const re = buildTermRegex(terms);
-  if (!re) return text;
+/** Splits text into nodes with matched words wrapped in `<mark class="preview-hl">`.
+ * Sync: requires the words to have been keyed already (`ensureKeys`). */
+function highlightText(text: string, qkeys: Set<string>): ReactNode {
+  if (!qkeys.size) return text;
   const out: ReactNode[] = [];
   let last = 0;
   let key = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    out.push(<mark key={key++} className="preview-hl">{m[0]}</mark>);
-    last = m.index + m[0].length;
-    if (m[0].length === 0) re.lastIndex++;
+  for (const t of tokenize(text)) {
+    const k = keyOf(t.word);
+    if (k === undefined || !qkeys.has(k)) continue;
+    if (t.start > last) out.push(text.slice(last, t.start));
+    out.push(<mark key={key++} className="preview-hl">{text.slice(t.start, t.end)}</mark>);
+    last = t.end;
   }
+  if (!out.length) return text;
   if (last < text.length) out.push(text.slice(last));
   return out;
 }
@@ -957,21 +966,42 @@ function parseDelimited(text: string, delim: string): string[][] {
 // terms per cell and scrolls the first matching cell into view.
 function DataTable({ rows, terms }: { rows: string[][]; terms: string[] }) {
   const firstMatch = useRef<HTMLTableCellElement | null>(null);
+  // Query-key set for sync matching; populated once the cell + query words are keyed.
+  const [qkeys, setQkeys] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    if (!terms.length) {
+      setQkeys(new Set());
+      return;
+    }
+    let cancelled = false;
+    // Key the query plus every cell word in one batch, then expose the query-key set
+    // so the sync render (cellMatches / highlightText) can match via the cache.
+    const words: string[] = [];
+    for (const r of rows) for (const c of r) for (const t of tokenize(c)) words.push(t.word);
+    (async () => {
+      await ensureKeys([...terms, ...words]);
+      if (!cancelled) setQkeys(await loadQueryKeys(terms));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rows, terms]);
 
   useEffect(() => {
     firstMatch.current?.scrollIntoView({ block: "center" });
-  }, [rows, terms]);
+  }, [rows, qkeys]);
 
   let found = false;
   // Returns a ref callback for the first term-matching cell, undefined otherwise.
   const refForCell = (text: string) => {
-    if (found || !terms.length || !cellMatches(text, terms)) return undefined;
+    if (found || !cellMatches(text, qkeys)) return undefined;
     found = true;
     return (el: HTMLTableCellElement | null) => { firstMatch.current = el; };
   };
 
   const cellClass = (text: string) =>
-    terms.length && cellMatches(text, terms) ? "preview-hl-cell" : undefined;
+    cellMatches(text, qkeys) ? "preview-hl-cell" : undefined;
 
   const [header, ...body] = rows;
   return (
@@ -980,7 +1010,7 @@ function DataTable({ rows, terms }: { rows: string[][]; terms: string[] }) {
         <thead>
           <tr>
             {header.map((cell, i) => (
-              <th key={i} ref={refForCell(cell)} className={cellClass(cell)}>{highlightText(cell, terms)}</th>
+              <th key={i} ref={refForCell(cell)} className={cellClass(cell)}>{highlightText(cell, qkeys)}</th>
             ))}
           </tr>
         </thead>
@@ -988,7 +1018,7 @@ function DataTable({ rows, terms }: { rows: string[][]; terms: string[] }) {
           {body.map((r, ri) => (
             <tr key={ri}>
               {r.map((cell, ci) => (
-                <td key={ci} ref={refForCell(cell)} className={cellClass(cell)}>{highlightText(cell, terms)}</td>
+                <td key={ci} ref={refForCell(cell)} className={cellClass(cell)}>{highlightText(cell, qkeys)}</td>
               ))}
             </tr>
           ))}
