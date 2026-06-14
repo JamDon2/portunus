@@ -844,6 +844,7 @@ pub fn run() {
             // File preview
             preview::render_pdf_page,
             preview::pdf_match_rects,
+            preview::image_match_rects,
             preview::read_text_preview,
             preview::render_image_preview,
             preview::list_folder,

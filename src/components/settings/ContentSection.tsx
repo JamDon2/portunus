@@ -246,6 +246,22 @@ export default function ContentSection({ config, onChange, pendingReindex, reind
         <SettingsField name="Indexer threads" desc="How many CPU threads index in parallel. 0 = use all cores.">
           <NumberStepper label="Indexer threads" value={cc.threads} min={0} max={64} step={1} onChange={v => set({ threads: Math.round(v) })} />
         </SettingsField>
+
+        <SettingsField name="Highlight matches in images" desc="Box the matched terms over OCR'd image previews in Contents mode, like the PDF text-layer highlight. The first preview of each image runs a quick OCR (cached after).">
+          <Toggle label="Highlight matches in images" checked={cc.ocr_highlight} onChange={v => set({ ocr_highlight: v })} />
+        </SettingsField>
+
+        <SettingsField
+          name="Cache image highlight boxes"
+          desc={<>Store OCR word boxes in the index so image highlights are instant (no per-preview OCR). <strong>Heavy</strong>: applying re-OCRs every image and grows the index. Needs <em>Highlight matches in images</em> on.</>}
+        >
+          <Toggle
+            label="Cache image highlight boxes"
+            checked={cc.ocr_highlight_cache}
+            disabled={!cc.ocr_highlight}
+            onChange={v => set({ ocr_highlight_cache: v })}
+          />
+        </SettingsField>
       </SettingsGroup>
 
       <SettingsGroup

@@ -255,6 +255,15 @@ pub struct ContentConfig {
     pub ocr_pdf_fallback: bool,
     pub ocr_language: String,
     pub threads: usize,
+    /// Highlight matched terms over OCR'd image previews (Contents mode). Preview-only:
+    /// does not change what is indexed, so toggling never triggers a reindex (excluded
+    /// from `contents_eq`). When off, `image_match_rects` returns no boxes.
+    pub ocr_highlight: bool,
+    /// Cache OCR word boxes in the index at index time so image highlights are instant
+    /// (no per-preview OCR). HEAVY: changes what indexing stores, so it is part of
+    /// `contents_eq` and toggling forces a full reindex (re-OCRs images). Only meaningful
+    /// when `ocr_highlight` is also on.
+    pub ocr_highlight_cache: bool,
 }
 
 impl ContentConfig {
@@ -269,6 +278,8 @@ impl ContentConfig {
             && self.ocr_images == other.ocr_images
             && self.ocr_pdf_fallback == other.ocr_pdf_fallback
             && self.ocr_language == other.ocr_language
+            // ocr_highlight is preview-only and deliberately excluded (no reindex).
+            && self.ocr_highlight_cache == other.ocr_highlight_cache
     }
 }
 
@@ -294,6 +305,8 @@ impl Default for ContentConfig {
             ocr_pdf_fallback: true,
             ocr_language: "eng".to_string(),
             threads: 2,
+            ocr_highlight: false,
+            ocr_highlight_cache: false,
         }
     }
 }

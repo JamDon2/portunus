@@ -14,6 +14,13 @@ use std::cell::RefCell;
 
 static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// One OCR'd word and its normalized bounding box `[x, y, w, h]` (0..1, top-left
+/// origin) within the source image. `word` is lowercased for case-insensitive
+/// prefix matching at preview time. Produced by `parse_tsv_word_boxes`, stored in
+/// `ocr_word_box` when `ocr_highlight_cache` is on, and read back by the preview's
+/// `image_match_rects`.
+pub(crate) type WordBox = (String, [f32; 4]);
+
 /// Set while a full-scan reindex (full or incremental) is running. Used to
 /// coalesce overlapping reindex triggers so only one drives the progress bar.
 static REINDEX_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -51,6 +58,9 @@ struct FileUpdate {
     /// Per-page text for PDFs (split on form-feed). `None` for non-paged formats.
     /// Populated into `pdf_page_fts` so previews can open on the matched page.
     pages: Option<Vec<String>>,
+    /// OCR word boxes for an image, captured only when `ocr_highlight_cache` is on.
+    /// Empty otherwise. Written to `ocr_word_box` so previews skip per-open OCR.
+    boxes: Vec<WordBox>,
     mtime: i64,
     size: u64,
 }
@@ -101,7 +111,13 @@ impl ContentIndex {
                  page UNINDEXED,
                  text,
                  tokenize='porter unicode61'
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS ocr_word_box (
+                 path TEXT NOT NULL,
+                 word TEXT NOT NULL,
+                 x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_ocr_word_box_path ON ocr_word_box(path);",
         )?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
 
@@ -141,6 +157,7 @@ impl ContentIndex {
         for u in updates {
             tx.execute("DELETE FROM content_fts WHERE path = ?", [u.path.as_str()])?;
             tx.execute("DELETE FROM pdf_page_fts WHERE path = ?", [u.path.as_str()])?;
+            tx.execute("DELETE FROM ocr_word_box WHERE path = ?", [u.path.as_str()])?;
             // Empty `text` is a negative-cache tombstone: a file that extracted to
             // nothing (e.g. an OCR'd screenshot with no detectable text) or errored.
             // We still write its file_meta below so the mtime+size skip catches it
@@ -161,6 +178,13 @@ impl ContentIndex {
                             params![u.path, i as i64, page],
                         )?;
                     }
+                }
+                // Word boxes (only present when ocr_highlight_cache is on, for images).
+                for (word, [x, y, w, h]) in &u.boxes {
+                    tx.execute(
+                        "INSERT INTO ocr_word_box(path, word, x, y, w, h) VALUES (?, ?, ?, ?, ?, ?)",
+                        params![u.path, word, x, y, w, h],
+                    )?;
                 }
             }
             tx.execute(
@@ -189,6 +213,7 @@ impl ContentIndex {
         for path in &stale {
             tx.execute("DELETE FROM content_fts WHERE path = ?", [path.as_str()])?;
             tx.execute("DELETE FROM pdf_page_fts WHERE path = ?", [path.as_str()])?;
+            tx.execute("DELETE FROM ocr_word_box WHERE path = ?", [path.as_str()])?;
             tx.execute("DELETE FROM file_meta WHERE path = ?", [path.as_str()])?;
         }
         tx.commit()?;
@@ -223,6 +248,7 @@ impl ContentIndex {
         let db = util::lock(&self.db);
         db.execute("DELETE FROM content_fts WHERE path = ?", [path])?;
         db.execute("DELETE FROM pdf_page_fts WHERE path = ?", [path])?;
+        db.execute("DELETE FROM ocr_word_box WHERE path = ?", [path])?;
         db.execute("DELETE FROM file_meta WHERE path = ?", [path])?;
         Ok(())
     }
@@ -293,6 +319,7 @@ impl ContentIndex {
         let tx = db.transaction()?;
         let removed = tx.execute("DELETE FROM content_fts WHERE path LIKE ?", [&pattern])?;
         tx.execute("DELETE FROM pdf_page_fts WHERE path LIKE ?", [&pattern])?;
+        tx.execute("DELETE FROM ocr_word_box WHERE path LIKE ?", [&pattern])?;
         tx.execute("DELETE FROM file_meta WHERE path LIKE ?", [&pattern])?;
         tx.commit()?;
         Ok(removed)
@@ -316,8 +343,40 @@ impl ContentIndex {
         db.execute_batch(
             "DELETE FROM content_fts;
              DELETE FROM pdf_page_fts;
+             DELETE FROM ocr_word_box;
              DELETE FROM file_meta;",
         )
+    }
+
+    /// Cached OCR word boxes for an image path, for the preview's `image_match_rects`
+    /// fast path. `None` means the path is not indexed (so the caller may fall back to
+    /// on-demand OCR); `Some(vec)` — possibly empty — means it is indexed and these are
+    /// all its boxes (empty = OCR found no text, so no fallback is warranted).
+    pub fn cached_word_boxes(&self, path: &str) -> Option<Vec<WordBox>> {
+        let db = util::lock(&self.db);
+        let indexed = db
+            .query_row("SELECT 1 FROM file_meta WHERE path = ? LIMIT 1", [path], |_| Ok(()))
+            .is_ok();
+        if !indexed {
+            return None;
+        }
+        let mut stmt = db
+            .prepare("SELECT word, x, y, w, h FROM ocr_word_box WHERE path = ?")
+            .ok()?;
+        let rows = stmt
+            .query_map([path], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    [
+                        r.get::<_, f64>(1)? as f32,
+                        r.get::<_, f64>(2)? as f32,
+                        r.get::<_, f64>(3)? as f32,
+                        r.get::<_, f64>(4)? as f32,
+                    ],
+                ))
+            })
+            .ok()?;
+        Some(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -344,19 +403,112 @@ thread_local! {
     static LEPTESS: RefCell<Option<leptess::LepTess>> = RefCell::new(None);
 }
 
-fn ocr_file(path: &str, lang: &str) -> Result<String, String> {
+/// Runs `f` with the thread-local Tesseract instance, lazily initialising it on
+/// first use (preferring the bundled tessdata dir, else the system install). The
+/// instance is bound to the `lang` of its first init for the life of the thread.
+fn with_leptess<R>(
+    lang: &str,
+    f: impl FnOnce(&mut leptess::LepTess) -> Result<R, String>,
+) -> Result<R, String> {
     LEPTESS.with(|cell| {
         let mut api_opt = cell.borrow_mut();
         if api_opt.is_none() {
-            // Prefer the bundled tessdata dir (AppImage); fall back to the
-            // system install when running from source.
             let datapath = crate::runtime_assets::tessdata_path();
             *api_opt = leptess::LepTess::new(datapath.as_deref(), lang).ok();
         }
-        let api = api_opt.as_mut().ok_or("tesseract unavailable")?;
+        let api = api_opt.as_mut().ok_or_else(|| "tesseract unavailable".to_string())?;
+        f(api)
+    })
+}
+
+fn ocr_file(path: &str, lang: &str) -> Result<String, String> {
+    with_leptess(lang, |api| {
         api.set_image(path).map_err(|e| format!("{e:?}"))?;
         api.get_utf8_text().map_err(|e| format!("{e:?}"))
     })
+}
+
+/// OCR an image, returning both its text and its word boxes in one pass (text via
+/// `get_utf8_text`, boxes via the TSV layout). Used during indexing when
+/// `ocr_highlight_cache` is on, so the boxes land in `ocr_word_box`.
+fn ocr_file_text_and_boxes(path: &str, lang: &str) -> Result<(String, Vec<WordBox>), String> {
+    with_leptess(lang, |api| {
+        api.set_image(path).map_err(|e| format!("{e:?}"))?;
+        let text = api.get_utf8_text().map_err(|e| format!("{e:?}"))?;
+        let boxes = match api.get_image_dimensions() {
+            Some((w, h)) => {
+                let tsv = api.get_tsv_text(0).map_err(|e| format!("{e:?}"))?;
+                parse_tsv_word_boxes(&tsv, w, h)
+            }
+            None => Vec::new(),
+        };
+        Ok((text, boxes))
+    })
+}
+
+/// OCR an image for its word boxes only (no text), for the preview's on-demand
+/// highlight path when boxes aren't cached. Runs on the caller's thread (the
+/// preview OCR worker), so it inits that thread's own `LEPTESS`.
+pub(crate) fn ocr_image_boxes(path: &str, lang: &str) -> Result<Vec<WordBox>, String> {
+    with_leptess(lang, |api| {
+        api.set_image(path).map_err(|e| format!("{e:?}"))?;
+        let (w, h) = api
+            .get_image_dimensions()
+            .ok_or_else(|| "no image dimensions".to_string())?;
+        let tsv = api.get_tsv_text(0).map_err(|e| format!("{e:?}"))?;
+        Ok(parse_tsv_word_boxes(&tsv, w, h))
+    })
+}
+
+/// Parses Tesseract TSV output into normalized word boxes. Keeps only word-level
+/// rows (`level`==5) with non-negative confidence and non-empty text, mapping the
+/// pixel `left/top/width/height` (top-left origin) into 0..1 of the source image.
+pub(crate) fn parse_tsv_word_boxes(tsv: &str, img_w: u32, img_h: u32) -> Vec<WordBox> {
+    // Defensive cap: a pathological image can't blow up memory / the DB row count.
+    const MAX_BOXES: usize = 2000;
+    if img_w == 0 || img_h == 0 {
+        return Vec::new();
+    }
+    let (fw, fh) = (img_w as f32, img_h as f32);
+    let mut out = Vec::new();
+    for line in tsv.lines() {
+        let cols: Vec<&str> = line.split('\t').collect();
+        // Columns: level page block par line word left top width height conf text.
+        if cols.len() < 12 || cols[0] != "5" {
+            continue;
+        }
+        if cols[10].parse::<f32>().unwrap_or(-1.0) < 0.0 {
+            continue;
+        }
+        let word = cols[11].trim();
+        if word.is_empty() {
+            continue;
+        }
+        let (Ok(left), Ok(top), Ok(w), Ok(h)) = (
+            cols[6].parse::<f32>(),
+            cols[7].parse::<f32>(),
+            cols[8].parse::<f32>(),
+            cols[9].parse::<f32>(),
+        ) else {
+            continue;
+        };
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        out.push((
+            word.to_lowercase(),
+            [
+                (left / fw).clamp(0.0, 1.0),
+                (top / fh).clamp(0.0, 1.0),
+                (w / fw).clamp(0.0, 1.0),
+                (h / fh).clamp(0.0, 1.0),
+            ],
+        ));
+        if out.len() >= MAX_BOXES {
+            break;
+        }
+    }
+    out
 }
 
 /// OCR raw image bytes (e.g. a clipboard image). `leptess`/leptonica only reads
@@ -451,23 +603,31 @@ const TEXT_EXTENSIONS: &[&str] = &[
 
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif"];
 
-fn extract_text(path: &str, cfg: &ContentConfig) -> Result<String, String> {
+/// Extracted text plus, for images when `ocr_highlight_cache` is on, the OCR word
+/// boxes (empty for every other path). Boxes ride alongside text so an image is
+/// OCR'd once at index time, not again for highlight caching.
+fn extract_text(path: &str, cfg: &ContentConfig) -> Result<(String, Vec<WordBox>), String> {
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
     if ext == "pdf" {
-        extract_pdf(path, cfg.ocr_pdf_fallback, &cfg.ocr_language)
+        extract_pdf(path, cfg.ocr_pdf_fallback, &cfg.ocr_language).map(|t| (t, Vec::new()))
     } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
         if cfg.ocr_images {
-            return ocr_file(path, &cfg.ocr_language);
+            if cfg.ocr_highlight_cache {
+                return ocr_file_text_and_boxes(path, &cfg.ocr_language);
+            }
+            return ocr_file(path, &cfg.ocr_language).map(|t| (t, Vec::new()));
         }
         Err("image OCR disabled".to_string())
     } else if TEXT_EXTENSIONS.contains(&ext.as_str()) {
-        std::fs::read_to_string(path).map_err(|e| e.to_string())
+        std::fs::read_to_string(path)
+            .map(|t| (t, Vec::new()))
+            .map_err(|e| e.to_string())
     } else if crate::office::is_office_ext(&ext) {
-        crate::office::extract_office_text(path)
+        crate::office::extract_office_text(path).map(|t| (t, Vec::new()))
     } else {
         Err(format!("unsupported extension: {ext}"))
     }
@@ -760,12 +920,12 @@ fn collect_updates(
             // a negative-cache tombstone. upsert_batch writes its file_meta but no
             // FTS row, so the mtime+size fast-path skips it next run instead of
             // re-running the (expensive) extraction every startup.
-            let text = match extract_text(&path_str, cfg) {
-                Ok(t) if !t.trim().is_empty() => t,
-                Ok(_) => String::new(),
+            let (text, boxes) = match extract_text(&path_str, cfg) {
+                Ok((t, b)) if !t.trim().is_empty() => (t, b),
+                Ok(_) => (String::new(), Vec::new()),
                 Err(e) => {
                     eprintln!("[content] extract failed {path_str}: {e}");
-                    String::new()
+                    (String::new(), Vec::new())
                 }
             };
 
@@ -782,6 +942,7 @@ fn collect_updates(
                 path: path_str,
                 text,
                 pages,
+                boxes,
                 mtime: *mtime,
                 size: *size,
             })
@@ -864,9 +1025,9 @@ pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentC
     }
 
     match extract_text(&path_str, cfg) {
-        Ok(text) if !text.trim().is_empty() => {
+        Ok((text, boxes)) if !text.trim().is_empty() => {
             let pages = pdf_pages(&path_str, &text);
-            match index.upsert_batch(&[FileUpdate { path: path_str.clone(), text, pages, mtime, size }]) {
+            match index.upsert_batch(&[FileUpdate { path: path_str.clone(), text, pages, boxes, mtime, size }]) {
                 Ok(()) => { eprintln!("[content] indexed {path_str}"); true }
                 Err(e) => { eprintln!("[content] event upsert failed {path_str}: {e}"); false }
             }
@@ -884,6 +1045,7 @@ pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentC
                     path: path_str.clone(),
                     text: String::new(),
                     pages: None,
+                    boxes: Vec::new(),
                     mtime,
                     size,
                 }])

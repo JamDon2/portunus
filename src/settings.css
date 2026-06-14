@@ -321,6 +321,11 @@ a:focus-visible,
   align-items: center;
 }
 
+.toggle-wrap--disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 .toggle-input {
   display: none;
 }

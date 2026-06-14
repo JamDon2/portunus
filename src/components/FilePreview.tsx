@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useContext, useCallback, Fragment } from "react";
-import type { ReactNode, MouseEvent as ReactMouseEvent } from "react";
+import type { ReactNode, MouseEvent as ReactMouseEvent, CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -218,10 +218,10 @@ function getPdfUrl(path: string, page: number, width: number): Promise<string> {
 // Overlay of normalized highlight boxes, positioned in percent so it tracks the
 // rendered page <img> at any width/zoom. `pointer-events:none` keeps scroll and
 // Quicklook grab-pan working through it.
-function PdfHighlightLayer({ rects }: { rects: HlRect[] }) {
+function PdfHighlightLayer({ rects, style }: { rects: HlRect[]; style?: CSSProperties }) {
   if (!rects.length) return null;
   return (
-    <div className="pdf-hl-layer">
+    <div className="pdf-hl-layer" style={style}>
       {rects.map(([x, y, w, h], i) => (
         <div
           key={i}
@@ -697,6 +697,35 @@ const IMG_QL_WIDTH = 1600;
 
 function imgKey(path: string, width: number): string { return `${path}@${width}`; }
 
+// Normalized [x, y, w, h] highlight boxes per OCR'd image, from `image_match_rects`
+// (DB cache or on-demand OCR). Keyed path#terms (width-independent, normalized), so
+// side preview and Quicklook share entries. Mirrors the PDF rects cache.
+const imgRectsPromiseCache = new Map<string, Promise<HlRect[]>>();
+const imgRectsCache = new Map<string, HlRect[]>();
+
+function imgRectsKey(path: string, terms: string[]): string {
+  return `${path}#${terms.join(" ")}`;
+}
+
+function getImageRects(path: string, terms: string[]): Promise<HlRect[]> {
+  const key = imgRectsKey(path, terms);
+  if (!imgRectsPromiseCache.has(key)) {
+    imgRectsPromiseCache.set(
+      key,
+      invoke<HlRect[]>("image_match_rects", { path, terms })
+        .then((rects) => {
+          imgRectsCache.set(key, rects);
+          return rects;
+        })
+        .catch((e) => {
+          imgRectsPromiseCache.delete(key);
+          throw e;
+        }),
+    );
+  }
+  return imgRectsPromiseCache.get(key)!;
+}
+
 function getImgUrl(path: string, width: number): Promise<string> {
   const key = imgKey(path, width);
   if (!imgPromiseCache.has(key)) {
@@ -717,7 +746,7 @@ function getImgUrl(path: string, width: number): Promise<string> {
   return imgPromiseCache.get(key)!;
 }
 
-function ImagePreview({ path, quicklook = false }: { path: string; quicklook?: boolean }) {
+function ImagePreview({ path, quicklook = false, terms = [], highlight = true }: { path: string; quicklook?: boolean; terms?: string[]; highlight?: boolean }) {
   // Side preview measures its container so a wide image fills the panel and stays
   // crisp on HiDPI, instead of floating at a fixed 800px. Quicklook keeps its
   // larger fixed target. outerRef is the wrap itself; a no-op guard stops a stable
@@ -758,6 +787,59 @@ function ImagePreview({ path, quicklook = false }: { path: string; quicklook?: b
     return () => { cancelled = true; };
   }, [key, path, width, quicklook]);
 
+  // OCR highlight boxes for the matched terms. Empty unless highlighting is on with
+  // terms. Debounced ~150ms so arrow-keying through image results doesn't fire an OCR
+  // per selection (the backend also coalesces). Cache hits resolve without the delay.
+  const termsKey = terms.join(" ");
+  const [rects, setRects] = useState<HlRect[]>(() => imgRectsCache.get(imgRectsKey(path, terms)) ?? []);
+  useEffect(() => {
+    if (!highlight || !terms.length) { setRects([]); return; }
+    const cached = imgRectsCache.get(imgRectsKey(path, terms));
+    if (cached) { setRects(cached); return; }
+    // Drop stale boxes (from the previous image / query) up front so they never
+    // paint on the new image during the debounce+fetch - they only appear once the
+    // fresh result resolves.
+    setRects([]);
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      getImageRects(path, terms)
+        .then(r => { if (!cancelled) setRects(r); })
+        .catch(e => { console.error("[img] image_match_rects failed:", e); if (!cancelled) setRects([]); });
+    }, 150);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // termsKey stands in for the terms array (stable string identity).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, termsKey, highlight]);
+
+  // The highlight overlay is positioned to the <img>'s rendered box within the wrap
+  // (object-fit:contain letterboxes it), so percent boxes land exactly on the image
+  // at any panel size. Measured on load and on resize.
+  const imgRef = useRef<HTMLImageElement>(null);
+  // The box carries the `src` it was measured against, so the overlay renders only
+  // when it matches the displayed image. A swap reuses the same <img>, so this avoids
+  // both painting boxes over the old geometry and the clear-vs-onLoad race that left
+  // boxes missing until a revisit.
+  const [imgBox, setImgBox] = useState<{ src: string; l: number; t: number; w: number; h: number } | null>(null);
+  const measureImg = useCallback(() => {
+    const img = imgRef.current, wrap = outerRef.current;
+    if (!img || !wrap || !src) return;
+    // offset* (layout box relative to the positioned wrap), NOT getBoundingClientRect:
+    // the image runs a brief scale-in reveal animation, and a transformed rect measured
+    // mid-animation would leave the overlay permanently offset. offset* ignore transforms.
+    const box = { src, l: img.offsetLeft, t: img.offsetTop, w: img.offsetWidth, h: img.offsetHeight };
+    setImgBox(prev => (prev && prev.src === box.src && prev.l === box.l && prev.t === box.t && prev.w === box.w && prev.h === box.h ? prev : box));
+  }, [src]);
+  // Measure once the current src is laid out (covers cached images whose onLoad may
+  // fire before the ref settles), and again on any resize.
+  useLayoutEffect(() => { if (loaded) measureImg(); }, [src, loaded, measureImg]);
+  useEffect(() => {
+    const wrap = outerRef.current;
+    if (!wrap) return;
+    const ro = new ResizeObserver(() => measureImg());
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [measureImg]);
+
   return (
     <div ref={outerRef} className={`pdf-preview-wrap${!loaded && !error ? " is-loading" : ""}`}>
       {!error && (
@@ -768,11 +850,18 @@ function ImagePreview({ path, quicklook = false }: { path: string; quicklook?: b
       )}
       {src && (
         <img
+          ref={imgRef}
           src={src}
           alt="Image preview"
           className={loaded ? "pdf-img-revealed" : undefined}
           style={{ opacity: loaded ? undefined : 0 }}
-          onLoad={() => setLoaded(true)}
+          onLoad={() => { setLoaded(true); measureImg(); }}
+        />
+      )}
+      {src && imgBox && imgBox.src === src && (
+        <PdfHighlightLayer
+          rects={rects}
+          style={{ left: imgBox.l, top: imgBox.t, width: imgBox.w, height: imgBox.h, right: "auto", bottom: "auto" }}
         />
       )}
       {error && <span className="pdf-preview-msg">Preview unavailable</span>}
@@ -1314,7 +1403,7 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], hi
       )}
 
       {isPdf && <PdfPreview path={filePath} page={result.match_page ?? 0} terms={terms} highlight={highlight} quicklook={quicklook} />}
-      {isImage && <ImagePreview path={filePath} quicklook={quicklook} />}
+      {isImage && <ImagePreview path={filePath} terms={terms} highlight={highlight} quicklook={quicklook} />}
       {isSvgFile && <SvgPreview path={filePath} />}
       {isCsvFile && <CsvPreview path={filePath} delim={result.title.toLowerCase().endsWith(".tsv") ? "\t" : ","} terms={terms} />}
       {isOfficeTextFile && <OfficeTextPreview path={filePath} terms={terms} />}

@@ -69,6 +69,8 @@ export interface Config {
     ocr_pdf_fallback: boolean;
     ocr_language: string;
     threads: number;
+    ocr_highlight: boolean;
+    ocr_highlight_cache: boolean;
   };
   appearance: {
     theme: string;

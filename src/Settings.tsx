@@ -164,6 +164,9 @@ const HEAVY_CONTENT_FIELDS: { key: ContentField; changed: (c: Config["content"],
   { key: "ocr_images", changed: (c, b) => c.ocr_images !== b.ocr_images },
   { key: "ocr_pdf_fallback", changed: (c, b) => c.ocr_pdf_fallback !== b.ocr_pdf_fallback },
   { key: "ocr_language", changed: (c, b) => c.ocr_language !== b.ocr_language },
+  // Heavy: populating/clearing cached OCR boxes re-OCRs every image (full reindex).
+  // Note `ocr_highlight` (the preview-only master toggle) is deliberately NOT here.
+  { key: "ocr_highlight_cache", changed: (c, b) => c.ocr_highlight_cache !== b.ocr_highlight_cache },
 ];
 
 function contentHeavyPending(cur: Config, base: Config, indexEmpty: boolean): boolean {
@@ -365,7 +368,10 @@ export default function Settings() {
       !base ||
       config.content.ocr_images !== base.content.ocr_images ||
       config.content.ocr_pdf_fallback !== base.content.ocr_pdf_fallback ||
-      config.content.ocr_language !== base.content.ocr_language;
+      config.content.ocr_language !== base.content.ocr_language ||
+      // Toggling the box cache (on or off) must re-OCR / clear boxes, so it needs a
+      // clearing rebuild — an incremental pass would skip the unchanged images.
+      config.content.ocr_highlight_cache !== base.content.ocr_highlight_cache;
     // Strip blank, half-typed rows so they never reach disk.
     const toSave: Config = {
       ...config,
@@ -403,6 +409,7 @@ export default function Settings() {
         ocr_images: base.content.ocr_images,
         ocr_pdf_fallback: base.content.ocr_pdf_fallback,
         ocr_language: base.content.ocr_language,
+        ocr_highlight_cache: base.content.ocr_highlight_cache,
         enabled: base.content.enabled,
         max_file_bytes: base.content.max_file_bytes,
       },

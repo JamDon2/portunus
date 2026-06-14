@@ -1,4 +1,6 @@
 use crate::config::SharedConfig;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tauri::Manager;
 
 /// Reply for a render job: (jpeg bytes, total page count). A oneshot the command
@@ -175,6 +177,122 @@ fn start_pdf_worker(shared: SharedConfig) -> PdfWorkerHandle {
 
 pub fn setup(app: &tauri::AppHandle, shared: SharedConfig) {
     app.manage(start_pdf_worker(shared));
+    app.manage(start_image_ocr_worker());
+}
+
+// ── image OCR highlight worker ──────────────────────────────────────────────────
+
+type ImageRectsReply = tokio::sync::oneshot::Sender<Result<Vec<[f32; 4]>, String>>;
+
+struct ImageOcrJob {
+    path: String,
+    needles: Vec<String>,
+    lang: String,
+    /// Request generation; the worker skips a job superseded by a newer one.
+    generation: u64,
+    reply: ImageRectsReply,
+}
+
+/// Single-thread OCR worker for on-demand image highlight boxes. Tesseract is far
+/// heavier than the PDF text-layer path, so it gets its own thread (off tokio's
+/// blocking pool and off the indexer) and coalesces requests: only the newest
+/// pending generation actually OCRs, so arrow-keying through image results doesn't
+/// queue an OCR per selection (paired with the frontend's debounce).
+pub struct ImageOcrHandle {
+    tx: std::sync::mpsc::SyncSender<ImageOcrJob>,
+    generation: Arc<AtomicU64>,
+}
+
+fn start_image_ocr_worker() -> ImageOcrHandle {
+    let (tx, rx) = std::sync::mpsc::sync_channel::<ImageOcrJob>(8);
+    let generation = Arc::new(AtomicU64::new(0));
+    let worker_gen = Arc::clone(&generation);
+    std::thread::spawn(move || {
+        while let Ok(job) = rx.recv() {
+            // Superseded by a newer request: reply empty (the awaiting frontend has
+            // already moved on / cancelled) without paying for the OCR.
+            if job.generation < worker_gen.load(Ordering::Acquire) {
+                let _ = job.reply.send(Ok(Vec::new()));
+                continue;
+            }
+            let result = crate::content_index::ocr_image_boxes(&job.path, &job.lang)
+                .map(|words| match_word_boxes(&words, &job.needles));
+            let _ = job.reply.send(result);
+        }
+    });
+    ImageOcrHandle { tx, generation }
+}
+
+/// Boxes of words whose (lowercased) text prefix-matches any needle — same
+/// word-prefix rule as the PDF path / `line_term_mask`. Shared by the cached and
+/// on-demand paths so they highlight identically.
+fn match_word_boxes(words: &[crate::content_index::WordBox], needles: &[String]) -> Vec<[f32; 4]> {
+    words
+        .iter()
+        .filter(|(w, _)| needles.iter().any(|n| w.starts_with(n.as_str())))
+        .map(|(_, rect)| *rect)
+        .collect()
+}
+
+/// Normalized highlight rectangles for `terms` over an OCR'd image preview. Returns
+/// empty unless `content.ocr_highlight` is on. When `content.ocr_highlight_cache` is
+/// on and the image is indexed, boxes come straight from the DB (no OCR); otherwise
+/// the image is OCR'd on demand via the serialized worker.
+#[tauri::command]
+pub async fn image_match_rects(
+    path: String,
+    terms: Vec<String>,
+    config: tauri::State<'_, crate::ConfigState>,
+    content: tauri::State<'_, crate::ContentState>,
+    ocr: tauri::State<'_, ImageOcrHandle>,
+) -> Result<Vec<[f32; 4]>, String> {
+    let (enabled, cache, lang) = {
+        let cfg = crate::util::lock(&config);
+        (
+            cfg.content.ocr_highlight,
+            cfg.content.ocr_highlight_cache,
+            cfg.content.ocr_language.clone(),
+        )
+    };
+    if !enabled {
+        return Ok(Vec::new());
+    }
+    let needles = normalize_terms(terms);
+    if needles.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Cached fast path: boxes captured at index time, no per-preview OCR.
+    if cache {
+        // Clone the Arc out and drop the lock before any await.
+        let idx = content
+            .lock()
+            .map_err(|e| e.to_string())?
+            .as_ref()
+            .map(Arc::clone);
+        if let Some(idx) = idx {
+            let p = path.clone();
+            let cached =
+                tauri::async_runtime::spawn_blocking(move || idx.cached_word_boxes(&p))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            // Some(boxes) => indexed; trust the cache (even if empty). None => not
+            // indexed yet, so fall through to on-demand OCR below.
+            if let Some(words) = cached {
+                return Ok(match_word_boxes(&words, &needles));
+            }
+        }
+    }
+
+    // On-demand OCR via the serialized worker (cache off, or a cache miss).
+    let generation = ocr.generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<Vec<[f32; 4]>, String>>();
+    let tx = ocr.tx.clone();
+    let job = ImageOcrJob { path, needles, lang, generation, reply: reply_tx };
+    tauri::async_runtime::spawn_blocking(move || tx.send(job).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    reply_rx.await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
