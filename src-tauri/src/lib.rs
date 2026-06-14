@@ -51,14 +51,32 @@ struct ContentIndexProgress {
 
 #[tauri::command]
 fn search(query: String, registry: tauri::State<'_, Registry>) -> Vec<providers::SearchResult> {
-    registry.read().unwrap_or_else(|e| e.into_inner()).search(&query)
+    let t = util::profile_search().then(std::time::Instant::now);
+    let out = registry.read().unwrap_or_else(|e| e.into_inner()).search(&query);
+    if let Some(t) = t {
+        eprintln!(
+            "[profile] search cmd took={:.2}ms results={} q={query:?}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            out.len(),
+        );
+    }
+    out
 }
 
 /// Content-scope search (the Tab-activated "Contents" mode): full-text matches
 /// over file contents only, never names/apps.
 #[tauri::command]
 fn search_content(query: String, registry: tauri::State<'_, Registry>) -> Vec<providers::SearchResult> {
-    registry.read().unwrap_or_else(|e| e.into_inner()).search_content(&query)
+    let t = util::profile_search().then(std::time::Instant::now);
+    let out = registry.read().unwrap_or_else(|e| e.into_inner()).search_content(&query);
+    if let Some(t) = t {
+        eprintln!(
+            "[profile] search_content cmd took={:.2}ms results={} q={query:?}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            out.len(),
+        );
+    }
+    out
 }
 
 /// Best-matching 0-based PDF page for `query`, computed on demand for the single
@@ -83,16 +101,13 @@ async fn content_match_page(
             Err(_) => return Ok(None),
         },
     };
-    // Mirror ContentProvider's query cleaning: non-alphanumeric (except apostrophe)
-    // become spaces so FTS sees the same AND-joined terms.
-    let cleaned: String = query
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' })
-        .collect();
-    let fts_query = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    if fts_query.is_empty() {
+    // Reuse ContentProvider's query parsing (dedup + stopword stripping) so the
+    // matched page is chosen from the same selective terms the result list ranked
+    // on - not skewed toward a stopword that appears on every page.
+    let Some(parsed) = content_index::parse_content_query(&query) else {
         return Ok(None);
-    }
+    };
+    let fts_query = parsed.tokens.join(" ");
     Ok(tauri::async_runtime::spawn_blocking(move || idx.best_page(&path, &fts_query))
         .await
         .ok()

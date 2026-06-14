@@ -21,6 +21,66 @@ static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// `image_match_rects`.
 pub(crate) type WordBox = (String, [f32; 4]);
 
+/// Common English stopwords stripped from a content query when meaningful terms
+/// remain. A stopword matches nearly every document, and FTS5 bm25 has no top-k
+/// early exit - `ORDER BY rank` must score *every* matching row before `LIMIT`
+/// cuts - so ranking by a stopword forces a whole-corpus scan. Dropping it bounds
+/// the query to the rare, selective terms that actually drive iteration. An
+/// all-stopword query keeps them but skips ranking (`ContentQuery::ranked`).
+const STOPWORDS: &[&str] = &[
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "if", "in", "into",
+    "is", "it", "its", "no", "not", "of", "on", "or", "such", "that", "the", "their",
+    "then", "there", "these", "they", "this", "to", "was", "will", "with",
+];
+
+/// A user content query parsed into FTS terms. `tokens` are cleaned, deduped
+/// (case-insensitive), and stripped of stopwords when meaningful terms remain.
+/// `ranked` is false only for all-stopword queries, signalling the search to skip
+/// the corpus-wide bm25 sort and just stream the first `LIMIT` matches.
+pub struct ContentQuery {
+    pub tokens: Vec<String>,
+    pub ranked: bool,
+}
+
+/// Parses a raw user query into a [`ContentQuery`]. Non-alphanumeric chars (except
+/// apostrophe) become token separators. Returns `None` when nothing usable remains.
+///
+/// Dedup collapses `the the the` → `the` (AND of a term with itself is the term),
+/// and stopword stripping turns `the report` → `report`; both kill the
+/// pathological common-term cost. When the query is *only* stopwords we keep them
+/// but mark it unranked so the search avoids the whole-corpus bm25 scan.
+pub fn parse_content_query(raw: &str) -> Option<ContentQuery> {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' })
+        .collect();
+
+    // Dedup case-insensitively, preserving first-seen order and original casing.
+    let mut seen = HashSet::new();
+    let mut tokens: Vec<String> = Vec::new();
+    for tok in cleaned.split_whitespace() {
+        if seen.insert(tok.to_lowercase()) {
+            tokens.push(tok.to_string());
+        }
+    }
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let meaningful: Vec<String> = tokens
+        .iter()
+        .filter(|t| !STOPWORDS.contains(&t.to_lowercase().as_str()))
+        .cloned()
+        .collect();
+
+    if meaningful.is_empty() {
+        // All stopwords - keep them but skip ranking (would scan the whole corpus).
+        Some(ContentQuery { tokens, ranked: false })
+    } else {
+        Some(ContentQuery { tokens: meaningful, ranked: true })
+    }
+}
+
 /// Set while a full-scan reindex (full or incremental) is running. Used to
 /// coalesce overlapping reindex triggers so only one drives the progress bar.
 static REINDEX_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -220,15 +280,36 @@ impl ContentIndex {
         Ok(count)
     }
 
-    pub fn search(&self, fts_query: &str, limit: usize) -> rusqlite::Result<Vec<(String, f64, String, i64, u64)>> {
+    /// FTS search for `fts_query`, capped at `limit` rows. When `ranked`, results
+    /// are bm25-ordered (`ORDER BY rank`) - correct but corpus-wide for common
+    /// terms. When not (all-stopword queries), the `ORDER BY rank` is dropped so
+    /// FTS5 streams the first `limit` matches in docid order and stops, turning a
+    /// multi-second whole-corpus scan into a bounded one. `rank` is still selected
+    /// (bm25 is then computed only for the returned rows) so the score wiring is
+    /// unchanged; the values are just arbitrary for the unranked case.
+    pub fn search(&self, fts_query: &str, limit: usize, ranked: bool) -> rusqlite::Result<Vec<(String, f64, String, i64, u64)>> {
+        let profile = util::profile_search();
+        let t_lock = profile.then(std::time::Instant::now);
         let db = util::lock(&self.db);
+        // Time spent here = mutex contention (a reindex's upsert transaction holds
+        // this lock); time after = actual FTS MATCH + snippet() generation.
+        let t_query = t_lock.map(|t| {
+            let waited = t.elapsed();
+            (waited, std::time::Instant::now())
+        });
         // \x02 = STX, \x03 = ETX - used as highlight start/end markers in the snippet.
-        let mut stmt = db.prepare(
+        let sql = if ranked {
             "SELECT content_fts.path, rank, snippet(content_fts, 1, '\x02', '\x03', '…', 20), \
              COALESCE(m.mtime, 0), COALESCE(m.size, 0) \
              FROM content_fts LEFT JOIN file_meta m ON m.path = content_fts.path \
-             WHERE content_fts.text MATCH ? ORDER BY rank LIMIT ?",
-        )?;
+             WHERE content_fts.text MATCH ? ORDER BY rank LIMIT ?"
+        } else {
+            "SELECT content_fts.path, rank, snippet(content_fts, 1, '\x02', '\x03', '…', 20), \
+             COALESCE(m.mtime, 0), COALESCE(m.size, 0) \
+             FROM content_fts LEFT JOIN file_meta m ON m.path = content_fts.path \
+             WHERE content_fts.text MATCH ? LIMIT ?"
+        };
+        let mut stmt = db.prepare(sql)?;
         let results = stmt
             .query_map(params![fts_query, limit as i64], |row| {
                 Ok((
@@ -240,7 +321,16 @@ impl ContentIndex {
                 ))
             })?
             .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Vec<_>>();
+        if let Some((waited, t_query)) = t_query {
+            eprintln!(
+                "[profile] content_index::search lock_wait={:.2}ms query+collect={:.2}ms ranked={ranked} rows={} q={:?}",
+                waited.as_secs_f64() * 1000.0,
+                t_query.elapsed().as_secs_f64() * 1000.0,
+                results.len(),
+                fts_query,
+            );
+        }
         Ok(results)
     }
 
@@ -261,6 +351,7 @@ impl ContentIndex {
     /// earliest page - rather than FTS BM25, which favours shorter pages and would
     /// e.g. pick a repeated header on the last page over the first.
     pub fn best_page(&self, path: &str, fts_query: &str) -> Option<u32> {
+        let t_start = util::profile_search().then(std::time::Instant::now);
         let terms: Vec<String> = fts_query
             .split_whitespace()
             .map(str::to_lowercase)
@@ -295,18 +386,25 @@ impl ContentIndex {
         // coverage so far - that yields max distinct terms, earliest page on ties.
         let mut best: Option<(u32, u32)> = None; // (coverage, page)
         for (page, text) in rows.flatten() {
+            // Split + lowercase the page once, then test term coverage against the
+            // word list. The old code re-split (and the whole-page `to_lowercase`
+            // fed) the text once per term - O(text_len * terms) per page; this is
+            // O(text_len + words * terms) with a single allocation pass.
             let lower = text.to_lowercase();
+            let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
             let cov = terms
                 .iter()
-                .filter(|t| {
-                    lower
-                        .split(|c: char| !c.is_alphanumeric())
-                        .any(|w| w.starts_with(t.as_str()))
-                })
+                .filter(|t| words.iter().any(|w| w.starts_with(t.as_str())))
                 .count() as u32;
             if best.is_none_or(|(bc, _)| cov > bc) {
                 best = Some((cov, page as u32));
             }
+        }
+        if let Some(t) = t_start {
+            eprintln!(
+                "[profile] content_index::best_page took={:.2}ms path={path:?}",
+                t.elapsed().as_secs_f64() * 1000.0,
+            );
         }
         best.map(|(_, page)| page)
     }

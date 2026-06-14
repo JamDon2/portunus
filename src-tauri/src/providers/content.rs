@@ -32,20 +32,16 @@ impl Provider for ContentProvider {
             return vec![];
         }
 
-        // Replace non-alphanumeric chars (except apostrophe) with spaces,
-        // then join tokens - FTS5 treats space-separated terms as AND.
-        let cleaned: String = q
-            .chars()
-            .map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' })
-            .collect();
-        let tokens: Vec<&str> = cleaned.split_whitespace().collect();
-        let fts_query = tokens.join(" ");
-
-        if fts_query.is_empty() {
+        // Parse into deduped, stopword-stripped FTS terms. Dedup + stopword
+        // stripping bound the common-term cost; an all-stopword query comes back
+        // `ranked = false` so the search skips the corpus-wide bm25 sort.
+        let Some(parsed) = crate::content_index::parse_content_query(q) else {
             return vec![];
-        }
+        };
+        // FTS5 treats space-separated terms as AND.
+        let fts_query = parsed.tokens.join(" ");
 
-        match self.index.search(&fts_query, self.max_results.max(1)) {
+        match self.index.search(&fts_query, self.max_results.max(1), parsed.ranked) {
             Ok(results) => results
                 .into_iter()
                 .map(|(path, rank, snip, mtime, size)| {

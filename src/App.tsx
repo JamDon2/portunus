@@ -249,6 +249,10 @@ export default function App() {
     setSearching(true);
     setSearchError(false);
     const cmd = contentMode ? "search_content" : "search";
+    // Content search is the heavy path (FTS + snippet + per-keystroke preview
+    // match-page), so coalesce keystrokes harder there. Name/app search is cheap
+    // and stays near-instant.
+    const debounceMs = contentMode ? 90 : 10;
     const t = setTimeout(() => {
       invoke<SearchResult[]>(cmd, { query }).then(r => {
         if (!cancelled) { setResults(r); setSearching(false); setResolvedEmpty(r.length === 0); }
@@ -258,7 +262,7 @@ export default function App() {
         console.error(`[search] ${cmd} failed:`, e);
         if (!cancelled) { setResults([]); setSearching(false); setResolvedEmpty(false); setSearchError(true); }
       });
-    }, 10);
+    }, debounceMs);
     return () => { cancelled = true; clearTimeout(t); };
   }, [query, clipboardMode, contentMode]);
 

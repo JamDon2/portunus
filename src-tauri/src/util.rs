@@ -13,6 +13,15 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// True when `PORTUNUS_PROFILE_SEARCH` is set in the environment. Gates the
+/// per-keystroke search timing logs; cached on first read so the hot path pays
+/// one atomic load, not an env lookup per query.
+pub fn profile_search() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("PORTUNUS_PROFILE_SEARCH").is_some())
+}
+
 /// Read-locks an `RwLock`, recovering from poisoning. See [`lock`].
 pub fn read<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
     l.read().unwrap_or_else(|e| e.into_inner())
