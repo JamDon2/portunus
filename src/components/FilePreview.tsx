@@ -1358,6 +1358,26 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], hi
 
   const [copied, setCopied] = useState(false);
 
+  // Content-match page for a PDF preview, fetched lazily: the backend no longer
+  // computes it for every search result (that ran a per-PDF rescan on each
+  // keystroke), so we resolve it here only for the file actually being previewed.
+  // `null` while pending - we hold the PdfPreview mount until it resolves so the
+  // reader seeds straight to the match page (no page-0 flash then jump). Empty
+  // `terms` (non-content file search) skips the fetch and opens at page 0.
+  const termsKey = terms.join(" ");
+  const [matchPage, setMatchPage] = useState<number | null>(() => (isPdf && terms.length ? null : 0));
+  useEffect(() => {
+    if (!isPdf || !terms.length) { setMatchPage(0); return; }
+    let cancelled = false;
+    setMatchPage(null);
+    invoke<number | null>("content_match_page", { path: filePath, query: termsKey })
+      .then(p => { if (!cancelled) setMatchPage(p ?? 0); })
+      .catch(e => { console.error("[preview] content_match_page failed:", e); if (!cancelled) setMatchPage(0); });
+    return () => { cancelled = true; };
+    // termsKey stands in for the terms array (stable string identity).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, isPdf, termsKey]);
+
   const handleCopy = () => {
     navigator.clipboard.writeText(filePath);
     setCopied(true);
@@ -1402,7 +1422,7 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], hi
       </div>
       )}
 
-      {isPdf && <PdfPreview path={filePath} page={result.match_page ?? 0} terms={terms} highlight={highlight} quicklook={quicklook} />}
+      {isPdf && matchPage != null && <PdfPreview path={filePath} page={matchPage} terms={terms} highlight={highlight} quicklook={quicklook} />}
       {isImage && <ImagePreview path={filePath} terms={terms} highlight={highlight} quicklook={quicklook} />}
       {isSvgFile && <SvgPreview path={filePath} />}
       {isCsvFile && <CsvPreview path={filePath} delim={result.title.toLowerCase().endsWith(".tsv") ? "\t" : ","} terms={terms} />}

@@ -186,6 +186,7 @@ pub fn rebuild_providers(
         let ci_state = Arc::clone(content_state);
         let cb = Arc::clone(progress_cb);
         let ncb = Arc::clone(notify_cb);
+        let max_results = new_cfg.general.max_results;
         std::thread::spawn(move || {
             // Hold the lock for the full operation so two rapid config saves
             // can't race each other on the same DB tables.
@@ -210,7 +211,10 @@ pub fn rebuild_providers(
                 // immediately searchable, even before any reindex completes.
                 reg2.write().unwrap().replace(
                     "content",
-                    Some(Box::new(providers::content::ContentProvider::new(Arc::clone(&idx)))),
+                    Some(Box::new(providers::content::ContentProvider::new(
+                        Arc::clone(&idx),
+                        max_results,
+                    ))),
                 );
 
                 // "Heavy" changes require a full clear+rebuild, which is expensive.

@@ -11,11 +11,14 @@ const HL_CLASS = "preview-hl";
 export function deriveContentTerms(query: string): string[] {
   const q = query.trim();
   if (!q) return [];
-  return q
+  const terms = q
     // Same cleaning as content.rs: keep alphanumerics + apostrophe, split on the rest.
     .replace(/[^\p{L}\p{N}']+/gu, " ")
     .split(/\s+/)
     .filter((t) => t.length >= 2);
+  // Dedup: a repeated-word query ("the on the the on the") would otherwise make the
+  // PDF highlight backend re-scan and re-stamp the same boxes once per duplicate.
+  return [...new Set(terms)];
 }
 
 function escapeRegex(s: string): string {

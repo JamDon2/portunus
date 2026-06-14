@@ -353,14 +353,18 @@ pub async fn pdf_match_rects(
     reply_rx.await.map_err(|e| e.to_string())?
 }
 
-/// Lowercases search terms and drops 1-char noise, mirroring the frontend's
-/// `deriveContentTerms` and the content provider's tokenization, so preview
-/// matching lands on the same terms the index matched.
+/// Lowercases search terms, drops 1-char noise, and deduplicates, mirroring the
+/// frontend's `deriveContentTerms` and the content provider's tokenization, so
+/// preview matching lands on the same terms the index matched. Dedup matters for
+/// repeated-word queries (e.g. "the on the the on the"): without it each duplicate
+/// needle re-scans the page and stamps the same boxes again.
 fn normalize_terms<I: IntoIterator<Item = String>>(terms: I) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     terms
         .into_iter()
         .map(|t| t.to_lowercase())
         .filter(|t| t.chars().count() >= 2)
+        .filter(|t| seen.insert(t.clone()))
         .collect()
 }
 
@@ -430,12 +434,23 @@ fn page_match_rects(
     }
     let chars: Vec<char> = lower.chars().collect();
 
+    // Hard cap on boxes per page: a stopword query ("the") matches nearly every
+    // word, and rendering hundreds of overlay divs per keystroke is the dominant
+    // highlight cost. Beyond this many the highlight is visual noise anyway, so we
+    // stop scanning - and log it rather than silently truncating.
+    const MAX_RECTS: usize = 400;
+
     let is_word = |c: char| c.is_alphanumeric();
     let mut rects: Vec<[f32; 4]> = Vec::new();
-    for needle in &needles {
+    let mut capped = false;
+    'needles: for needle in &needles {
         let nchars: Vec<char> = needle.chars().collect();
         let mut i = 0;
         while i + nchars.len() <= chars.len() {
+            if rects.len() >= MAX_RECTS {
+                capped = true;
+                break 'needles;
+            }
             // Word boundary: match must start a word (prefix match like the regex).
             let at_boundary = i == 0 || !is_word(chars[i - 1]);
             if at_boundary && chars[i..i + nchars.len()] == nchars[..] {
@@ -452,7 +467,11 @@ fn page_match_rects(
         }
     }
     if log {
-        eprintln!("[pdf] rects: {} box(es) on page {idx}", rects.len());
+        eprintln!(
+            "[pdf] rects: {} box(es) on page {idx}{}",
+            rects.len(),
+            if capped { " (capped)" } else { "" }
+        );
     }
     Ok(rects)
 }

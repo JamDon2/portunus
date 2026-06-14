@@ -61,6 +61,44 @@ fn search_content(query: String, registry: tauri::State<'_, Registry>) -> Vec<pr
     registry.read().unwrap_or_else(|e| e.into_inner()).search_content(&query)
 }
 
+/// Best-matching 0-based PDF page for `query`, computed on demand for the single
+/// file being previewed. Split out of `search_content` so the per-PDF page rescan
+/// runs once for the previewed file rather than for every result on each keystroke
+/// (the old behaviour dominated common-word content-search latency). Returns None
+/// when the index is unavailable/contended or no page matched - the preview then
+/// just opens at page 0. The blocking FTS work runs off the main thread.
+#[tauri::command]
+async fn content_match_page(
+    path: String,
+    query: String,
+    state: tauri::State<'_, ContentState>,
+) -> Result<Option<u32>, ()> {
+    // try_lock so a long-running reindex (which holds this lock) never stalls the
+    // preview; fall back to a fresh read-only open of the on-disk DB.
+    let idx = state.try_lock().ok().and_then(|g| g.as_ref().map(Arc::clone));
+    let idx = match idx {
+        Some(i) => i,
+        None => match content_index::ContentIndex::open() {
+            Ok(i) => Arc::new(i),
+            Err(_) => return Ok(None),
+        },
+    };
+    // Mirror ContentProvider's query cleaning: non-alphanumeric (except apostrophe)
+    // become spaces so FTS sees the same AND-joined terms.
+    let cleaned: String = query
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' })
+        .collect();
+    let fts_query = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if fts_query.is_empty() {
+        return Ok(None);
+    }
+    Ok(tauri::async_runtime::spawn_blocking(move || idx.best_page(&path, &fts_query))
+        .await
+        .ok()
+        .flatten())
+}
+
 #[derive(serde::Serialize, Clone)]
 struct DepStatus {
     /// Stable identifier the frontend can match against (e.g. "dict").
@@ -437,7 +475,10 @@ fn run_full_reindex(
     };
     registry.write().unwrap().replace(
         "content",
-        Some(Box::new(providers::content::ContentProvider::new(Arc::clone(&idx)))),
+        Some(Box::new(providers::content::ContentProvider::new(
+            Arc::clone(&idx),
+            cfg.general.max_results,
+        ))),
     );
     if full {
         eprintln!("[content] full reindex started (clearing index)");
@@ -799,7 +840,7 @@ pub fn run() {
                     bg_registry
                         .write()
                         .unwrap()
-                        .register(providers::content::ContentProvider::new(Arc::clone(&idx)));
+                        .register(providers::content::ContentProvider::new(Arc::clone(&idx), max_results));
                     let cc = content_cfg.clone();
                     let cb = Arc::clone(&startup_cb);
                     std::thread::spawn(move || {
@@ -828,6 +869,7 @@ pub fn run() {
             // Core
             search,
             search_content,
+            content_match_page,
             launch_app,
             reveal_file,
             hide_window,

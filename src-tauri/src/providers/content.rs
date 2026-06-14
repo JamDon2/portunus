@@ -6,11 +6,16 @@ use crate::content_index::ContentIndex;
 
 pub struct ContentProvider {
     index: Arc<ContentIndex>,
+    /// SQL row cap for the FTS query. Mirrors the launcher's `max_results` so we
+    /// only `snippet()` the rows that will actually be shown - snippet generation
+    /// is the dominant per-query cost, so fetching the old fixed 50 and discarding
+    /// all but `max_results` wasted most of it on common-word queries.
+    max_results: usize,
 }
 
 impl ContentProvider {
-    pub fn new(index: Arc<ContentIndex>) -> Self {
-        Self { index }
+    pub fn new(index: Arc<ContentIndex>, max_results: usize) -> Self {
+        Self { index, max_results }
     }
 }
 
@@ -40,7 +45,7 @@ impl Provider for ContentProvider {
             return vec![];
         }
 
-        match self.index.search(&fts_query, 50) {
+        match self.index.search(&fts_query, self.max_results.max(1)) {
             Ok(results) => results
                 .into_iter()
                 .map(|(path, rank, snip, mtime, size)| {
@@ -56,11 +61,11 @@ impl Provider for ContentProvider {
                         .unwrap_or("")
                         .to_owned();
                     let escaped = path.replace('"', "\\\"");
-                    let match_page = if path.to_lowercase().ends_with(".pdf") {
-                        self.index.best_page(&path, &fts_query)
-                    } else {
-                        None
-                    };
+                    // `match_page` is computed lazily by the `content_match_page`
+                    // command only for the file actually being previewed - computing
+                    // it here ran a full per-PDF page rescan for every one of the (up
+                    // to 50) results on each keystroke, which for common-word queries
+                    // dominated content-search latency.
                     let created = std::fs::metadata(&path)
                         .ok()
                         .and_then(|m| m.created().ok())
@@ -77,7 +82,6 @@ impl Provider for ContentProvider {
                         file_size: if size > 0 { Some(size) } else { None },
                         created,
                         modified: if mtime > 0 { Some(mtime as u64) } else { None },
-                        match_page,
                         ..Default::default()
                     }
                 })
