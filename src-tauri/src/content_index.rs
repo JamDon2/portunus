@@ -275,15 +275,13 @@ impl ContentIndex {
         let mut db = util::lock(&self.db);
         let stale: Vec<String> = {
             let mut stmt = db.prepare("SELECT path FROM file_meta")?;
-            let paths: Vec<String> = stmt
+            let stale = stmt
                 .query_map([], |row| row.get::<_, String>(0))?
                 .filter_map(|r| r.ok())
+                .filter(|p| !live_paths.contains(p))
                 .collect();
-            paths
-        }
-        .into_iter()
-        .filter(|p| !live_paths.contains(p))
-        .collect();
+            stale
+        };
         let count = stale.len();
         let tx = db.transaction()?;
         for path in &stale {
@@ -311,18 +309,14 @@ impl ContentIndex {
             (waited, std::time::Instant::now())
         });
         // \x02 = STX, \x03 = ETX - used as highlight start/end markers in the snippet.
-        let sql = if ranked {
+        let order = if ranked { "ORDER BY rank " } else { "" };
+        let sql = format!(
             "SELECT content_fts.path, rank, snippet(content_fts, 1, '\x02', '\x03', '…', 20), \
              COALESCE(m.mtime, 0), COALESCE(m.size, 0) \
              FROM content_fts LEFT JOIN file_meta m ON m.path = content_fts.path \
-             WHERE content_fts.text MATCH ? ORDER BY rank LIMIT ?"
-        } else {
-            "SELECT content_fts.path, rank, snippet(content_fts, 1, '\x02', '\x03', '…', 20), \
-             COALESCE(m.mtime, 0), COALESCE(m.size, 0) \
-             FROM content_fts LEFT JOIN file_meta m ON m.path = content_fts.path \
-             WHERE content_fts.text MATCH ? LIMIT ?"
-        };
-        let mut stmt = db.prepare(sql)?;
+             WHERE content_fts.text MATCH ? {order}LIMIT ?"
+        );
+        let mut stmt = db.prepare(&sql)?;
         let results = stmt
             .query_map(params![fts_query, limit as i64], |row| {
                 Ok((
@@ -533,12 +527,7 @@ fn with_leptess<R>(
 }
 
 fn ocr_file(path: &str, lang: &str) -> Result<String, String> {
-    with_leptess(lang, |api| {
-        api.set_image(path).map_err(|e| format!("{e:?}"))?;
-        let tsv = api.get_tsv_text(0).map_err(|e| format!("{e:?}"))?;
-        let (w, h) = api.get_image_dimensions().unwrap_or((0, 0));
-        Ok(parse_tsv(&tsv, w, h).0)
-    })
+    ocr_file_text_and_boxes(path, lang).map(|(text, _)| text)
 }
 
 /// OCR an image, returning both its confidence-filtered text and its word boxes
@@ -651,69 +640,65 @@ pub(crate) fn ocr_bytes(bytes: &[u8], lang: &str) -> Result<String, String> {
 
 fn extract_pdf(path: &str, ocr_fallback: bool, lang: &str) -> Result<String, String> {
     let text = pdftotext(path)?;
-    {
-        if text.trim().len() >= 50 || !ocr_fallback {
+    if text.trim().len() >= 50 || !ocr_fallback {
+        return Ok(text);
+    }
+
+    // No meaningful text layer - render pages to images via pdftoppm and OCR each
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "portunus_pdftoppm_{}_{}",
+        std::process::id(),
+        TMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+    ));
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+    let prefix = tmp_dir.join("page");
+
+    let result = crate::runtime_assets::poppler_command("pdftoppm")
+        .args(["-tiff", "-r", "150", path, prefix.to_str().unwrap_or("page")])
+        .output();
+
+    let ocr_text = match result {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::remove_dir_all(&tmp_dir).ok();
             return Ok(text);
         }
-
-        // No meaningful text layer - render pages to images via pdftoppm and OCR each
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "portunus_pdftoppm_{}_{}",
-            std::process::id(),
-            TMP_COUNTER.fetch_add(1, Ordering::Relaxed),
-        ));
-        std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
-        let prefix = tmp_dir.join("page");
-
-        let result = crate::runtime_assets::poppler_command("pdftoppm")
-            .args(["-tiff", "-r", "150", path, prefix.to_str().unwrap_or("page")])
-            .output();
-
-        let ocr_text = match result {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::remove_dir_all(&tmp_dir).ok();
-                return Ok(text);
-            }
-            Err(e) => {
-                std::fs::remove_dir_all(&tmp_dir).ok();
-                return Err(e.to_string());
-            }
-            Ok(out) if !out.status.success() => {
-                std::fs::remove_dir_all(&tmp_dir).ok();
-                return Ok(text);
-            }
-            Ok(_) => {
-                let mut combined = String::new();
-                let mut page_files: Vec<_> = std::fs::read_dir(&tmp_dir)
-                    .ok()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.path().extension().and_then(|x| x.to_str()) == Some("tif")
-                    })
-                    .collect();
-                page_files.sort_by_key(|e| e.file_name());
-                for entry in page_files {
-                    if let Some(p) = entry.path().to_str() {
-                        match ocr_file(p, lang) {
-                            // Separate pages with a form-feed so they split the same
-                            // way pdftotext output does (used for per-page indexing).
-                            Ok(t) => {
-                                combined.push_str(&t);
-                                combined.push('\u{000C}');
-                            }
-                            Err(e) => eprintln!("[content] ocr page failed {p}: {e}"),
+        Err(e) => {
+            std::fs::remove_dir_all(&tmp_dir).ok();
+            return Err(e.to_string());
+        }
+        Ok(out) if !out.status.success() => {
+            std::fs::remove_dir_all(&tmp_dir).ok();
+            return Ok(text);
+        }
+        Ok(_) => {
+            let mut combined = String::new();
+            let mut page_files: Vec<_> = std::fs::read_dir(&tmp_dir)
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("tif"))
+                .collect();
+            page_files.sort_by_key(|e| e.file_name());
+            for entry in page_files {
+                if let Some(p) = entry.path().to_str() {
+                    match ocr_file(p, lang) {
+                        // Separate pages with a form-feed so they split the same
+                        // way pdftotext output does (used for per-page indexing).
+                        Ok(t) => {
+                            combined.push_str(&t);
+                            combined.push('\u{000C}');
                         }
+                        Err(e) => eprintln!("[content] ocr page failed {p}: {e}"),
                     }
                 }
-                combined
             }
-        };
+            combined
+        }
+    };
 
-        std::fs::remove_dir_all(&tmp_dir).ok();
-        Ok(ocr_text)
-    }
+    std::fs::remove_dir_all(&tmp_dir).ok();
+    Ok(ocr_text)
 }
 
 // Internal dispatch: these define HOW text is extracted, not which extensions are indexed.
@@ -1146,33 +1131,23 @@ pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentC
         }
     }
 
-    match extract_text(&path_str, cfg) {
-        Ok((text, boxes)) if !text.trim().is_empty() => {
-            let pages = pdf_pages(&path_str, &text);
-            match index.upsert_batch(&[FileUpdate { path: path_str.clone(), text, pages, boxes, mtime, size }]) {
-                Ok(()) => { eprintln!("[content] indexed {path_str}"); true }
-                Err(e) => { eprintln!("[content] event upsert failed {path_str}: {e}"); false }
-            }
+    // Empty text (extract found nothing) or an extract error both write an
+    // empty-text tombstone: upsert_batch skips the content_fts/pdf_page_fts inserts
+    // for empty text but still records file_meta, so the mtime+size fast-path skips
+    // this file next time instead of re-extracting it, and it stays out of search
+    // just as remove_path would leave it.
+    let (text, boxes) = match extract_text(&path_str, cfg) {
+        Ok((t, b)) if !t.trim().is_empty() => (t, b),
+        Ok(_) => (String::new(), Vec::new()),
+        Err(e) => {
+            eprintln!("[content] event extract failed {path_str}: {e}");
+            (String::new(), Vec::new())
         }
-        // Empty text or an extract error: write an empty-text tombstone so the
-        // mtime+size skip catches this file next time instead of re-extracting it.
-        // upsert_batch clears any prior content_fts rows but writes no new one, so
-        // it drops out of search just as remove_path would.
-        res => {
-            if let Err(e) = &res {
-                eprintln!("[content] event extract failed {path_str}: {e}");
-            }
-            index
-                .upsert_batch(&[FileUpdate {
-                    path: path_str.clone(),
-                    text: String::new(),
-                    pages: None,
-                    boxes: Vec::new(),
-                    mtime,
-                    size,
-                }])
-                .is_ok()
-        }
+    };
+    let pages = pdf_pages(&path_str, &text);
+    match index.upsert_batch(&[FileUpdate { path: path_str.clone(), text, pages, boxes, mtime, size }]) {
+        Ok(()) => { eprintln!("[content] indexed {path_str}"); true }
+        Err(e) => { eprintln!("[content] event upsert failed {path_str}: {e}"); false }
     }
 }
 
