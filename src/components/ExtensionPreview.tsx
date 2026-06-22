@@ -13,12 +13,14 @@ const cache = new Map<string, PreviewContent | null>();
 const CACHE_MAX = 100;
 
 // Extension reloads (Rescan button, `portunus --reload-extensions`) emit
-// search-invalidated after swapping instances - drop cached previews and bump
+// extensions-reloaded after swapping instances - drop cached previews and bump
 // the version so even the currently-shown preview refetches (its result id is
 // unchanged, so the id-keyed effect alone wouldn't rerun).
+// NOT search-invalidated: that fires on every file/content watcher event, which
+// would blank and refetch the preview on unrelated filesystem churn (flash).
 let cacheVersion = 0;
 const versionListeners = new Set<() => void>();
-void listen("search-invalidated", () => {
+void listen("extensions-reloaded", () => {
   cache.clear();
   cacheVersion++;
   versionListeners.forEach(l => l());

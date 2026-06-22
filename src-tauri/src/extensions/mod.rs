@@ -356,5 +356,8 @@ pub fn rescan_extensions(
         });
         sync(&registry, &enabled, &kv_store, &frecency, true, Some(notify));
         let _ = app.emit("search-invalidated", ());
+        // Distinct signal so ExtensionPreview drops its cache only on a real
+        // extension reload, not on every file-watcher search-invalidated.
+        let _ = app.emit("extensions-reloaded", ());
     });
 }
