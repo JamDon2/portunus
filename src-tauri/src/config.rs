@@ -92,7 +92,7 @@ pub struct GeneralConfig {
 
 impl Default for GeneralConfig {
     fn default() -> Self {
-        Self { max_results: 20, onboarding_completed: false, layer_shell: false }
+        Self { max_results: 20, onboarding_completed: false, layer_shell: true }
     }
 }
 

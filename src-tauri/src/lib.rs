@@ -890,6 +890,20 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            // Only the launcher dismisses on these events; the settings window
+            // manages its own lifecycle.
+            if window.label() != "main" {
+                return;
+            }
+            // The compositor's "close active window" (e.g. Super+C / killactive)
+            // sends CloseRequested. Default behavior destroys the window and
+            // exits the app; instead hide and stay alive for the next --show.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // Core
             search,
