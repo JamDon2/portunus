@@ -7,13 +7,62 @@ use notify_debouncer_full::{new_debouncer, notify::RecursiveMode, notify::Watche
 
 use crate::{config, content_index, provider_reload, providers, ContentWatcherTx, FileWatcherTx, Registry, SharedFileEntries};
 
+/// Watches every directory under `root` whose own depth below `root` is `<= max_below`,
+/// NON-recursively and WITHOUT following symlinks. Watching a dir surfaces events for its
+/// direct children, so a root with index-`depth` D needs dirs at depth `0..=D-1` watched
+/// (callers pass `max_below = D-1`).
+///
+/// Why not `RecursiveMode::Recursive`: notify 6.1.1 ignores depth and hard-follows symlinks
+/// (its inotify backend walks with `WalkDir::follow_links(true)`). On a home dir that descends
+/// through e.g. a wine `dosdevices/z:` -> `/` symlink and re-watches real dirs under bogus deep
+/// paths, which corrupts event-path reconstruction (events arrive under the symlinked path) and
+/// explodes the watch count. Bounding depth + `follow_links(false)` avoids both.
+fn watch_tree(
+    watcher: &mut impl Watcher,
+    start: &std::path::Path,
+    max_below: usize,
+    watched: &mut HashSet<PathBuf>,
+) {
+    for entry in walkdir::WalkDir::new(start)
+        .max_depth(max_below)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        let p = entry.path().to_path_buf();
+        if watched.insert(p.clone()) {
+            if let Err(e) = watcher.watch(&p, RecursiveMode::NonRecursive) {
+                eprintln!("[watcher] watch {:?}: {e}", p);
+            }
+        }
+    }
+}
+
+/// Watch each configured `(root, depth)`, skipping dirs already in `watched`.
+fn watch_roots(
+    watcher: &mut impl Watcher,
+    roots: &[(PathBuf, usize)],
+    watched: &mut HashSet<PathBuf>,
+) {
+    for (root, depth) in roots {
+        if root.is_dir() {
+            if let Some(max_below) = depth.checked_sub(1) {
+                watch_tree(watcher, root, max_below, watched);
+            }
+        }
+    }
+}
+
 /// Spawns a watcher thread that watches dirs derived from `initial_cfg`.
 /// New dirs added by subsequent config updates (sent via the returned Sender) are added to the watch set.
-/// `get_dirs` extracts the list of directories to watch from a config snapshot.
+/// `get_dirs` extracts the list of `(directory, index-depth)` pairs to watch from a config snapshot.
 /// `on_events` is called for each debounced batch of filesystem events.
 fn run_dir_watcher<Cfg>(
     initial_cfg: Cfg,
-    get_dirs: impl Fn(&Cfg) -> Vec<PathBuf> + Send + 'static,
+    get_dirs: impl Fn(&Cfg) -> Vec<(PathBuf, usize)> + Send + 'static,
     mut on_events: impl FnMut(&[DebouncedEvent], &Cfg) + Send + 'static,
 ) -> std::sync::mpsc::Sender<Cfg>
 where
@@ -37,29 +86,39 @@ where
         let mut watched_dirs: HashSet<PathBuf> = HashSet::new();
 
         // Watch dirs from the initial config.
-        for dir in get_dirs(&current_cfg) {
-            if dir.is_dir() && watched_dirs.insert(dir.clone()) {
-                if let Err(e) = debouncer.watcher().watch(&dir, RecursiveMode::Recursive) {
-                    eprintln!("[watcher] watch {:?}: {e}", dir);
-                }
-            }
-        }
+        watch_roots(debouncer.watcher(), &get_dirs(&current_cfg), &mut watched_dirs);
 
         loop {
             // Drain any pending config updates, adding newly-mentioned dirs to the watch set.
             while let Ok(new_cfg) = cfg_rx.try_recv() {
-                for dir in get_dirs(&new_cfg) {
-                    if dir.is_dir() && watched_dirs.insert(dir.clone()) {
-                        if let Err(e) = debouncer.watcher().watch(&dir, RecursiveMode::Recursive) {
-                            eprintln!("[watcher] watch {:?}: {e}", dir);
-                        }
-                    }
-                }
+                watch_roots(debouncer.watcher(), &get_dirs(&new_cfg), &mut watched_dirs);
                 current_cfg = new_cfg;
             }
 
             match ev_rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(Ok(events)) => on_events(&events, &current_cfg),
+                Ok(Ok(events)) => {
+                    // NonRecursive watches don't auto-cover dirs created after startup
+                    // (RecursiveMode::Recursive did). Watch any newly-created in-scope dir
+                    // before processing, so its children fire events.
+                    let roots = get_dirs(&current_cfg);
+                    for ev in &events {
+                        for p in &ev.event.paths {
+                            if !p.is_dir() {
+                                continue;
+                            }
+                            for (root, depth) in &roots {
+                                let Ok(rel) = p.strip_prefix(root) else { continue };
+                                let r = rel.components().count();
+                                // Need this dir's children in scope: r <= depth-1.
+                                if let Some(max_below) = (depth.saturating_sub(1)).checked_sub(r) {
+                                    watch_tree(debouncer.watcher(), p, max_below, &mut watched_dirs);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    on_events(&events, &current_cfg);
+                }
                 Ok(Err(errs)) => {
                     for e in errs {
                         eprintln!("[watcher] {e}");
@@ -188,7 +247,7 @@ pub fn start_content_watcher(
     run_dir_watcher(
         initial_cfg,
         |cfg: &config::ContentConfig| {
-            cfg.dirs.iter().map(|d| config::Config::expand_path(&d.path)).collect()
+            cfg.dirs.iter().map(|d| (config::Config::expand_path(&d.path), d.depth)).collect()
         },
         move |events, current_cfg| {
             if !current_cfg.enabled {
@@ -244,55 +303,50 @@ pub fn start_file_watcher(
     run_dir_watcher(
         initial_cfg,
         |cfg: &config::FilesConfig| {
-            cfg.dirs.iter().map(|d| config::Config::expand_path(&d.path)).collect()
+            cfg.dirs.iter().map(|d| (config::Config::expand_path(&d.path), d.depth)).collect()
         },
         move |events, current_cfg| {
-            use notify_debouncer_full::notify::{event::ModifyKind, EventKind};
-
             let dirs_with_depth: Vec<(PathBuf, usize)> = current_cfg
                 .dirs
                 .iter()
                 .map(|d| (config::Config::expand_path(&d.path), d.depth))
                 .collect();
 
+            // Kind-agnostic, mirroring the content watcher: the debouncer coalesces
+            // create+write and does not reliably surface new files as EventKind::Create,
+            // so classifying by kind drops events. Instead, re-resolve each touched path:
+            // exists → upsert (drop stale entry + subtree, re-add fresh), gone → remove.
+            let mut touched: Vec<PathBuf> = vec![];
+            for ev in events {
+                for p in &ev.event.paths {
+                    if !touched.contains(p) {
+                        touched.push(p.clone());
+                    }
+                }
+            }
+
             let mut to_add: Vec<providers::files::FileEntry> = vec![];
             let mut to_remove: Vec<String> = vec![];
 
-            for ev in events {
-                let paths = &ev.event.paths;
-                match &ev.event.kind {
-                    EventKind::Create(_) => {
-                        for path in paths {
-                            if let Some((base, depth)) = find_dir_for(path, &dirs_with_depth) {
-                                to_add.extend(providers::files::FileProvider::entries_for_path(
-                                    path, base, depth,
-                                ));
-                            }
-                        }
+            for path in &touched {
+                if path.exists() {
+                    if let Some((base, depth)) = find_dir_for(path, &dirs_with_depth) {
+                        // ponytail: re-walks a dir's subtree on any event for that dir;
+                        // debounced + depth-bounded (default 2). Narrow by kind if it bites.
+                        to_remove.push(path.to_string_lossy().into_owned());
+                        to_add.extend(providers::files::FileProvider::entries_for_path(
+                            path, base, depth,
+                        ));
                     }
-                    EventKind::Remove(_) => {
-                        for path in paths {
-                            to_remove.push(path.to_string_lossy().into_owned());
-                        }
-                    }
-                    // Handle all rename variants uniformly:
-                    // a path that still exists is the destination; one that is gone is the source.
-                    EventKind::Modify(ModifyKind::Name(_)) => {
-                        for path in paths {
-                            if path.exists() {
-                                if let Some((base, depth)) = find_dir_for(path, &dirs_with_depth) {
-                                    to_add.extend(providers::files::FileProvider::entries_for_path(
-                                        path, base, depth,
-                                    ));
-                                }
-                            } else {
-                                to_remove.push(path.to_string_lossy().into_owned());
-                            }
-                        }
-                    }
-                    _ => {}
+                } else {
+                    to_remove.push(path.to_string_lossy().into_owned());
                 }
             }
+
+            // A batch touching both a dir and a descendant re-walks the subtree and
+            // also upserts the descendant, yielding the same path twice. Dedup.
+            to_add.sort_by(|a, b| a.path.cmp(&b.path));
+            to_add.dedup_by(|a, b| a.path == b.path);
 
             if !to_add.is_empty() || !to_remove.is_empty() {
                 let mut guard = entries.write().unwrap();
