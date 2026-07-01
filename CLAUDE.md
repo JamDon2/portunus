@@ -13,6 +13,16 @@ bun x tsc --noEmit                               # type-check TypeScript only
 
 Package manager is **bun**, not npm or yarn.
 
+## Releasing
+
+Bundle filenames come from the **`src-tauri/Cargo.toml` `version`** field (Tauri reads it; there is no `version` in `tauri.conf.json`). A `bun tauri build` produces `portunus_<version>_amd64.deb` / `.AppImage`.
+
+Before tagging/releasing `vX.Y.Z`, bump **both** version fields to `X.Y.Z` and rebuild:
+- `src-tauri/Cargo.toml` `version` — drives the bundle filenames.
+- `package.json` `version` — keep in sync.
+
+If you forget, the artifacts keep the old version in their names while the tag says the new one, so `packaging/aur/PKGBUILD` (which builds its download URL as `portunus_$pkgver_amd64.deb`) 404s. After building, update `sha256sums` in `packaging/aur/PKGBUILD` to the new deb's sha256 and upload the correctly-named assets to the release.
+
 ## Architecture
 
 Portunus is a Tauri 2 app: a Rust backend exposed via Tauri IPC to a React 19 / TypeScript frontend. The window is decorationless, transparent, always-on-top, and hidden at startup - it surfaces only when signaled via `portunus --show` (Unix socket IPC).
