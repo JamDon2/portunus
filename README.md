@@ -16,7 +16,7 @@ your clipboard history, or search the text inside your documents. One box, no mo
 
 [Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Themes](#themes) · [Building](#building-from-source)
 
-<video src="https://github.com/SzilBalazs/portunus/raw/master/.github/assets/hero.mp4" poster=".github/assets/hero.png" width="720" controls muted></video>
+<video src="https://github.com/user-attachments/assets/16089ec3-737b-4b20-96c9-b89aa615c4b2" width="720" controls muted></video>
 
 <img src=".github/assets/hero.png" alt="Portunus launcher" width="720" />
 
