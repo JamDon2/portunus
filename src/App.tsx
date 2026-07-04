@@ -246,16 +246,32 @@ export default function App() {
       setResults([]); setSearching(false); setResolvedEmpty(false); return;
     }
     let cancelled = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     setSearching(true);
     setSearchError(false);
+    // Clear any prior empty verdict so a resumed query doesn't keep the old
+    // "no results" state visible while the new search is in flight.
+    setResolvedEmpty(false);
     const cmd = contentMode ? "search_content" : "search";
     // Content search is the heavy path (FTS + snippet + per-keystroke preview
     // match-page), so coalesce keystrokes harder there. Name/app search is cheap
     // and stays near-instant.
     const debounceMs = contentMode ? 90 : 10;
+    // A dead prefix mid-word (or the porter stem gap prefix matching can't cover)
+    // resolves to zero for a beat before the next keystroke matches. Hold the
+    // empty verdict behind this settle so the list stays neutral-blank instead of
+    // flashing "no results" while the user is still typing.
+    const EMPTY_SETTLE_MS = 220;
     const t = setTimeout(() => {
       invoke<SearchResult[]>(cmd, { query }).then(r => {
-        if (!cancelled) { setResults(r); setSearching(false); setResolvedEmpty(r.length === 0); }
+        if (cancelled) return;
+        setResults(r);
+        setSearching(false);
+        if (r.length === 0) {
+          graceTimer = setTimeout(() => { if (!cancelled) setResolvedEmpty(true); }, EMPTY_SETTLE_MS);
+        } else {
+          setResolvedEmpty(false);
+        }
       }).catch(e => {
         // Surface the failure as an error row rather than an empty result, which
         // would wrongly offer the "search file contents" hint.
@@ -263,7 +279,7 @@ export default function App() {
         if (!cancelled) { setResults([]); setSearching(false); setResolvedEmpty(false); setSearchError(true); }
       });
     }, debounceMs);
-    return () => { cancelled = true; clearTimeout(t); };
+    return () => { cancelled = true; clearTimeout(t); if (graceTimer) clearTimeout(graceTimer); };
   }, [query, clipboardMode, contentMode]);
 
   useEffect(() => { setSelectedIndex(0); }, [query, contentMode]);
@@ -634,6 +650,7 @@ export default function App() {
             launchableResults={launchableResults}
             accents={accents}
             emptyLabel={contentMode ? "No file contents match" : undefined}
+            emptyReady={resolvedEmpty}
           />
           <div className="preview-col">
             <PreviewPanel

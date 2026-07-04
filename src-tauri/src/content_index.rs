@@ -42,6 +42,28 @@ pub struct ContentQuery {
     pub ranked: bool,
 }
 
+impl ContentQuery {
+    /// Builds the FTS5 `MATCH` string. Terms are ANDed (space-separated); the
+    /// final term is a prefix term (`tok*`). The last token is the word currently
+    /// being typed, so prefix-matching it lets partial words surface results
+    /// mid-keystroke instead of returning nothing until the word completes and its
+    /// porter stem lands. Earlier tokens are finished words, matched stemmed-exact.
+    ///
+    /// Note: FTS5 still runs the porter tokenizer over the `tok` part of `tok*`, so
+    /// once the typed prefix runs past the stem into the word's suffix it can miss
+    /// (e.g. `documenta*` vs indexed `document`); the frontend smooths that residual
+    /// gap by not flashing "no results" until the query settles.
+    pub fn fts_match(&self) -> String {
+        let last = self.tokens.len().saturating_sub(1);
+        self.tokens
+            .iter()
+            .enumerate()
+            .map(|(i, t)| if i == last { format!("{t}*") } else { t.clone() })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 /// Parses a raw user query into a [`ContentQuery`]. Non-alphanumeric chars (except
 /// apostrophe) become token separators. Returns `None` when nothing usable remains.
 ///

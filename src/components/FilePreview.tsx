@@ -1381,12 +1381,21 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], hi
   // `terms` (non-content file search) skips the fetch and opens at page 0.
   const termsKey = terms.join(" ");
   const [matchPage, setMatchPage] = useState<number | null>(() => (isPdf && terms.length ? null : 0));
+  // Tracks the file the current matchPage belongs to. Blanking to `null` only when
+  // the file itself changes lets a same-file term refetch (i.e. typing) keep the
+  // page mounted instead of unmounting/remounting the reader between keystrokes.
+  const matchPagePathRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isPdf || !terms.length) { setMatchPage(0); return; }
+    if (!isPdf || !terms.length) { setMatchPage(0); matchPagePathRef.current = filePath; return; }
     let cancelled = false;
-    setMatchPage(null);
+    // Hold the reader (page-0 flash then jump) only on a file change / first mount.
+    // On a same-file refetch keep the current page so the PDF doesn't flash.
+    if (matchPagePathRef.current !== filePath) setMatchPage(null);
+    matchPagePathRef.current = filePath;
     invoke<number | null>("content_match_page", { path: filePath, query: termsKey })
-      .then(p => { if (!cancelled) setMatchPage(p ?? 0); })
+      // Same page number -> return prev so PdfPreview's props are referentially
+      // unchanged and it doesn't re-render.
+      .then(p => { if (!cancelled) setMatchPage(prev => (prev === (p ?? 0) ? prev : (p ?? 0))); })
       .catch(e => { console.error("[preview] content_match_page failed:", e); if (!cancelled) setMatchPage(0); });
     return () => { cancelled = true; };
     // termsKey stands in for the terms array (stable string identity).

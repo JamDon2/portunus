@@ -16,9 +16,12 @@ interface Props {
   accents: Map<string, string>;
   /** Empty-state text when a search resolves with no results. */
   emptyLabel?: string;
+  /** Gate for showing the empty state — held false until the empty verdict has
+   *  settled, so a dead prefix mid-typing stays blank instead of flashing. */
+  emptyReady?: boolean;
 }
 
-export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults, accents, emptyLabel = "No results" }: Props) {
+export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults, accents, emptyLabel = "No results", emptyReady = true }: Props) {
   const selectedRef = useRef<HTMLDivElement>(null);
   const selectedLabelRef = useRef<HTMLDivElement>(null);
   const colRef = useRef<HTMLDivElement>(null);
@@ -115,7 +118,7 @@ export default function ResultsList({ results, selectedIndex, active, searching,
           } as CSSProperties}
         />
       )}
-      {active && results.length === 0 && !searching && (
+      {active && results.length === 0 && !searching && emptyReady && (
         <div className="results-empty">{emptyLabel}</div>
       )}
       {results.map((result, i) => {

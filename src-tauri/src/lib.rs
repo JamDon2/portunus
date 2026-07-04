@@ -108,7 +108,7 @@ async fn content_match_page(
     let Some(parsed) = content_index::parse_content_query(&query) else {
         return Ok(None);
     };
-    let fts_query = parsed.tokens.join(" ");
+    let fts_query = parsed.fts_match();
     Ok(tauri::async_runtime::spawn_blocking(move || idx.best_page(&path, &fts_query))
         .await
         .ok()

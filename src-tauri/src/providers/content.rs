@@ -38,8 +38,9 @@ impl Provider for ContentProvider {
         let Some(parsed) = crate::content_index::parse_content_query(q) else {
             return vec![];
         };
-        // FTS5 treats space-separated terms as AND.
-        let fts_query = parsed.tokens.join(" ");
+        // FTS5 treats space-separated terms as AND; the trailing (being-typed)
+        // term is prefix-matched so partial words surface results incrementally.
+        let fts_query = parsed.fts_match();
 
         match self.index.search(&fts_query, self.max_results.max(1), parsed.ranked) {
             Ok(results) => results
