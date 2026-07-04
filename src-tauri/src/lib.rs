@@ -468,12 +468,22 @@ fn run_full_reindex(
     registry: &Registry,
     progress_cb: &Arc<dyn Fn(usize, usize) + Send + Sync>,
     notify_cb: &Arc<dyn Fn() + Send + Sync>,
+    content_watcher_tx: &ContentWatcherTx,
     full: bool,
 ) {
     let cfg = config::Config::load();
     if !cfg.content.enabled {
         eprintln!("[content] reindex requested but content indexing is disabled");
         return;
+    }
+    // Refresh the fs watcher's watch set with the freshly-loaded dirs. The Apply
+    // path (trigger_full_reindex) advances the config-watcher's baseline to skip a
+    // redundant second reindex, which also suppresses provider_reload's own
+    // content_watcher_tx send - so without this, files created in newly-added dirs
+    // would never be hot-indexed until restart. Idempotent: run_dir_watcher dedups
+    // already-watched dirs. Done before ReindexGuard so it survives reindex coalescing.
+    if let Some(tx) = content_watcher_tx.lock().unwrap().as_ref() {
+        let _ = tx.send(cfg.content.clone());
     }
     // Coalesce overlapping reindex triggers so only one drives the progress bar.
     let _reindex_guard = match content_index::ReindexGuard::acquire() {
@@ -686,9 +696,10 @@ pub fn run() {
             let reindex_reg = Arc::clone(&bg_registry);
             let reindex_cb = Arc::clone(&progress_cb);
             let reindex_notify = Arc::clone(&notify_cb);
+            let reindex_watcher_tx = Arc::clone(&content_watcher_tx);
             // --reindex is a poweruser hard rebuild: always a full clear.
             let reindex_fn: Option<Arc<dyn Fn() + Send + Sync>> = Some(Arc::new(move || {
-                run_full_reindex(&reindex_ci, &reindex_reg, &reindex_cb, &reindex_notify, true);
+                run_full_reindex(&reindex_ci, &reindex_reg, &reindex_cb, &reindex_notify, &reindex_watcher_tx, true);
             }));
 
             // trigger_reindex_fn: called by the trigger_full_reindex Tauri command
@@ -698,8 +709,9 @@ pub fn run() {
             let tri_reg = Arc::clone(&bg_registry);
             let tri_cb = Arc::clone(&progress_cb);
             let tri_notify = Arc::clone(&notify_cb);
+            let tri_watcher_tx = Arc::clone(&content_watcher_tx);
             let trigger_reindex_fn: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |full: bool| {
-                run_full_reindex(&tri_ci, &tri_reg, &tri_cb, &tri_notify, full);
+                run_full_reindex(&tri_ci, &tri_reg, &tri_cb, &tri_notify, &tri_watcher_tx, full);
             });
             app.manage(TriggerFullReindexFn(Arc::clone(&trigger_reindex_fn)));
             // Share the watcher's diff baseline with trigger_full_reindex so the
