@@ -41,7 +41,7 @@ const PROVIDERS: ProviderCard[] = [
     icon: I(<><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></>) },
   { id: "files", name: "Files", desc: "Find files by name, fuzzy-matched", example: "report.pdf", toggle: "files",
     icon: I(<><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></>) },
-  { id: "calc", name: "Calculator", desc: "Inline math", example: "1+2*3", toggle: "calc",
+  { id: "calc", name: "Calculator", desc: "Math, units, currency, dates", example: "5km to mi", toggle: "calc",
     icon: I(<><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="11" x2="8" y2="11"/><line x1="12" y1="11" x2="12" y2="11"/><line x1="16" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="8" y2="15"/><line x1="12" y1="15" x2="12" y2="15"/><line x1="16" y1="15" x2="16" y2="18"/></>) },
   { id: "dict", name: "Dictionary", desc: "Word definitions", example: "define lucid", dep: "dict",
     icon: I(<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>) },

@@ -32,7 +32,7 @@ const PROVIDERS: ProviderDef[] = [
     get: c => c.providers.apps,  set: (c, v) => ({ ...c, providers: { ...c.providers, apps: v } }) },
   { id: "files", label: "Files", desc: "Search file and folder names in your chosen directories.",
     get: c => c.providers.files, set: (c, v) => ({ ...c, providers: { ...c.providers, files: v } }) },
-  { id: "calc",  label: "Calculator", desc: "Type a math expression to get the answer inline.",
+  { id: "calc",  label: "Calculator", desc: "Math, unit and currency conversion, dates and timezones.",
     get: c => c.providers.calc,  set: (c, v) => ({ ...c, providers: { ...c.providers, calc: v } }) },
   { id: "dict",  label: "Dictionary", desc: "Word definitions via dict.", dep: "dict",
     get: c => c.dict.enabled,     set: (c, v) => ({ ...c, dict: { ...c.dict, enabled: v } }) },

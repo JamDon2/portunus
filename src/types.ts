@@ -29,6 +29,10 @@ export interface Config {
     files: boolean;
     calc: boolean;
   };
+  calc: {
+    currency: boolean;
+    rate_max_age_hours: number;
+  };
   dict: {
     enabled: boolean;
     fill_sparse: boolean;

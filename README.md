@@ -28,7 +28,7 @@ vanishes again the second you launch something or press Escape.
 ## Features
 
 - 🔍 **Fuzzy app & file search** — apps (`.desktop` entries) plus the files and folders you index, ranked by how often you actually open them
-- 🧮 **Inline calculator** — type `log2(10^8)` right in the search bar
+- 🧮 **Inline calculator** — math (`log2(10^8)`), unit conversion (`5km to mi`), currency (`100 usd to eur`), date math (`days until dec 25`), and timezones (`3pm est in cet`)
 - 📖 **Dictionary lookup** — `define serendipity` or `dict serendipity` (needs `dictd`)
 - 📋 **Clipboard history** — full-text search back through your `cliphist` entries (Wayland)
 - 📄 **Content search** — hit `Tab` to search the text inside PDFs, office docs, and images. OCR handles scanned PDFs and screenshots too
@@ -102,6 +102,8 @@ bind = SUPER, V, exec, /path/to/portunus --clipboard
 | `firefox` | Fuzzy-match apps and files |
 | `define serendipity` | Dictionary definition |
 | `log2(10^8)` | Calculator |
+| `5km to mi`, `100 usd to eur` | Unit & currency conversion |
+| `now + 3 weeks`, `time in tokyo` | Date math & timezones |
 | `clipboard search term` | Browse clipboard history |
 | `Tab` then `invoice 2024` | Search file contents |
 

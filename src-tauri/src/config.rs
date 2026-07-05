@@ -21,6 +21,7 @@ pub struct Config {
     pub dict: DictConfig,
     pub clipboard: ClipboardConfig,
     pub extensions: ExtensionsConfig,
+    pub calc: CalcConfig,
 }
 
 impl Default for Config {
@@ -37,6 +38,26 @@ impl Default for Config {
             dict: DictConfig::default(),
             clipboard: ClipboardConfig::default(),
             extensions: ExtensionsConfig::default(),
+            calc: CalcConfig::default(),
+        }
+    }
+}
+
+/// Calculator provider settings (the provider itself is toggled via [providers]).
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct CalcConfig {
+    /// Enable currency conversion (fetches exchange rates in the background).
+    pub currency: bool,
+    /// Refetch exchange rates when the cached ones are older than this.
+    pub rate_max_age_hours: u64,
+}
+
+impl Default for CalcConfig {
+    fn default() -> Self {
+        Self {
+            currency: true,
+            rate_max_age_hours: 24,
         }
     }
 }

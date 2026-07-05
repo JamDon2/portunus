@@ -563,6 +563,7 @@ pub fn run() {
     let files_cfg = cfg.files.clone();
     let providers_cfg = cfg.providers.clone();
     let dict_cfg = cfg.dict.clone();
+    let calc_cfg = cfg.calc.clone();
     let max_results = cfg.general.max_results;
     let layer_shell_enabled = cfg.general.layer_shell;
     let content_cfg = cfg.content.clone();
@@ -854,7 +855,17 @@ pub fn run() {
                 bg_registry
                     .write()
                     .unwrap()
-                    .register(providers::calc::CalcProvider);
+                    .register(providers::calc::CalcProvider::new(
+                        &calc_cfg,
+                        providers::calc::currency::shared(),
+                    ));
+            }
+            // Spawned even when calc is off so a later toggle-on has fresh rates.
+            if calc_cfg.currency {
+                providers::calc::currency::spawn_refresh_thread(
+                    providers::calc::currency::shared(),
+                    calc_cfg.rate_max_age_hours,
+                );
             }
             let handle = app.handle().clone();
             let shared_bg = Arc::clone(&shared_config);

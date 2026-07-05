@@ -131,11 +131,15 @@ pub fn rebuild_providers(
 
     // ── Cheap providers: toggle under write lock directly ─────────────────────
 
-    if new_cfg.providers.calc != old_cfg.providers.calc {
+    if new_cfg.providers.calc != old_cfg.providers.calc || new_cfg.calc != old_cfg.calc {
         let mut reg = registry.write().unwrap();
         if new_cfg.providers.calc {
-            reg.register(providers::calc::CalcProvider);
-            eprintln!("[config] calc provider enabled");
+            let p = providers::calc::CalcProvider::new(
+                &new_cfg.calc,
+                providers::calc::currency::shared(),
+            );
+            reg.replace("calc", Some(Box::new(p)));
+            eprintln!("[config] calc provider rebuilt");
         } else {
             reg.replace("calc", None);
             eprintln!("[config] calc provider disabled");

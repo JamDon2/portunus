@@ -11,6 +11,10 @@ apps  = true   # .desktop application search
 files = true   # file indexer (see [[files.dirs]])
 calc  = true   # inline calculator
 
+[calc]
+currency           = true  # currency conversion ("100 usd to eur"); rates fetched in the background
+rate_max_age_hours = 24    # refetch exchange rates when the cached ones are older than this
+
 # Directories indexed by the file provider.
 # Each entry requires a `path`; `depth` defaults to 2.
 [[files.dirs]]
