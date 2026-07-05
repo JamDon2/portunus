@@ -23,9 +23,13 @@ src-tauri/resources/libpdfium.so
 src-tauri/resources/tessdata/
 src-tauri/resources/bin/
 src-tauri/resources/lib/
+
 extension-sdk/target/
 examples/extensions/emoji/target/
 examples/extensions/cheatsh/target/
+examples/extensions/gh/target/
+*.wasm
+*.portext
 
 # Editor directories and files
 .vscode/*

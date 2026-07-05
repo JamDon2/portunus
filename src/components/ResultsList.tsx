@@ -19,9 +19,12 @@ interface Props {
   /** Gate for showing the empty state — held false until the empty verdict has
    *  settled, so a dead prefix mid-typing stays blank instead of flashing. */
   emptyReady?: boolean;
+  /** Names of extensions whose async query is still running - rendered as
+   *  slim loading rows below the results. */
+  pending?: string[];
 }
 
-export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults, accents, emptyLabel = "No results", emptyReady = true }: Props) {
+export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults, accents, emptyLabel = "No results", emptyReady = true, pending = [] }: Props) {
   const selectedRef = useRef<HTMLDivElement>(null);
   const selectedLabelRef = useRef<HTMLDivElement>(null);
   const colRef = useRef<HTMLDivElement>(null);
@@ -118,7 +121,7 @@ export default function ResultsList({ results, selectedIndex, active, searching,
           } as CSSProperties}
         />
       )}
-      {active && results.length === 0 && !searching && emptyReady && (
+      {active && results.length === 0 && !searching && emptyReady && pending.length === 0 && (
         <div className="results-empty">{emptyLabel}</div>
       )}
       {results.map((result, i) => {
@@ -174,6 +177,13 @@ export default function ResultsList({ results, selectedIndex, active, searching,
           </Fragment>
         );
       })}
+      {active && pending.map(name => (
+        <div className="result-pending" key={`pending:${name}`}>
+          <span className="result-pending-spinner" aria-hidden="true" />
+          <span className="result-pending-name">{name}</span>
+          <span className="result-pending-label">searching…</span>
+        </div>
+      ))}
     </div>
   );
 }

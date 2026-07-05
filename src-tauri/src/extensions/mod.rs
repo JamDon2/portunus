@@ -10,6 +10,8 @@ pub mod install;
 pub mod kv;
 pub mod logs;
 pub mod manifest;
+pub mod query;
+pub mod secrets;
 pub mod trigger;
 
 use std::collections::HashMap;
@@ -154,6 +156,26 @@ fn resolved_settings(
     manifest::resolve_settings(&m.settings_schema, &user)
 }
 
+/// `resolved_settings` plus keyring-stored secret values overlaid. Blocking
+/// dbus per secret spec - load-path only, never the keystroke path (and never
+/// the frontend: `ExtensionInfo` uses the secret-free `resolved_settings`).
+fn resolved_settings_with_secrets(
+    m: &manifest::ExtensionManifest,
+    cfg: &ExtensionsConfig,
+) -> HashMap<String, serde_json::Value> {
+    let mut out = resolved_settings(m, cfg);
+    for spec in m.settings_schema.iter().filter(|s| s.kind == "secret") {
+        match secrets::get(&m.name, &spec.key) {
+            Ok(Some(v)) => {
+                out.insert(spec.key.clone(), serde_json::Value::String(v));
+            }
+            Ok(None) => {}
+            Err(e) => logs::log(&m.name, logs::LogLevel::Error, &e),
+        }
+    }
+    out
+}
+
 /// Compiles and registers one discovered extension (always rebuilds).
 /// Compile happens outside the registry lock; only pointers swap under it.
 fn load_one(
@@ -173,7 +195,7 @@ fn load_one(
         crate::util::write(registry).set_extension(&d.name, None);
         return;
     }
-    let settings = resolved_settings(&m, extensions_cfg);
+    let settings = resolved_settings_with_secrets(&m, extensions_cfg);
     match WasmProvider::load(m, wasm_path, kv_store.clone(), settings) {
         Ok(p) => {
             let p = Arc::new(p);
@@ -301,6 +323,8 @@ pub struct PermissionsInfo {
     kv: bool,
     clipboard: bool,
     open_url: bool,
+    /// Derived: the settings schema declares at least one `type = "secret"`.
+    has_secrets: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -337,6 +361,8 @@ pub struct ExtensionInfo {
     origin_url: Option<String>,
     /// True when the extensions-dir entry is a symlink (`portunus ext dev`).
     dev: bool,
+    /// Secret setting keys that currently have a stored keyring value.
+    secrets_set: Vec<String>,
 }
 
 #[tauri::command]
@@ -357,7 +383,7 @@ pub fn list_extensions(
                 consents.get(&d.name).is_some_and(|rec| {
                     !matches!(rec.origin, install::Origin::Dev)
                         && rec.permissions.grew_to(
-                            &install::ConsentPermissions::from_manifest(&m.permissions),
+                            &install::ConsentPermissions::from_manifest(m),
                         )
                 })
             });
@@ -384,6 +410,7 @@ pub fn list_extensions(
                     kv: m.permissions.kv,
                     clipboard: m.permissions.clipboard,
                     open_url: m.permissions.open_url,
+                    has_secrets: m.settings_schema.iter().any(|s| s.kind == "secret"),
                 }),
                 enabled,
                 loaded: provider.is_some(),
@@ -411,6 +438,17 @@ pub fn list_extensions(
                 }),
                 dev,
                 error,
+                // Presence only (a few dbus round-trips per Settings render) -
+                // values never leave the keyring.
+                secrets_set: m
+                    .map(|m| {
+                        m.settings_schema
+                            .iter()
+                            .filter(|s| s.kind == "secret" && secrets::exists(&d.name, &s.key))
+                            .map(|s| s.key.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 name: d.name,
             }
         })
@@ -435,6 +473,14 @@ pub fn set_extension_settings(
     let mut table = toml::Table::new();
     for spec in &m.settings_schema {
         let Some(v) = values.get(&spec.key) else { continue };
+        // Guarantee no secret ever lands in config.toml, even via a buggy
+        // frontend - secrets travel only through extension_secret_set.
+        if spec.kind == "secret" {
+            return Err(format!(
+                "setting \"{}\": secrets are set via extension_secret_set",
+                spec.key
+            ));
+        }
         let coerced = manifest::coerce_setting_value(spec, v)
             .map_err(|e| format!("setting \"{}\": {e}", spec.key))?;
         let toml_v: toml::Value = serde_json::from_value::<toml::Value>(coerced)
@@ -459,6 +505,88 @@ pub fn set_extension_settings(
         let _ = app.emit("extensions-reloaded", ());
     });
     Ok(())
+}
+
+/// Looks up a schema spec and requires it to be a secret - the secret
+/// commands must never write arbitrary keyring entries.
+fn require_secret_spec(name: &str, key: &str) -> Result<(), String> {
+    let dir = extensions_dir().join(name);
+    let (m, _) = manifest::load(&dir)?;
+    m.settings_schema
+        .iter()
+        .any(|s| s.key == key && s.kind == "secret")
+        .then_some(())
+        .ok_or_else(|| format!("\"{key}\" is not a declared secret setting"))
+}
+
+/// Reloads one extension after a secret change so its `settings_get`
+/// snapshot picks the new value up (same shape as set_extension_settings).
+fn reload_after_secret_change(
+    app: tauri::AppHandle,
+    registry: &Registry,
+    kv_state: &ExtensionKvState,
+    config: &ConfigState,
+    name: String,
+) {
+    let extensions_cfg = crate::util::lock(config).extensions.clone();
+    let registry = registry.clone();
+    let kv_store = kv_state.0.clone();
+    std::thread::spawn(move || {
+        use tauri::Emitter;
+        sync_one(&registry, &name, &extensions_cfg, &kv_store, None);
+        let _ = app.emit("search-invalidated", ());
+        let _ = app.emit("extensions-reloaded", ());
+    });
+}
+
+/// Stores one secret setting in the system keyring and hot-reloads the
+/// extension. Values never touch config.toml or the log store.
+#[tauri::command]
+pub async fn extension_secret_set(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, Registry>,
+    config: tauri::State<'_, ConfigState>,
+    kv_state: tauri::State<'_, ExtensionKvState>,
+    name: String,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    require_secret_spec(&name, &key)?;
+    let (n, k) = (name.clone(), key.clone());
+    tauri::async_runtime::spawn_blocking(move || secrets::set(&n, &k, &value))
+        .await
+        .map_err(|e| e.to_string())??;
+    install::record_secret_key(&name, &key);
+    reload_after_secret_change(app, &registry, &kv_state, &config, name);
+    Ok(())
+}
+
+/// Removes one secret setting from the keyring and hot-reloads the extension.
+#[tauri::command]
+pub async fn extension_secret_clear(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, Registry>,
+    config: tauri::State<'_, ConfigState>,
+    kv_state: tauri::State<'_, ExtensionKvState>,
+    name: String,
+    key: String,
+) -> Result<(), String> {
+    require_secret_spec(&name, &key)?;
+    let (n, k) = (name.clone(), key.clone());
+    tauri::async_runtime::spawn_blocking(move || secrets::delete(&n, &k))
+        .await
+        .map_err(|e| e.to_string())??;
+    reload_after_secret_change(app, &registry, &kv_state, &config, name);
+    Ok(())
+}
+
+/// Whether a Secret Service daemon is reachable (drives the Settings UI's
+/// enabled/disabled state for secret fields).
+#[tauri::command]
+pub async fn secrets_available() -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(secrets::available)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Splits `ext:<name>:<local>` and returns the loaded provider plus nothing
@@ -555,19 +683,45 @@ impl TruncateCharBoundary for String {
     }
 }
 
+#[derive(serde::Serialize, Clone)]
+struct PreviewChunk {
+    request_id: u64,
+    content: PreviewContent,
+}
+
 #[tauri::command]
 pub async fn extension_preview(
+    app: tauri::AppHandle,
     registry: tauri::State<'_, Registry>,
     id: String,
     ext: ExtensionResult,
+    request_id: u64,
 ) -> Result<Option<PreviewContent>, String> {
     // Resolve the provider synchronously (fast read-lock), then run the wasm
     // call on the blocking thread pool so rapid navigation never stalls the
     // Tauri async runtime while the extension does its network I/O.
     let provider = provider_for_id(&crate::util::read(&registry), &id)?;
-    tauri::async_runtime::spawn_blocking(move || provider.preview(ext))
-        .await
-        .map_err(|e| e.to_string())?
+    // A streaming preview may hold its budget for seconds - the previous
+    // call must not delay this one behind the preview-instance mutex.
+    provider.cancel_preview();
+    tauri::async_runtime::spawn_blocking(move || {
+        provider.preview(ext, move |content| {
+            use tauri::Emitter;
+            let _ = app.emit("extension-preview-chunk", PreviewChunk { request_id, content });
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Aborts the in-flight streaming preview of one extension (selection moved).
+#[tauri::command]
+pub fn extension_preview_cancel(
+    registry: tauri::State<'_, Registry>,
+    id: String,
+) -> Result<(), String> {
+    provider_for_id(&crate::util::read(&registry), &id)?.cancel_preview();
+    Ok(())
 }
 
 /// Tail of one extension's log ring buffer (oldest first) - the Settings log
@@ -575,6 +729,21 @@ pub async fn extension_preview(
 #[tauri::command]
 pub fn get_extension_logs(name: String, limit: Option<usize>) -> Vec<logs::LogEntry> {
     logs::LOGS.tail(&name, limit.unwrap_or(100).min(200))
+}
+
+/// Empties one extension's log ring buffer (the viewer's Clear button).
+#[tauri::command]
+pub fn clear_extension_logs(name: String) {
+    logs::LOGS.purge(&name);
+}
+
+/// Why extension storage is running non-persistently this session (on-disk
+/// SQLite failed to open), or None when healthy. Drives the Settings banner.
+#[tauri::command]
+pub fn extension_storage_status(
+    kv_state: tauri::State<'_, ExtensionKvState>,
+) -> Option<String> {
+    kv_state.0.degraded_reason().map(str::to_string)
 }
 
 /// Re-discovers the extensions dir and force-reloads wasm bytes. Wired to the

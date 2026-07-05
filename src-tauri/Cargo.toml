@@ -46,6 +46,7 @@ sha2 = "0.11.0"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 wasmparser = "0.252.0"
 tauri-plugin-dialog = "2.7.1"
+keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust"] } # extension secret settings (org.freedesktop.secrets)
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"            # must match tao's gtk version (see Cargo.lock)

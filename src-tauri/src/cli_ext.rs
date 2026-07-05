@@ -184,8 +184,13 @@ fn cmd_validate(dir: Option<&str>) -> i32 {
         }
     }
     let mut failed = false;
-    for (export, required) in [("search", true), ("activate", false), ("preview", false), ("refresh", false)]
-    {
+    for (export, required) in [
+        ("search", true),
+        ("query", false),
+        ("activate", false),
+        ("preview", false),
+        ("refresh", false),
+    ] {
         let present = exports.iter().any(|e| e == export);
         match (present, required) {
             (true, _) => println!("export {export}: ok"),
@@ -198,6 +203,12 @@ fn cmd_validate(dir: Option<&str>) -> i32 {
     }
     if m.background.is_some() && !exports.iter().any(|e| e == "refresh") {
         eprintln!("warning: [background] declared but no refresh export");
+    }
+    // query_timeout_ms only matters when the async tier is actually exported.
+    if m.limits.query_timeout_ms != manifest::Limits::default().query_timeout_ms
+        && !exports.iter().any(|e| e == "query")
+    {
+        eprintln!("warning: [limits] query_timeout_ms set but no query export");
     }
     if failed {
         1

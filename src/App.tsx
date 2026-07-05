@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
-import { Config, SearchResult, ClipboardCapabilities, ExtAction } from "./types";
+import { Config, SearchResult, SearchResponse, StreamPayload, ClipboardCapabilities, ExtAction } from "./types";
 import ClipboardMode from "./components/clipboard/ClipboardMode";
 import { applyTheme, injectMatugenTheme } from "./theme";
 import ResultsList from "./components/ResultsList";
@@ -39,6 +39,22 @@ function ghostFor(q: string): string | null {
 export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  // Async-tier state: batches streamed per extension for the current query,
+  // and the set of extensions still working. Both keyed off queryIdRef so
+  // stale events from a cancelled query can never render.
+  const [streamed, setStreamed] = useState<Map<string, SearchResult[]>>(new Map());
+  const [pendingExts, setPendingExts] = useState<Set<string>>(new Set());
+  // Monotonic per-dispatch id correlating a `search` invoke with its
+  // `search-stream` events. Seeded with wall-clock so a webview reload can't
+  // reuse ids the backend has already seen (its reorder guard is a fetch_max).
+  const queryIdRef = useRef(Date.now());
+  // Extensions whose async query already finished for the current dispatch.
+  // The `search` response races the first `search-stream` done events, so its
+  // pendingExts snapshot filters against this to avoid a stuck spinner.
+  const doneExtsRef = useRef<Set<string>>(new Set());
+  // Last query_id that streamed rows per extension - a batch from a newer
+  // dispatch replaces that extension's rows instead of merging into them.
+  const streamQidRef = useRef<Map<string, number>>(new Map());
   // True between scheduling a search and its results arriving, so the results
   // list can distinguish "still loading" from a genuine zero-result query.
   const [searching, setSearching] = useState(false);
@@ -213,6 +229,8 @@ export default function App() {
     setActionResult(null);
     setQuery("");
     setResults([]);
+    setStreamed(new Map());
+    setPendingExts(new Set());
     inputRef.current?.focus();
     invoke<Config>("get_config").then(cfg => { setContentEnabled(cfg.content.enabled); setColoredIcons(cfg.files.colored_icons); configRef.current = cfg; });
   });
@@ -246,13 +264,27 @@ export default function App() {
     if (m) enterClipboardMode(m[2], false);
   }, [query, clipboardMode, contentMode]);
 
+  // Refs mirroring the async-tier state for use inside the (deliberately
+  // dependency-light) search effect below.
+  const streamedRef = useRef(false);
+  const pendingRef = useRef(false);
+  useEffect(() => { streamedRef.current = streamed.size > 0; }, [streamed]);
+  useEffect(() => { pendingRef.current = pendingExts.size > 0; }, [pendingExts]);
+
   useEffect(() => {
     if (clipboardMode) { setSearching(false); return; }
     const trimmed = query.trim();
     // Content search needs >= 2 chars (matches the backend guard); below that
     // there's nothing to run, so clear and show the prompt empty state.
     if (!trimmed || (contentMode && trimmed.length < 2)) {
-      setResults([]); setSearching(false); setResolvedEmpty(false); return;
+      setResults([]); setSearching(false); setResolvedEmpty(false);
+      // Nothing to search = nothing the async tier should keep working on.
+      if (streamedRef.current || pendingRef.current) {
+        setStreamed(new Map());
+        setPendingExts(new Set());
+        invoke("cancel_search").catch(() => {});
+      }
+      return;
     }
     let cancelled = false;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -261,7 +293,6 @@ export default function App() {
     // Clear any prior empty verdict so a resumed query doesn't keep the old
     // "no results" state visible while the new search is in flight.
     setResolvedEmpty(false);
-    const cmd = contentMode ? "search_content" : "search";
     // Content search is the heavy path (FTS + snippet + per-keystroke preview
     // match-page), so coalesce keystrokes harder there. Name/app search is cheap
     // and stays near-instant.
@@ -272,11 +303,39 @@ export default function App() {
     // flashing "no results" while the user is still typing.
     const EMPTY_SETTLE_MS = 220;
     const t = setTimeout(() => {
-      invoke<SearchResult[]>(cmd, { query }).then(r => {
-        if (cancelled) return;
-        setResults(r);
+      if (contentMode) {
+        invoke<SearchResult[]>("search_content", { query }).then(r => {
+          if (cancelled) return;
+          setResults(r);
+          setSearching(false);
+          if (r.length === 0) {
+            graceTimer = setTimeout(() => { if (!cancelled) setResolvedEmpty(true); }, EMPTY_SETTLE_MS);
+          } else {
+            setResolvedEmpty(false);
+          }
+        }).catch(e => {
+          console.error(`[search] search_content failed:`, e);
+          if (!cancelled) { setResults([]); setSearching(false); setResolvedEmpty(false); setSearchError(true); }
+        });
+        return;
+      }
+      const queryId = ++queryIdRef.current;
+      // New dispatch: everything streamed belongs to an older query now.
+      // Clear here, not in .then - the backend dispatches async workers
+      // before the search response resolves, so a fast extension's first
+      // batch (or done signal) can legitimately arrive ahead of it.
+      setStreamed(new Map());
+      doneExtsRef.current = new Set();
+      invoke<SearchResponse>("search", { query, queryId }).then(resp => {
+        if (cancelled || resp.query_id !== queryIdRef.current) return;
+        setResults(resp.results);
+        setPendingExts(new Set(
+          resp.pending.map(p => p.name).filter(n => !doneExtsRef.current.has(n)),
+        ));
         setSearching(false);
-        if (r.length === 0) {
+        // The empty verdict waits for the async tier: a pending slow
+        // extension may still deliver results (see the verdict effect below).
+        if (resp.results.length === 0 && resp.pending.length === 0) {
           graceTimer = setTimeout(() => { if (!cancelled) setResolvedEmpty(true); }, EMPTY_SETTLE_MS);
         } else {
           setResolvedEmpty(false);
@@ -284,14 +343,68 @@ export default function App() {
       }).catch(e => {
         // Surface the failure as an error row rather than an empty result, which
         // would wrongly offer the "search file contents" hint.
-        console.error(`[search] ${cmd} failed:`, e);
+        console.error(`[search] search failed:`, e);
         if (!cancelled) { setResults([]); setSearching(false); setResolvedEmpty(false); setSearchError(true); }
       });
     }, debounceMs);
     return () => { cancelled = true; clearTimeout(t); if (graceTimer) clearTimeout(graceTimer); };
   }, [query, clipboardMode, contentMode]);
 
-  useEffect(() => { setSelectedIndex(0); }, [query, contentMode]);
+  // Streamed async-query batches: merge per extension, replacing by result id
+  // (a later batch re-emitting an id updates it in place - the intended
+  // "cached now, fresh later" pattern).
+  useTauriListener<StreamPayload>("search-stream", p => {
+    if (p.query_id !== queryIdRef.current) return;
+    if (p.results.length > 0) {
+      // First batch of a new dispatch replaces the extension's previous rows
+      // (requery keeps old rows on screen until then); later batches of the
+      // same dispatch merge by id.
+      const fresh = streamQidRef.current.get(p.ext) !== p.query_id;
+      streamQidRef.current.set(p.ext, p.query_id);
+      setStreamed(prev => {
+        const next = new Map(prev);
+        const byId = new Map(fresh ? [] : (next.get(p.ext) ?? []).map(r => [r.id, r] as const));
+        for (const r of p.results) byId.set(r.id, r);
+        next.set(p.ext, [...byId.values()]);
+        return next;
+      });
+    }
+    if (p.done) {
+      if (p.error) console.warn(`[extension] ${p.ext} query failed: ${p.error}`);
+      // Record completion even if the search response (which populates
+      // pendingExts) hasn't resolved yet - it filters against this set.
+      doneExtsRef.current.add(p.ext);
+      setPendingExts(prev => {
+        if (!prev.has(p.ext)) return prev;
+        const next = new Set(prev);
+        next.delete(p.ext);
+        return next;
+      });
+    }
+  });
+
+  // Deferred empty verdict for the async tier: sync results were empty, and
+  // the last pending extension just finished without delivering anything.
+  useEffect(() => {
+    if (contentMode || clipboardMode || searching || searchError) return;
+    if (!query.trim()) return;
+    if (pendingExts.size > 0 || results.length > 0 || streamed.size > 0) return;
+    const t = setTimeout(() => setResolvedEmpty(true), 220);
+    return () => clearTimeout(t);
+  }, [pendingExts, results, streamed, searching, searchError, query, contentMode, clipboardMode]);
+
+  useEffect(() => { setSelectedIndex(0); selectedIdRef.current = null; }, [query, contentMode]);
+
+  // Sync base merged with streamed async batches: replace by id (newest wins),
+  // stable-sort by score so late arrivals slot in without jitter on ties.
+  const merged = useMemo<SearchResult[]>(() => {
+    if (streamed.size === 0) return results;
+    const byId = new Map(results.map(r => [r.id, r]));
+    for (const batch of streamed.values()) {
+      for (const r of batch) byId.set(r.id, r);
+    }
+    return [...byId.values()].sort((a, b) => b.score - a.score);
+  }, [results, streamed]);
 
   const displayResults = useMemo<SearchResult[]>(() => {
     if (!query.trim()) return [];
@@ -318,7 +431,7 @@ export default function App() {
       if (query.trim().length < 2) return [];
       return results;
     }
-    if (results.length === 0) {
+    if (merged.length === 0) {
       // Suggest content search only once a search has actually resolved empty
       // (not on the first-keystroke debounce gap). Kept mounted across
       // re-searches so it doesn't unmount/remount and re-animate per keystroke.
@@ -331,22 +444,59 @@ export default function App() {
         score: 0,
       }];
     }
-    return results;
-  }, [query, results, contentEnabled, resolvedEmpty, contentMode, searchError]);
+    return merged;
+  }, [query, results, merged, contentEnabled, resolvedEmpty, contentMode, searchError]);
 
-  // Results can shrink without the query changing (search-invalidated). Snap the
-  // selection back in bounds so the highlight/preview and Enter stay live.
+  // Cursor stability under streaming: pin the selection to its result id, so
+  // late batches re-sorting the list move the highlight with the result
+  // instead of leaving it on whatever slid into the old index. Falls back to
+  // an in-bounds clamp when the pinned result vanished (search-invalidated).
+  const selectedIdRef = useRef<string | null>(null);
   useEffect(() => {
-    setSelectedIndex(i => (i >= displayResults.length ? 0 : i));
-  }, [displayResults.length]);
+    setSelectedIndex(i => {
+      const id = selectedIdRef.current;
+      if (id) {
+        const idx = displayResults.findIndex(r => r.id === id);
+        if (idx >= 0) return idx;
+      }
+      return i >= displayResults.length ? 0 : i;
+    });
+  }, [displayResults]);
+  useEffect(() => {
+    selectedIdRef.current = displayResults[selectedIndex]?.id ?? null;
+  }, [selectedIndex, displayResults]);
 
   const requery = () => {
     const q = queryRef.current;
     if (!q.trim()) return;
-    const cmd = contentModeRef.current ? "search_content" : "search";
-    invoke<SearchResult[]>(cmd, { query: q }).then(setResults)
-      .catch(e => console.error(`[search] ${cmd} requery failed:`, e));
+    if (contentModeRef.current) {
+      invoke<SearchResult[]>("search_content", { query: q }).then(setResults)
+        .catch(e => console.error(`[search] search_content requery failed:`, e));
+      return;
+    }
+    const queryId = ++queryIdRef.current;
+    // Same event-vs-response race as the main search effect: reset done-set
+    // at dispatch, filter pending against it. Unlike a keystroke, the query
+    // text is unchanged here, so streamed rows stay visible - the re-dispatch
+    // overwrites them per extension instead of blanking the list (a content
+    // watcher can fire search-invalidated while the user is idle; the
+    // selection must not jump).
+    doneExtsRef.current = new Set();
+    invoke<SearchResponse>("search", { query: q, queryId }).then(resp => {
+      if (resp.query_id !== queryIdRef.current) return;
+      setResults(resp.results);
+      setPendingExts(new Set(
+        resp.pending.map(p => p.name).filter(n => !doneExtsRef.current.has(n)),
+      ));
+    }).catch(e => console.error(`[search] requery failed:`, e));
   };
+
+  // A real extension reload may have removed extensions entirely - drop their
+  // streamed rows (plain search-invalidated keeps them; see requery).
+  useTauriListener("extensions-reloaded", () => {
+    streamQidRef.current = new Map();
+    setStreamed(new Map());
+  });
 
   useTauriListener("search-invalidated", () => {
     requery();
@@ -708,6 +858,7 @@ export default function App() {
             accents={accents}
             emptyLabel={contentMode ? "No file contents match" : undefined}
             emptyReady={resolvedEmpty}
+            pending={contentMode ? [] : [...pendingExts]}
           />
           <div className="preview-col">
             <PreviewPanel

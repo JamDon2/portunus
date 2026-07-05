@@ -16,6 +16,9 @@ const QUOTA_BYTES: i64 = 10 * 1024 * 1024;
 
 pub struct ExtensionKv {
     conn: Mutex<Connection>,
+    /// Why the store is running in memory (on-disk open failed), or None when
+    /// persistent. Surfaced as a warning banner in Settings.
+    degraded: Option<String>,
 }
 
 fn db_path() -> PathBuf {
@@ -40,12 +43,13 @@ impl ExtensionKv {
         )?;
         Ok(Self {
             conn: Mutex::new(conn),
+            degraded: None,
         })
     }
 
     /// Last-resort fallback when the on-disk store can't be opened: keeps the
     /// host functions working for the session, data is simply not persisted.
-    pub fn open_in_memory() -> Self {
+    pub fn open_in_memory(reason: String) -> Self {
         let conn = Connection::open_in_memory().expect("in-memory sqlite cannot fail");
         let _ = conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS kv (
@@ -57,7 +61,13 @@ impl ExtensionKv {
         );
         Self {
             conn: Mutex::new(conn),
+            degraded: Some(reason),
         }
+    }
+
+    /// Why storage is non-persistent this session, or None when healthy.
+    pub fn degraded_reason(&self) -> Option<&str> {
+        self.degraded.as_deref()
     }
 
     pub fn get(&self, extension: &str, key: &str) -> Option<String> {

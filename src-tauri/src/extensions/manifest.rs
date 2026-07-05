@@ -76,7 +76,9 @@ impl TriggerConfig {
 pub struct SettingSpec {
     /// Identifier the extension reads via `settings_get`; `[a-z0-9_]+`.
     pub key: String,
-    /// Type tag: "string" | "bool" | "number" | "select".
+    /// Type tag: "string" | "bool" | "number" | "select" | "secret".
+    /// `secret` values live in the system keyring (never config.toml) and
+    /// render as a masked input; declaring one is consent-relevant.
     #[serde(rename = "type")]
     pub kind: String,
     /// Label shown in the Settings UI.
@@ -123,7 +125,7 @@ fn default_entry() -> String {
 /// here (dict's live in `providers/dict.rs::is_explicit_dict_query`).
 pub const RESERVED_PREFIXES: [&str; 2] = ["define", "dict"];
 
-const VALID_SETTING_TYPES: [&str; 4] = ["string", "bool", "number", "select"];
+const VALID_SETTING_TYPES: [&str; 5] = ["string", "bool", "number", "select", "secret"];
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -141,6 +143,12 @@ pub struct Permissions {
 pub struct Limits {
     pub search_timeout_ms: u64,
     pub activate_timeout_ms: u64,
+    /// Budget for the optional async `query` export (off the keystroke path,
+    /// dedicated instance) - generous by design, network I/O belongs here.
+    pub query_timeout_ms: u64,
+    /// Budget for the optional `preview` export. Streaming previews (LLM
+    /// output, slow APIs) raise this; plain previews keep the tight default.
+    pub preview_timeout_ms: u64,
 }
 
 impl Default for Limits {
@@ -148,6 +156,8 @@ impl Default for Limits {
         Self {
             search_timeout_ms: 150,
             activate_timeout_ms: 2000,
+            query_timeout_ms: 10_000,
+            preview_timeout_ms: 500,
         }
     }
 }
@@ -159,6 +169,8 @@ impl Limits {
         Self {
             search_timeout_ms: self.search_timeout_ms.clamp(10, 500),
             activate_timeout_ms: self.activate_timeout_ms.clamp(10, 10_000),
+            query_timeout_ms: self.query_timeout_ms.clamp(500, 60_000),
+            preview_timeout_ms: self.preview_timeout_ms.clamp(100, 10_000),
         }
     }
 }
@@ -305,7 +317,7 @@ fn validate_settings_schema(schema: &[SettingSpec]) -> Result<(), String> {
         }
         if !VALID_SETTING_TYPES.contains(&s.kind.as_str()) {
             return Err(format!(
-                "setting \"{}\": type \"{}\" is not one of string/bool/number/select",
+                "setting \"{}\": type \"{}\" is not one of string/bool/number/select/secret",
                 s.key, s.kind
             ));
         }
@@ -318,6 +330,21 @@ fn validate_settings_schema(schema: &[SettingSpec]) -> Result<(), String> {
             }
         } else if !s.options.is_empty() {
             return Err(format!("setting \"{}\": options only apply to select", s.key));
+        }
+        if s.kind == "secret" {
+            // A default secret in a public manifest is always a bug.
+            if s.default.is_some() {
+                return Err(format!(
+                    "setting \"{}\": secret settings cannot declare a default",
+                    s.key
+                ));
+            }
+            if s.min.is_some() || s.max.is_some() || s.step.is_some() {
+                return Err(format!(
+                    "setting \"{}\": min/max/step do not apply to secret",
+                    s.key
+                ));
+            }
         }
         if let Some(default) = &s.default {
             coerce_setting_value(s, &toml_to_json(default)).map_err(|e| {
@@ -343,6 +370,16 @@ pub fn coerce_setting_value(
             .as_str()
             .map(|s| serde_json::Value::String(s.to_string()))
             .ok_or_else(|| "must be a string".to_string()),
+        // Secrets travel through the dedicated secret commands only; the
+        // coercion here backs their validation (the config path never sees
+        // secret values - resolve_settings skips them).
+        "secret" => {
+            let s = value.as_str().ok_or_else(|| "must be a string".to_string())?;
+            if s.is_empty() {
+                return Err("must not be empty".to_string());
+            }
+            Ok(serde_json::Value::String(s.to_string()))
+        }
         "bool" => value
             .as_bool()
             .map(serde_json::Value::Bool)
@@ -377,6 +414,73 @@ pub fn coerce_setting_value(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limits_clamp_to_host_ranges() {
+        let l = Limits {
+            search_timeout_ms: 5_000,
+            activate_timeout_ms: 1,
+            query_timeout_ms: 999_999,
+            preview_timeout_ms: 1,
+        }
+        .clamped();
+        assert_eq!(l.search_timeout_ms, 500);
+        assert_eq!(l.activate_timeout_ms, 10);
+        assert_eq!(l.query_timeout_ms, 60_000);
+        assert_eq!(l.preview_timeout_ms, 100);
+    }
+
+    #[test]
+    fn secret_setting_rejects_default() {
+        let spec = SettingSpec {
+            key: "api_key".into(),
+            kind: "secret".into(),
+            label: "API key".into(),
+            description: String::new(),
+            default: Some(toml::Value::String("x".into())),
+            options: vec![],
+            min: None,
+            max: None,
+            step: None,
+            placeholder: String::new(),
+        };
+        assert!(validate_settings_schema(&[spec]).is_err());
+    }
+
+    #[test]
+    fn resolve_settings_skips_secrets() {
+        let spec = SettingSpec {
+            key: "api_key".into(),
+            kind: "secret".into(),
+            label: "API key".into(),
+            description: String::new(),
+            default: None,
+            options: vec![],
+            min: None,
+            max: None,
+            step: None,
+            placeholder: String::new(),
+        };
+        let mut user = serde_json::Map::new();
+        // Even a (malicious/buggy) config-sourced value must not resolve.
+        user.insert("api_key".into(), serde_json::Value::String("leaked".into()));
+        let out = resolve_settings(&[spec], &user);
+        assert!(!out.contains_key("api_key"));
+    }
+
+    #[test]
+    fn limits_defaults() {
+        let l = Limits::default().clamped();
+        assert_eq!(l.search_timeout_ms, 150);
+        assert_eq!(l.activate_timeout_ms, 2000);
+        assert_eq!(l.query_timeout_ms, 10_000);
+        assert_eq!(l.preview_timeout_ms, 500);
+    }
+}
+
 /// Resolves the effective settings map for an extension: schema defaults
 /// overlaid with (schema-valid) user values. Unknown keys and type-mismatched
 /// values are dropped - the wasm side always sees schema-shaped data.
@@ -386,6 +490,11 @@ pub fn resolve_settings(
 ) -> std::collections::HashMap<String, serde_json::Value> {
     let mut out = std::collections::HashMap::new();
     for spec in schema {
+        // Secrets never resolve from config - they live in the keyring and
+        // are overlaid by the loader (`resolved_settings_with_secrets`).
+        if spec.kind == "secret" {
+            continue;
+        }
         let user_val = user
             .get(&spec.key)
             .and_then(|v| coerce_setting_value(spec, v).ok());

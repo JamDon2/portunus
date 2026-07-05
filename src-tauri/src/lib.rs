@@ -51,18 +51,43 @@ struct ContentIndexProgress {
     total: usize,
 }
 
+#[derive(serde::Serialize)]
+struct SearchResponse {
+    query_id: u64,
+    /// Sync-tier results (built-ins + extension `search` exports).
+    results: Vec<providers::SearchResult>,
+    /// Extensions whose async `query` export was started for this keystroke;
+    /// their batches arrive later as `search-stream` events.
+    pending: Vec<extensions::query::PendingExt>,
+}
+
 #[tauri::command]
-fn search(query: String, registry: tauri::State<'_, Registry>) -> Vec<providers::SearchResult> {
+fn search(query: String, query_id: u64, registry: tauri::State<'_, Registry>) -> SearchResponse {
     let t = util::profile_search().then(std::time::Instant::now);
-    let out = registry.read().unwrap_or_else(|e| e.into_inner()).search(&query);
+    let reg = registry.read().unwrap_or_else(|e| e.into_inner());
+    // Async tier first: cancels stale workers and spawns new ones, so their
+    // wall-clock overlaps the sync fan-out below.
+    let pending = extensions::query::manager()
+        .map(|qm| qm.dispatch(query_id, &query, &reg))
+        .unwrap_or_default();
+    let results = reg.search(&query);
     if let Some(t) = t {
         eprintln!(
-            "[profile] search cmd took={:.2}ms results={} q={query:?}",
+            "[profile] search cmd took={:.2}ms results={} pending={} q={query:?}",
             t.elapsed().as_secs_f64() * 1000.0,
-            out.len(),
+            results.len(),
+            pending.len(),
         );
     }
-    out
+    SearchResponse { query_id, results, pending }
+}
+
+/// Cancels all in-flight async extension queries (query cleared, window hidden).
+#[tauri::command]
+fn cancel_search() {
+    if let Some(qm) = extensions::query::manager() {
+        qm.cancel_all();
+    }
 }
 
 /// Content-scope search (the Tab-activated "Contents" mode): full-text matches
@@ -325,6 +350,10 @@ fn is_apps_ready() -> bool {
 
 #[tauri::command]
 fn hide_window(app: tauri::AppHandle) {
+    // A hidden launcher has no use for in-flight async extension queries.
+    if let Some(qm) = extensions::query::manager() {
+        qm.cancel_all();
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
@@ -603,7 +632,7 @@ pub fn run() {
     let ext_kv: Arc<extensions::kv::ExtensionKv> =
         Arc::new(extensions::kv::ExtensionKv::open().unwrap_or_else(|e| {
             eprintln!("[extensions] failed to open kv store ({e}) - falling back to in-memory");
-            extensions::kv::ExtensionKv::open_in_memory()
+            extensions::kv::ExtensionKv::open_in_memory(e.to_string())
         }));
     let extensions_cfg_startup = cfg.extensions.clone();
 
@@ -658,6 +687,11 @@ pub fn run() {
             // Resolve bundled native assets (pdfium, poppler, tessdata) before
             // any provider or preview path needs them.
             runtime_assets::init(app.path().resource_dir().ok());
+
+            // Let extension logging push live-tail events to Settings.
+            extensions::logs::set_app_handle(app.handle().clone());
+            // Async extension query orchestration (streams `search-stream`).
+            extensions::query::init(app.handle().clone());
 
             if let Some(window) = app.get_webview_window("main") {
                 if layer_shell_enabled {
@@ -965,6 +999,7 @@ pub fn run() {
             launch_app,
             reveal_file,
             hide_window,
+            cancel_search,
             is_apps_ready,
             get_config,
             get_custom_theme_css,
@@ -997,9 +1032,15 @@ pub fn run() {
             extensions::list_extensions,
             extensions::extension_activate,
             extensions::extension_preview,
+            extensions::extension_preview_cancel,
             extensions::rescan_extensions,
             extensions::set_extension_settings,
+            extensions::extension_secret_set,
+            extensions::extension_secret_clear,
+            extensions::secrets_available,
             extensions::get_extension_logs,
+            extensions::clear_extension_logs,
+            extensions::extension_storage_status,
             extensions::install::preview_extension_install,
             extensions::install::confirm_extension_install,
             extensions::install::cancel_extension_install,

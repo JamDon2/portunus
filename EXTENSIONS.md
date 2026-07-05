@@ -40,7 +40,7 @@ arrive enabled. Dropping a folder never runs code.
 ## manifest.toml
 
 ```toml
-api = 2                        # REQUIRED: wire API major; unknown majors are rejected
+api = 3                        # REQUIRED: wire API major; unknown majors are rejected
 name = "emoji"                 # must match the directory name; [a-zA-Z0-9_-] only
 version = "0.2.0"
 description = "Search and copy emoji"
@@ -64,18 +64,26 @@ open_url = true                # open_url host fn (NOT needed for OpenUrl effect
 [limits]
 search_timeout_ms = 100        # clamped to [10, 500]
 activate_timeout_ms = 2000     # clamped to [10, 10000]
+query_timeout_ms = 10000       # optional `query` export; clamped to [500, 60000]
+preview_timeout_ms = 500       # `preview` export; clamped to [100, 10000]
 
 [background]                   # optional: schedules your `refresh` export
 refresh_interval_secs = 600    # clamped to [60, 86400]
 
 [[settings]]                   # optional, repeated: user-editable options
 key = "tone"                   # [a-z0-9_]+; read via settings_get / setting_str
-type = "select"                # string | bool | number | select
+type = "select"                # string | bool | number | select | secret
 label = "Skin tone modifier"
 description = "Applied to hand emoji"   # optional helper text
 default = "none"
 options = ["none", "light", "medium", "dark"]  # select only
 # number also accepts: min / max / step;  string accepts: placeholder
+
+[[settings]]                   # a secret: stored in the system keyring, never config.toml
+key = "api_key"
+type = "secret"                # masked input; no default/options/min/max allowed
+label = "API key"
+description = "Your api.example.com token"
 ```
 
 **Permissions are self-declared and snapshotted at consent time.** They are
@@ -103,9 +111,14 @@ you pay a wasm call per keystroke.
 
 ## Exports
 
-Your module exports up to four functions. Each takes one JSON string and
+Your module exports up to five functions. Each takes one JSON string and
 returns one JSON string. With the Rust SDK the (de)serialization is handled
 for you.
+
+There are two search tiers. `search` is the synchronous fast path on a tight
+keystroke budget — trivial extensions only ever need it. `query` is the
+optional async tier: a generous budget, a dedicated instance, and streaming, so
+you can hit the network without blocking the launcher.
 
 ### `search` (required)
 
@@ -138,6 +151,43 @@ for you.
   invalid icon is dropped (the result keeps the default glyph) and the error
   surfaces in Settings.
 
+### `query` (optional) — async & streaming search
+
+Export `query` when your results need real work (network calls, pagination,
+LLM output) that can't fit `search`'s keystroke budget. The host runs it on a
+dedicated instance under `[limits] query_timeout_ms` (default 10 s), off the
+keystroke path — built-in results and your `search` results render instantly
+while `query` is still running, shown with a per-extension loading row.
+
+Input is identical to `search` (`query`, `raw_query`, `trigger`). Push partial
+batches with `guest::emit` as they arrive; the return value is the final batch.
+
+```rust
+use portunus_ext_sdk::guest::{self, plugin_fn, FnResult, Json};
+use portunus_ext_sdk::{QueryInput, QueryOutput};
+
+#[plugin_fn]
+pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
+    for page in 0..5 {
+        let results = fetch_page(&input.0.query, page)?;   // blocking HTTP is fine here
+        if !guest::emit(results)? { break; }               // false = cancelled, stop now
+    }
+    Ok(Json(QueryOutput::default()))
+}
+```
+
+- **Cancellation.** A new keystroke cancels the in-flight query. `emit` returns
+  `false` once that happens — bail out between your blocking calls. Anything you
+  emit after cancellation is dropped by the host regardless.
+- **Merging.** Streamed results merge into the list by `id`. Emitting a result
+  whose `id` matches one your `search` already returned *replaces* it in place —
+  the canonical "show the cached row instantly, swap in the fresh one when the
+  network answers" pattern.
+- **Caps & failure.** At most 200 results per query across all batches; each
+  batch ≤ 512 KB. Query failures never bench your `search`; five consecutive
+  failures disable just the async tier for the session (the error shows in
+  Settings), and it recovers on reload.
+
 ### `activate` (required for actionable results)
 
 ```jsonc
@@ -169,8 +219,9 @@ fine when you did your work via host functions.
 
 ### `preview` (optional)
 
-Called lazily when the user selects one of your results (500 ms budget).
-Return one of the declarative content types; the host renders it natively:
+Called lazily when the user selects one of your results (`[limits]
+preview_timeout_ms`, default 500 ms). Return one of the declarative content
+types; the host renders it natively:
 
 ```jsonc
 { "type": "markdown",  "content": "## GFM markdown (raw HTML is not rendered)" }
@@ -326,15 +377,27 @@ schedule until reload.
 // out: {}
 ```
 
+#### Streaming previews
+
+`preview` may call `guest::emit_preview_update(&content)` before it returns to
+replace what's rendered — re-send the FULL content each time (the host swaps it
+wholesale), which is the right shape for token-by-token LLM output. Raise
+`preview_timeout_ms` to give the stream room. `emit_preview_update` returns
+`false` when the selection moved — stop and return.
+
 ### The kv-as-cache pattern
 
-The canonical recipe for network extensions:
+Two good recipes for network extensions:
 
-1. `refresh` fetches over HTTP and writes results to kv, timestamped with `now_ms`.
-2. `search` reads only kv, so it is always instant and always within budget.
-3. `activate` may also fetch (user-triggered, 2-10 s budget) for manual refresh.
+- **`query` (api 3):** hit the network directly in the async tier and stream
+  results in. Optionally keep a `search` that serves a kv cache instantly, then
+  emit the fresh result from `query` with the same `id` to replace it.
+- **`refresh` + kv:** for data that's shared across queries or slow to warm —
+  `refresh` fetches over HTTP and writes kv (timestamped with `now_ms`), and
+  `search` reads only kv so it is always instant.
 
-Never do network in `search`; the 150 ms keystroke budget will cancel it.
+Never do network in `search`; the tight keystroke budget will cancel it — use
+`query` or `refresh`.
 
 ## Settings
 
@@ -352,6 +415,31 @@ Values are validated against your schema on both save and load; you always see
 schema-shaped data. A settings change hot-reloads your extension (a fresh
 instance with the new snapshot), so treat them as constants per instance.
 
+### Secret settings (API keys)
+
+`type = "secret"` renders a masked input and stores the value in the system
+keyring (`org.freedesktop.secrets` — GNOME Keyring, KWallet, KeePassXC),
+**never** in `config.toml` and never in the log store. Read it exactly like any
+other setting:
+
+```rust
+let key = setting_str("api_key")?;   // the stored secret, or None if unset
+```
+
+Notes:
+
+- Declaring any secret setting is consent-relevant: it shows a `secrets
+  (keyring)` chip before enable/install, and adding the first secret setting to
+  an installed extension triggers re-consent. Paired with `network`, the chips
+  sit side by side — the user can see the extension can send the key somewhere.
+- Secrets are write-only from the UI: they can be set, replaced, or cleared,
+  never read back into the settings form.
+- No Secret Service daemon → the field is disabled with a clear message and
+  `settings_get` returns `None`. Handle an absent optional secret gracefully.
+- **Residual risk:** your extension receives the raw value. Do not
+  `log_message` it — anything you log is visible in the log viewer and on
+  stderr. Portunus never writes the secret anywhere itself.
+
 ## Host functions
 
 Importable from the `extism:host/user` namespace; the Rust SDK wraps them:
@@ -367,9 +455,12 @@ Importable from the `extism:host/user` namespace; the Rust SDK wraps them:
 | `open_url(url)` | `open_url` | http(s) only, opens default browser |
 | `log_message(text)` | none | stderr + the Settings log viewer, 4 KB cap |
 | `settings_get(key) -> Option<Value>` | none | your `[[settings]]` values, defaults applied |
+| `emit_results(batch) -> {cancelled}` | none | stream partial results; valid only inside `query` |
+| `emit_preview(content) -> {cancelled}` | none | stream a preview update; valid only inside `preview` |
 
 SDK wrapper names: `kv_read`, `kv_write`, `kv_keys`, `kv_remove`, `clipboard`,
-`now`, `open`, `debug`, `setting` / `setting_str` / `setting_bool` / `setting_num`.
+`now`, `open`, `debug`, `setting` / `setting_str` / `setting_bool` / `setting_num`,
+`emit`, `emit_preview_update`.
 
 **HTTP** has no custom host function; use Extism's built-in HTTP
 (`extism_pdk::http::request` in Rust). The host derives the allowlist from
@@ -424,9 +515,10 @@ history and logs.
   interruption). A trapped/timed-out call returns empty results; it never
   crashes or stalls the launcher.
 - After a failed call the instance is rebuilt from disk before the next one.
-  **Three consecutive failures bench the extension for the session**; the error
-  shows in your card's log viewer (check there first when "my extension
-  returns nothing").
+  **Three consecutive failures pause the extension** behind an escalating
+  cooldown (30 s → 2 min → 10 min) — it retries automatically, and a Rescan
+  clears the pause immediately; the error shows in your card's log viewer
+  (check there first when "my extension returns nothing").
 - Result ids are namespaced `ext:<name>:<your-id>` by the host. Your local id is
   opaque and may contain anything, including colons.
 - Frecency: results the user activates rank higher in later searches
@@ -437,12 +529,22 @@ history and logs.
 `api` in the manifest is the wire-contract major. The host refuses to load
 extensions targeting a different major and shows why. Additive changes (new
 optional fields, new preview types, new effects) do not bump the major; field
-removals or semantic changes do. v2 broke from v1: `actions` became structured
-objects, `activate` returns effects, `search` input gained `raw_query`/`trigger`.
+removals or semantic changes do. **v3 broke from v2:** added the optional
+async `query` export with `emit`-based streaming, streaming previews via
+`emit_preview_update`, `secret` settings, and the `query_timeout_ms` /
+`preview_timeout_ms` limits. No compatibility shim — recompile against the v3
+SDK and set `api = 3`. (v2 broke from v1: `actions` became structured objects,
+`activate` returns effects, `search` input gained `raw_query`/`trigger`.)
 
 ## Examples
 
 - `examples/extensions/emoji/` - offline: triggers, structured actions,
-  activate effects (no permissions), settings, browse state, preview.
-- `examples/extensions/cheatsh/` - network: kv-as-cache with background
-  refresh, trigger prefixes, open-url/copy effects, HTML preview.
+  activate effects (no permissions), settings, browse state, preview. Recompiled
+  for api 3 unchanged — the sync tier pays no complexity tax.
+- `examples/extensions/cheatsh/` - network: an async `query` that streams the
+  live sheet in over `search`'s instant kv cache, background refresh, trigger
+  prefixes, open-url/copy effects, HTML preview.
+- `examples/extensions/gh/` - full breadth: secret setting (PAT in the
+  keyring), dual-endpoint streaming `query` (repos + issues) merged over a kv
+  repo cache by id, streaming Metadata→Markdown previews, clone-command copy
+  effects, daily background cache warm.

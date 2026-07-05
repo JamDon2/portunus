@@ -61,3 +61,18 @@ pub fn preview(input: Json<PreviewInput>) -> FnResult<Json<PreviewContent>> {
         ],
     }))
 }
+
+// Optional async tier: export `query` for work too slow for `search`'s
+// keystroke budget (network calls, pagination). It runs on a dedicated
+// instance under `query_timeout_ms`; stream partial results with
+// `guest::emit`, which returns false once the query is cancelled.
+//
+// use portunus_ext_sdk::guest;
+// use portunus_ext_sdk::{QueryInput, QueryOutput};
+//
+// #[plugin_fn]
+// pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
+//     let results = fetch_from_network(&input.0.query)?;  // blocking HTTP is fine here
+//     let _ = guest::emit(results)?;                       // false = cancelled, stop
+//     Ok(Json(QueryOutput::default()))
+// }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ExtensionInfo, InstallPreview, UpdateCheck } from "../../../types";
 import { WarnIcon } from "../../../icons";
@@ -15,6 +15,14 @@ interface Props {
   enabled: boolean;
   /** Not yet present in config - never enabled, still needs review. */
   isNew: boolean;
+  /** Whether a Secret Service daemon is reachable (for secret settings). */
+  secretsAvailable: boolean;
+  /** Pre-staged update from a "Check all for updates" sweep - opens the
+   *  update dialog directly, skipping this card's own check. */
+  pendingUpdate?: InstallPreview;
+  /** Called when a pendingUpdate dialog closes, so the parent stops tracking
+   *  (and re-cancelling) the staged bytes. */
+  onUpdateConsumed?: () => void;
   onSetEnabled: (v: boolean) => void;
   onChanged: () => void;
 }
@@ -25,11 +33,18 @@ interface Props {
  * and hash, the schema-driven settings form, a log viewer, and the
  * update/uninstall actions.
  */
-export default function ExtensionCard({ info, enabled, isNew, onSetEnabled, onChanged }: Props) {
+export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, pendingUpdate, onUpdateConsumed, onSetEnabled, onChanged }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [updateState, setUpdateState] = useState<"idle" | "checking" | "current">("idle");
   const [updatePreview, setUpdatePreview] = useState<InstallPreview | null>(null);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
+
+  // A sweep-provided update opens the dialog directly. The parent owns the
+  // staged bytes' lifecycle, so this card doesn't cancel them on close.
+  const fromSweep = updatePreview != null && updatePreview === pendingUpdate;
+  useEffect(() => {
+    if (pendingUpdate) setUpdatePreview(pendingUpdate);
+  }, [pendingUpdate]);
 
   const checkUpdate = () => {
     setUpdateState("checking");
@@ -108,7 +123,7 @@ export default function ExtensionCard({ info, enabled, isNew, onSetEnabled, onCh
             <div className="settings-dep-inline-warn"><WarnIcon />{info.error}</div>
           )}
           {info.benched && (
-            <div className="settings-dep-inline-warn"><WarnIcon />Disabled for this session after repeated failures. Fix and Rescan.</div>
+            <div className="settings-dep-inline-warn"><WarnIcon />Paused after repeated failures — retries automatically; fix and Rescan to retry now.</div>
           )}
           {info.needs_reconsent && (
             <div className="settings-ext-reconsent">
@@ -125,7 +140,7 @@ export default function ExtensionCard({ info, enabled, isNew, onSetEnabled, onCh
             {info.homepage && <> · <a href={info.homepage} target="_blank" rel="noreferrer">{info.homepage}</a></>}
           </div>
 
-          <ExtensionSettingsForm extension={info.name} schema={info.settings_schema} values={info.settings_values} />
+          <ExtensionSettingsForm extension={info.name} schema={info.settings_schema} values={info.settings_values} secretsSet={info.secrets_set} secretsAvailable={secretsAvailable} onChanged={onChanged} />
 
           <ExtensionLogs extension={info.name} />
 
@@ -146,7 +161,7 @@ export default function ExtensionCard({ info, enabled, isNew, onSetEnabled, onCh
       {updatePreview && (
         <InstallExtensionDialog
           initialPreview={updatePreview}
-          onClose={() => setUpdatePreview(null)}
+          onClose={() => { setUpdatePreview(null); if (fromSweep) onUpdateConsumed?.(); }}
           onInstalled={onChanged}
         />
       )}

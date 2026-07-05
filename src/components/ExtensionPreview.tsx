@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PreviewProps } from "../providers/registry";
-import type { PreviewContent } from "../types";
+import type { PreviewChunk, PreviewContent } from "../types";
+import { useTauriListener } from "../hooks/useTauriListener";
 
 // Per-id preview cache so flipping between results doesn't re-invoke the
 // extension. Cleared wholesale when it grows - previews are tiny and queries
@@ -81,11 +82,16 @@ function buildSrcdoc(content: string): string {
   );
 }
 
+// Correlates a preview invoke with its streamed `extension-preview-chunk`
+// events; module-level so it survives remounts.
+let previewRequestCounter = Date.now();
+
 export default function ExtensionPreview({ result }: PreviewProps) {
   const version = useSyncExternalStore(subscribeVersion, () => cacheVersion);
   const [content, setContent] = useState<PreviewContent | null | undefined>(
     cache.get(result.id),
   );
+  const requestIdRef = useRef(0);
 
   // Synchronously update state from cache before the browser paints - prevents
   // the one-frame flash where the previous result's content is visible while
@@ -94,12 +100,21 @@ export default function ExtensionPreview({ result }: PreviewProps) {
     setContent(cache.has(result.id) ? cache.get(result.id) : undefined);
   }, [result.id, version]);
 
+  // Streamed intermediate content (LLM tokens, slow APIs): each chunk
+  // replaces the render wholesale. Stale chunks are filtered by request id;
+  // only the invoke's final resolution is cached.
+  useTauriListener<PreviewChunk>("extension-preview-chunk", chunk => {
+    if (chunk.request_id === requestIdRef.current) setContent(chunk.content);
+  });
+
   // Async: fire the wasm invoke only for uncached results.
   useEffect(() => {
     if (cache.has(result.id)) return;
     if (!result.ext) return;
     let stale = false;
-    invoke<PreviewContent | null>("extension_preview", { id: result.id, ext: result.ext })
+    const requestId = ++previewRequestCounter;
+    requestIdRef.current = requestId;
+    invoke<PreviewContent | null>("extension_preview", { id: result.id, ext: result.ext, requestId })
       .then(c => {
         if (cache.size >= CACHE_MAX) cache.clear();
         cache.set(result.id, c);
@@ -110,6 +125,11 @@ export default function ExtensionPreview({ result }: PreviewProps) {
       });
     return () => {
       stale = true;
+      // Selection moved with the stream still running - abort it backend-side
+      // (the next preview call would otherwise queue behind it).
+      if (requestIdRef.current === requestId) {
+        invoke("extension_preview_cancel", { id: result.id }).catch(() => {});
+      }
     };
   }, [result.id, result.ext, version]);
 

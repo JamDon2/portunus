@@ -1,4 +1,4 @@
-api = 2
+api = 3
 name = "{{name}}"
 version = "0.1.0"
 description = "Describe what {{name}} does"
@@ -12,6 +12,10 @@ prefixes = ["{{name}}"]
 
 [limits]
 search_timeout_ms = 100
+# Budget for the optional async `query` export (network work, off the
+# keystroke path). Uncomment when you export `query`.
+# query_timeout_ms = 10000
+# preview_timeout_ms = 500
 
 # Permissions are all opt-in and shown to the user before enabling:
 # [permissions]
@@ -32,3 +36,10 @@ search_timeout_ms = 100
 # type = "string"
 # label = "Greeting text"
 # default = "hello"
+
+# A secret (API key/token): masked input, stored in the system keyring,
+# never in config.toml. Read it with setting_str() like any other setting.
+# [[settings]]
+# key = "api_key"
+# type = "secret"
+# label = "API key"

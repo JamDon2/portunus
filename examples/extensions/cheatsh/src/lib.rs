@@ -1,13 +1,14 @@
-//! Example Portunus extension: cheat.sh lookups. Demonstrates the v2 API with
+//! Example Portunus extension: cheat.sh lookups. Demonstrates the v3 API:
 //! host-side trigger prefixes (no query parsing in the extension), a
-//! `[background]` refresh that warms the kv cache, structured actions, and
-//! declarative activate effects (no clipboard/open_url permissions needed).
+//! `[background]` refresh that warms the kv cache, an async `query` export
+//! that streams the live sheet in over the instant kv results, structured
+//! actions, and declarative activate effects (no clipboard/open_url perms).
 
 use portunus_ext_sdk::guest::extism_pdk::{self, http, HttpRequest};
-use portunus_ext_sdk::guest::{kv_read, kv_write, plugin_fn, FnResult, Json};
+use portunus_ext_sdk::guest::{self, kv_read, kv_write, plugin_fn, FnResult, Json};
 use portunus_ext_sdk::{
     Action, ActivateEffect, ActivateInput, ActivateOutput, ExtensionResult, PreviewContent,
-    PreviewInput, RefreshInput, RefreshOutput, SearchInput, SearchOutput,
+    PreviewInput, QueryInput, QueryOutput, RefreshInput, RefreshOutput, SearchInput, SearchOutput,
 };
 
 fn fetch_text(url: &str) -> Result<String, extism_pdk::Error> {
@@ -84,6 +85,50 @@ pub fn refresh(_input: Json<RefreshInput>) -> FnResult<Json<RefreshOutput>> {
     Ok(Json(RefreshOutput::default()))
 }
 
+/// Async tier: confirm the exact term has a live cheat sheet and stream a
+/// "live" result in. Runs on a dedicated instance with a generous budget while
+/// the instant kv-backed `search` results are already on screen; emitting the
+/// same id as the exact-match search row replaces it in place.
+#[plugin_fn]
+pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
+    let term = input.0.query.trim().to_lowercase();
+    if term.is_empty() {
+        return Ok(Json(QueryOutput::default()));
+    }
+    // Blocking network is fine here - it's off the keystroke path.
+    let sheet = match fetch_text(&format!("https://cheat.sh/{term}?T")) {
+        Ok(s) => s,
+        Err(_) => return Ok(Json(QueryOutput::default())),
+    };
+    // cheat.sh answers a missing term with an "Unknown topic." page. Don't
+    // enrich the row with that - leave the cached search row as-is.
+    if sheet.trim_start().starts_with("Unknown topic") {
+        return Ok(Json(QueryOutput::default()));
+    }
+    // First non-empty, non-comment line = a one-line preview of the sheet.
+    let snippet = sheet
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .unwrap_or("cheat sheet")
+        .to_string();
+
+    let result = ExtensionResult {
+        id: term.clone(), // same id as the exact-match search row -> replaces it
+        title: format!("cheat.sh/{term}"),
+        subtitle: Some(snippet),
+        relevance: 100.0,
+        actions: actions(),
+        // Distinguishes this freshly-fetched, network-confirmed row from the
+        // instant cached prefix matches around it.
+        badge: Some("online".into()),
+        ..Default::default()
+    };
+    // Push it as a partial batch; if cancelled (new keystroke) `emit` is false.
+    let _ = guest::emit(vec![result])?;
+    Ok(Json(QueryOutput::default()))
+}
+
 #[plugin_fn]
 pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
     // The host strips the trigger ("ch tar" → "tar") before we see it.
@@ -123,6 +168,7 @@ pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
             ExtensionResult {
                 id: entry.to_string(),
                 title: format!("cheat.sh/{entry}"),
+                subtitle: Some("Cheat sheet".into()),
                 relevance,
                 actions: actions(),
                 ..Default::default()

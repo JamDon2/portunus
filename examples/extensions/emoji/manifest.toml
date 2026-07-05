@@ -1,4 +1,4 @@
-api = 2
+api = 3
 name = "emoji"
 version = "0.2.0"
 description = "Search emoji by name and copy them to the clipboard"

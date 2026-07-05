@@ -34,6 +34,15 @@ pub struct LogEntry {
 pub static LOGS: std::sync::LazyLock<ExtensionLogs> =
     std::sync::LazyLock::new(ExtensionLogs::default);
 
+/// App handle for pushing `extension-log` events to the Settings log viewer.
+/// Unset on CLI paths that log before (or without) a running app - those
+/// simply skip the event.
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+pub fn set_app_handle(app: tauri::AppHandle) {
+    let _ = APP.set(app);
+}
+
 /// Convenience: log to both stderr and the ring buffer.
 pub fn log(extension: &str, level: LogLevel, message: &str) {
     eprintln!("[ext:{extension}] {message}");
@@ -68,6 +77,13 @@ impl ExtensionLogs {
             ring.pop_front();
         }
         ring.push_back(entry);
+        drop(map);
+        // Payload is just the name - the viewer refetches the ring tail, which
+        // keeps ordering trivial and the event idempotent.
+        if let Some(app) = APP.get() {
+            use tauri::Emitter;
+            let _ = app.emit("extension-log", extension);
+        }
     }
 
     /// Last `limit` entries, oldest first.

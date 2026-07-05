@@ -46,13 +46,23 @@ pub struct ConsentPermissions {
     pub kv: bool,
     pub clipboard: bool,
     pub open_url: bool,
+    /// Derived from the settings schema: any `type = "secret"` setting means
+    /// the extension stores secrets in the keyring - consent-relevant,
+    /// especially paired with `network`.
+    pub has_secrets: bool,
 }
 
 impl ConsentPermissions {
-    pub fn from_manifest(p: &manifest::Permissions) -> Self {
-        let mut network = p.network.clone();
+    pub fn from_manifest(m: &manifest::ExtensionManifest) -> Self {
+        let mut network = m.permissions.network.clone();
         network.sort();
-        Self { network, kv: p.kv, clipboard: p.clipboard, open_url: p.open_url }
+        Self {
+            network,
+            kv: m.permissions.kv,
+            clipboard: m.permissions.clipboard,
+            open_url: m.permissions.open_url,
+            has_secrets: m.settings_schema.iter().any(|s| s.kind == "secret"),
+        }
     }
 
     /// True when `other` (current manifest) asks for anything this snapshot
@@ -61,6 +71,7 @@ impl ConsentPermissions {
         (!self.kv && other.kv)
             || (!self.clipboard && other.clipboard)
             || (!self.open_url && other.open_url)
+            || (!self.has_secrets && other.has_secrets)
             || other.network.iter().any(|h| !self.network.contains(h))
     }
 }
@@ -76,6 +87,11 @@ pub struct ConsentRecord {
     /// Unix seconds - avoids a datetime dependency.
     #[serde(default)]
     pub consented_at: u64,
+    /// Secret setting keys ever written to the keyring for this extension.
+    /// The Secret Service has no portable enumeration, so uninstall unions
+    /// this with the (best-effort) manifest schema to purge entries.
+    #[serde(default)]
+    pub secret_keys: Vec<String>,
 }
 
 fn consents_path() -> PathBuf {
@@ -112,14 +128,20 @@ pub fn record_consent(
     origin: Origin,
 ) -> Result<(), String> {
     let mut consents = load_consents();
+    // Keyring bookkeeping survives re-consent/update - the stored secrets do.
+    let secret_keys = consents
+        .get(name)
+        .map(|r| r.secret_keys.clone())
+        .unwrap_or_default();
     consents.insert(
         name.to_string(),
         ConsentRecord {
             version: m.version.clone(),
             sha256,
             origin,
-            permissions: ConsentPermissions::from_manifest(&m.permissions),
+            permissions: ConsentPermissions::from_manifest(m),
             consented_at: now_unix(),
+            secret_keys,
         },
     );
     save_consents(&consents)
@@ -133,7 +155,7 @@ pub fn record_consent(
 /// - Dev origin: the user owns the code - the snapshot auto-refreshes.
 pub fn check_consent(m: &manifest::ExtensionManifest) -> Result<(), String> {
     let mut consents = load_consents();
-    let current = ConsentPermissions::from_manifest(&m.permissions);
+    let current = ConsentPermissions::from_manifest(m);
     match consents.get_mut(&m.name) {
         None => {
             let _ = record_consent(&m.name, m, String::new(), infer_origin(&m.name));
@@ -158,6 +180,18 @@ pub fn check_consent(m: &manifest::ExtensionManifest) -> Result<(), String> {
     }
 }
 
+/// Remembers that a secret was written for `name`/`key` so uninstall can
+/// purge the keyring entry even if the manifest is unreadable by then.
+pub fn record_secret_key(name: &str, key: &str) {
+    let mut consents = load_consents();
+    let Some(rec) = consents.get_mut(name) else { return };
+    if rec.secret_keys.iter().any(|k| k == key) {
+        return;
+    }
+    rec.secret_keys.push(key.to_string());
+    let _ = save_consents(&consents);
+}
+
 /// Dev-linked extensions are symlinked dirs; everything else without a
 /// record is a hand-dropped folder (treated as a local file install).
 fn infer_origin(name: &str) -> Origin {
@@ -180,14 +214,19 @@ pub fn consent_extension_permissions(name: String) -> Result<(), String> {
         .map(|r| r.origin.clone())
         .unwrap_or_else(|| infer_origin(&name));
     let sha = consents.get(&name).map(|r| r.sha256.clone()).unwrap_or_default();
+    let secret_keys = consents
+        .get(&name)
+        .map(|r| r.secret_keys.clone())
+        .unwrap_or_default();
     consents.insert(
         name.clone(),
         ConsentRecord {
             version: m.version.clone(),
             sha256: sha,
             origin,
-            permissions: ConsentPermissions::from_manifest(&m.permissions),
+            permissions: ConsentPermissions::from_manifest(&m),
             consented_at: now_unix(),
+            secret_keys,
         },
     );
     save_consents(&consents)
@@ -284,7 +323,14 @@ pub fn sweep_stale_dirs() {
     }
 }
 
-fn fetch_archive(source: &str) -> Result<Vec<u8>, String> {
+#[derive(serde::Serialize, Clone)]
+struct InstallProgress {
+    fetched: u64,
+    /// Content-Length when the server sent one; None = unknown total.
+    total: Option<u64>,
+}
+
+fn fetch_archive(source: &str, app: Option<&tauri::AppHandle>) -> Result<Vec<u8>, String> {
     if let Some(rest) = source.strip_prefix("file://") {
         return std::fs::read(rest).map_err(|e| format!("{rest}: {e}"));
     }
@@ -292,17 +338,44 @@ fn fetch_archive(source: &str) -> Result<Vec<u8>, String> {
         return Err("extension downloads require https".to_string());
     }
     if source.starts_with("https://") {
+        use tauri::Emitter;
         let resp = ureq::get(source)
             .timeout(std::time::Duration::from_secs(60))
             .call()
             .map_err(|e| format!("download failed: {e}"))?;
+        let total: Option<u64> = resp
+            .header("Content-Length")
+            .and_then(|s| s.parse().ok());
+        // Read in chunks so the UI gets a progress bar; the cap still applies.
+        let mut reader = resp.into_reader().take(MAX_ARCHIVE_BYTES + 1);
         let mut bytes = Vec::new();
-        resp.into_reader()
-            .take(MAX_ARCHIVE_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| format!("download failed: {e}"))?;
+        let mut buf = [0u8; 64 * 1024];
+        let mut last_emit = std::time::Instant::now();
+        loop {
+            let n = reader.read(&mut buf).map_err(|e| format!("download failed: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..n]);
+            // Throttle events to ~10/s so a fast download can't flood IPC.
+            if let Some(app) = app {
+                if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
+                    last_emit = std::time::Instant::now();
+                    let _ = app.emit(
+                        "ext-install-progress",
+                        InstallProgress { fetched: bytes.len() as u64, total },
+                    );
+                }
+            }
+        }
         if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
             return Err(format!("archive exceeds the {MAX_ARCHIVE_BYTES}-byte cap"));
+        }
+        if let Some(app) = app {
+            let _ = app.emit(
+                "ext-install-progress",
+                InstallProgress { fetched: bytes.len() as u64, total },
+            );
         }
         return Ok(bytes);
     }
@@ -356,19 +429,23 @@ fn extract_archive(bytes: &[u8], dest: &Path) -> Result<(), String> {
 /// I/O (network + disk) - runs on the blocking pool, never the async reactor.
 #[tauri::command]
 pub async fn preview_extension_install(
+    app: tauri::AppHandle,
     source: String,
     expected_sha256: Option<String>,
 ) -> Result<InstallPreview, String> {
-    tauri::async_runtime::spawn_blocking(move || preview_install_blocking(&source, expected_sha256))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_install_blocking(Some(&app), &source, expected_sha256)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn preview_install_blocking(
+    app: Option<&tauri::AppHandle>,
     source: &str,
     expected_sha256: Option<String>,
 ) -> Result<InstallPreview, String> {
-    let bytes = fetch_archive(source)?;
+    let bytes = fetch_archive(source, app)?;
     let sha256 = hex_sha256(&bytes);
     if let Some(expected) = expected_sha256 {
         let expected = expected.trim().to_lowercase();
@@ -399,7 +476,7 @@ fn preview_install_blocking(
             .get(&m.name)
             .map(|rec| {
                 rec.permissions
-                    .grew_to(&ConsentPermissions::from_manifest(&m.permissions))
+                    .grew_to(&ConsentPermissions::from_manifest(&m))
             })
             .unwrap_or(false),
     });
@@ -416,7 +493,7 @@ fn preview_install_blocking(
         description: m.description.clone(),
         author: m.author.clone(),
         homepage: m.homepage.clone(),
-        permissions: ConsentPermissions::from_manifest(&m.permissions),
+        permissions: ConsentPermissions::from_manifest(&m),
         triggers: m.trigger.as_ref().map(|t| t.prefixes.clone()).unwrap_or_default(),
         sha256,
         size_bytes: bytes.len() as u64,
@@ -556,9 +633,11 @@ pub async fn check_extension_update(name: String) -> Result<UpdateCheck, String>
     let current_version =
         installed_version(&name).ok_or_else(|| "extension is not installed".to_string())?;
 
-    let preview = tauri::async_runtime::spawn_blocking(move || preview_install_blocking(&url, None))
-        .await
-        .map_err(|e| e.to_string())??;
+    let preview = tauri::async_runtime::spawn_blocking(move || {
+        preview_install_blocking(None, &url, None)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     if preview.name != name {
         let _ = cancel_extension_install(preview.staging_token);
@@ -589,6 +668,28 @@ pub fn uninstall_extension(
     crate::util::write(&registry).set_extension(&name, None);
 
     let dir = extensions_dir().join(&name);
+    // Purge keyring secrets: manifest schema keys (best effort - the dir may
+    // already be broken) unioned with the keys recorded at write time.
+    // Never blocks the uninstall on keyring errors.
+    {
+        let mut keys: std::collections::HashSet<String> = manifest::load(&dir)
+            .map(|(m, _)| {
+                m.settings_schema
+                    .iter()
+                    .filter(|s| s.kind == "secret")
+                    .map(|s| s.key.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(rec) = load_consents().get(&name) {
+            keys.extend(rec.secret_keys.iter().cloned());
+        }
+        for key in keys {
+            if let Err(e) = super::secrets::delete(&name, &key) {
+                eprintln!("[ext:{name}] uninstall: {e}");
+            }
+        }
+    }
     match std::fs::symlink_metadata(&dir) {
         Ok(meta) if meta.is_symlink() => {
             std::fs::remove_file(&dir).map_err(|e| e.to_string())?; // dev link: never touch the target
@@ -684,12 +785,14 @@ mod tests {
             kv: true,
             clipboard: false,
             open_url: false,
+            has_secrets: false,
         };
         // Same or narrower: no growth.
         assert!(!base.grew_to(&base));
         assert!(!base.grew_to(&ConsentPermissions { network: vec![], kv: false, ..base.clone() }));
         // Any new grant: growth.
         assert!(base.grew_to(&ConsentPermissions { clipboard: true, ..base.clone() }));
+        assert!(base.grew_to(&ConsentPermissions { has_secrets: true, ..base.clone() }));
         assert!(base.grew_to(&ConsentPermissions {
             network: vec!["a.com".into(), "b.com".into()],
             ..base.clone()

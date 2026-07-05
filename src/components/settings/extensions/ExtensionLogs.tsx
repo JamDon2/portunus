@@ -1,26 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ExtensionLogEntry } from "../../../types";
+import { useTauriListener } from "../../../hooks/useTauriListener";
 
 interface Props {
   extension: string;
 }
 
-const POLL_MS = 2000;
+/** Trailing debounce for event-driven refreshes - a chatty extension emits
+ * many log lines per call; one refetch per burst is enough. */
+const EVENT_DEBOUNCE_MS = 120;
+/** Slow fallback poll in case an event is ever dropped. */
+const FALLBACK_POLL_MS = 10_000;
 
 function fmtTime(tsMs: number): string {
   return new Date(tsMs).toLocaleTimeString("en-GB", { hour12: false });
 }
 
 /**
- * Tail of one extension's log ring buffer. Polls while mounted (the panel is
- * only mounted while its card is expanded) - the ring buffer makes polling
- * idempotent and cheap, and avoids event-bus spam during background refreshes.
+ * Tail of one extension's log ring buffer. Refreshes on `extension-log`
+ * events (pushed by the backend on every log line) with a slow fallback poll -
+ * the ring buffer makes refetching idempotent and cheap.
  */
 export default function ExtensionLogs({ extension }: Props) {
   const [entries, setEntries] = useState<ExtensionLogEntry[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
+  const debounceRef = useRef<number | undefined>(undefined);
 
   const refresh = useCallback(() => {
     invoke<ExtensionLogEntry[]>("get_extension_logs", { name: extension, limit: 100 })
@@ -30,9 +36,24 @@ export default function ExtensionLogs({ extension }: Props) {
 
   useEffect(() => {
     refresh();
-    const t = window.setInterval(refresh, POLL_MS);
-    return () => window.clearInterval(t);
+    const t = window.setInterval(refresh, FALLBACK_POLL_MS);
+    return () => {
+      window.clearInterval(t);
+      window.clearTimeout(debounceRef.current);
+    };
   }, [refresh]);
+
+  useTauriListener<string>("extension-log", name => {
+    if (name !== extension) return;
+    window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(refresh, EVENT_DEBOUNCE_MS);
+  }, [extension, refresh]);
+
+  const clear = () => {
+    invoke("clear_extension_logs", { name: extension })
+      .then(() => setEntries([]))
+      .catch(() => {});
+  };
 
   // Stick to the bottom unless the user scrolled up to read history.
   useEffect(() => {
@@ -44,6 +65,7 @@ export default function ExtensionLogs({ extension }: Props) {
     <div className="settings-ext-logs">
       <div className="settings-ext-logs-bar">
         <span className="settings-ext-logs-title">Logs</span>
+        <button className="settings-btn-secondary" onClick={clear}>Clear</button>
         <button className="settings-btn-secondary" onClick={refresh}>Refresh</button>
       </div>
       <div

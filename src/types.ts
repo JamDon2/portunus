@@ -131,12 +131,14 @@ export interface ExtensionPermissions {
   kv: boolean;
   clipboard: boolean;
   open_url: boolean;
+  /** Declares at least one `type = "secret"` setting (stored in the keyring). */
+  has_secrets: boolean;
 }
 
 /** One `[[settings]]` entry from an extension's manifest. */
 export interface ExtensionSettingSpec {
   key: string;
-  /** "string" | "bool" | "number" | "select" */
+  /** "string" | "bool" | "number" | "select" | "secret" */
   type: string;
   label: string;
   description: string;
@@ -175,6 +177,8 @@ export interface ExtensionInfo {
   origin_url: string | null;
   /** Extensions dir entry is a symlink (`portunus ext dev`). */
   dev: boolean;
+  /** Secret setting keys that currently have a stored keyring value. */
+  secrets_set: string[];
 }
 
 /** Staged install description from `preview_extension_install`. */
@@ -222,6 +226,37 @@ export interface SearchResult {
   match_page?: number;
   /** Original extension DTO for `ext:` results; passed back on activate/preview. */
   ext?: ExtensionResult;
+}
+
+/** One extension whose async `query` export is running for the current
+ *  keystroke; its batches arrive later as `search-stream` events. */
+export interface PendingExt {
+  name: string;
+  kind: string;
+}
+
+/** Response of the `search` command: sync-tier results plus the async tier's
+ *  started set. */
+export interface SearchResponse {
+  query_id: number;
+  results: SearchResult[];
+  pending: PendingExt[];
+}
+
+/** `search-stream` event payload - one streamed batch from an async query. */
+export interface StreamPayload {
+  query_id: number;
+  ext: string;
+  results: SearchResult[];
+  done: boolean;
+  error?: string;
+}
+
+/** `extension-preview-chunk` event payload - a streamed preview update that
+ *  replaces the rendered content wholesale. */
+export interface PreviewChunk {
+  request_id: number;
+  content: PreviewContent;
 }
 
 /** One clipboard history entry, as returned by the `clipboard_list` command. */

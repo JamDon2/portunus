@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod breaker;
 pub mod calc;
 pub mod clipboard;
 pub mod content;
@@ -138,6 +139,22 @@ pub fn fuzzy_setup(query: &str) -> (nucleo_matcher::pattern::Pattern, nucleo_mat
     (pattern, matcher, Vec::new())
 }
 
+/// Applies the frecency bonus in place. Shared by the sync keystroke path and
+/// the streamed async-query path so the formula cannot drift between them.
+/// Content results are skipped - they are already ranked by FTS5/BM25 relevance.
+pub fn apply_frecency(results: &mut [SearchResult], store: &FrecencyStore, weight: f32) {
+    let scores = store.all_scores();
+    for r in results.iter_mut() {
+        if r.score >= SCORE_CONTENT {
+            continue;
+        }
+        if let Some(&fs) = scores.get(&r.id) {
+            let normalized = (fs / FRECENCY_REFERENCE).min(1.0);
+            r.score += normalized * weight;
+        }
+    }
+}
+
 pub trait Provider: Send + Sync {
     #[allow(dead_code)]
     fn id(&self) -> &str;
@@ -174,6 +191,12 @@ impl PluginRegistry {
     /// mutation path for extension state - build instances before taking the
     /// write lock, this only swaps pointers.
     pub fn set_extension(&mut self, name: &str, provider: Option<Arc<wasm::WasmProvider>>) {
+        // A reloaded/unloaded extension must not keep streaming from its old
+        // instance - cancel its in-flight async query (the worker's own Arc
+        // keeps the old provider alive until it unwinds).
+        if let Some(qm) = crate::extensions::query::manager() {
+            qm.cancel_ext(name);
+        }
         match provider {
             Some(p) => {
                 self.extensions.insert(name.to_string(), p);
@@ -215,6 +238,12 @@ impl PluginRegistry {
     pub fn set_frecency(&mut self, store: Arc<FrecencyStore>, weight: f32) {
         self.frecency = Some(store);
         self.frecency_weight = weight;
+    }
+
+    /// Frecency store + weight, for scoring streamed async-query results with
+    /// the exact same bonus as the sync path.
+    pub fn frecency_params(&self) -> (Option<Arc<FrecencyStore>>, f32) {
+        (self.frecency.clone(), self.frecency_weight)
     }
 
     pub fn update_settings(&mut self, max_results: usize, frecency_weight: f32) {
@@ -299,18 +328,8 @@ impl PluginRegistry {
         }
 
         // Apply frecency bonus before sort so heavily-used items surface correctly.
-        // Skip content results - they are already ranked by FTS5/BM25 relevance.
         if let Some(store) = &self.frecency {
-            let scores = store.all_scores();
-            for r in &mut results {
-                if r.score >= SCORE_CONTENT {
-                    continue;
-                }
-                if let Some(&fs) = scores.get(&r.id) {
-                    let normalized = (fs / FRECENCY_REFERENCE).min(1.0);
-                    r.score += normalized * self.frecency_weight;
-                }
-            }
+            apply_frecency(&mut results, store, self.frecency_weight);
         }
 
         results.sort_by(|a, b| {

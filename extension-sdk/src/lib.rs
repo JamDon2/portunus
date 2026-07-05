@@ -2,7 +2,7 @@
 //!
 //! Everything crossing the extension boundary is defined here and versioned by
 //! [`API_VERSION`]. Extensions declare the API major they target in their
-//! `manifest.toml` (`api = 2`); the host refuses to load unknown majors.
+//! `manifest.toml` (`api = 3`); the host refuses to load unknown majors.
 //!
 //! Extension authors: enable the default `guest` feature and see the `guest`
 //! module for host-function wrappers. The Portunus host depends on this crate
@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Wire-contract major version. Bumped only on breaking changes.
-pub const API_VERSION: u32 = 2;
+pub const API_VERSION: u32 = 3;
 
 /// Input to the extension's exported `search` function.
 ///
@@ -84,6 +84,48 @@ pub struct Action {
 pub struct ResultIcon {
     pub mime: String,
     pub data_base64: String,
+}
+
+/// Input to the extension's optional exported `query` function - the async
+/// search tier.
+///
+/// Same shape and trigger semantics as [`SearchInput`], but a separate type so
+/// the two tiers can evolve independently. `query` runs on a dedicated
+/// instance under a generous budget (`[limits] query_timeout_ms`, default
+/// 10 s) and may do blocking network I/O; partial batches stream to the
+/// launcher via [`guest::emit`] and the return value is the final batch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryInput {
+    pub query: String,
+    #[serde(default)]
+    pub raw_query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+}
+
+/// Output of the optional exported `query` function: the final result batch.
+/// May be empty when everything was already pushed via [`guest::emit`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QueryOutput {
+    #[serde(default)]
+    pub results: Vec<ExtensionResult>,
+}
+
+/// Payload of the `emit_results` host function - one partial batch pushed
+/// from inside `query`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EmitBatch {
+    #[serde(default)]
+    pub results: Vec<ExtensionResult>,
+}
+
+/// Ack returned by the `emit_results`/`emit_preview` host functions.
+/// `cancelled = true` means the host no longer wants output for this call
+/// (the user typed a new query or moved the selection) - stop work and return.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EmitAck {
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 /// Input to the extension's exported `activate` function.
@@ -222,6 +264,8 @@ pub mod guest {
         fn open_url(url: String);
         fn log_message(message: String);
         fn settings_get(key: String) -> Json<Option<serde_json::Value>>;
+        fn emit_results(batch: Json<super::EmitBatch>) -> Json<super::EmitAck>;
+        fn emit_preview(content: Json<super::PreviewContent>) -> Json<super::EmitAck>;
     }
 
     /// Read a value from this extension's key-value store.
@@ -296,5 +340,25 @@ pub mod guest {
     /// Convenience: numeric setting, or `None` if unset/not a number.
     pub fn setting_num(key: &str) -> Result<Option<f64>, extism_pdk::Error> {
         Ok(setting(key)?.and_then(|v| v.as_f64()))
+    }
+
+    /// Push a partial result batch from inside the exported `query` function.
+    /// Returns `false` when the query was cancelled (new keystroke) - stop
+    /// work and return early. Calling this outside `query` is an error.
+    pub fn emit(results: Vec<super::ExtensionResult>) -> Result<bool, extism_pdk::Error> {
+        let Json(ack) = unsafe { emit_results(Json(super::EmitBatch { results }))? };
+        Ok(!ack.cancelled)
+    }
+
+    /// Replace the rendered preview from inside the exported `preview`
+    /// function (re-send the FULL content each time - the host swaps it
+    /// wholesale, which is the right model for token-by-token accumulation).
+    /// Returns `false` when the preview was cancelled (selection moved) -
+    /// stop work and return early. Calling this outside `preview` is an error.
+    pub fn emit_preview_update(
+        content: &super::PreviewContent,
+    ) -> Result<bool, extism_pdk::Error> {
+        let Json(ack) = unsafe { emit_preview(Json(content.clone()))? };
+        Ok(!ack.cancelled)
     }
 }

@@ -1120,6 +1120,14 @@ a:focus-visible,
   margin: 2px 2px 8px;
 }
 
+.settings-group-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.settings-group-title-row .settings-group-title { margin-bottom: 8px; }
+
 .settings-group-desc {
   font-size: 11.5px;
   color: var(--fg-desc);
@@ -1444,11 +1452,29 @@ a:focus-visible,
 
 .settings-ext-reconsent { margin-top: 2px; }
 
+/* Secret setting input (masked, keyring-backed). */
+.settings-ext-secret { display: flex; flex-direction: column; gap: 4px; }
+.settings-ext-secret-row { display: flex; align-items: center; gap: 6px; }
+.settings-ext-secret-row .settings-text-input { flex: 1; min-width: 0; }
+.settings-ext-secret-hint {
+  font: 400 10px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--fg-mute);
+}
+.settings-ext-secret-warn { color: var(--danger-fg); }
+
+/* Inline validation error under an extension settings field. */
+.settings-ext-field-error {
+  font: 400 11px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--danger-fg);
+  margin-top: 2px;
+}
+
 /* ---------- extension logs ---------- */
 
 .settings-ext-logs { display: flex; flex-direction: column; gap: 6px; }
 
-.settings-ext-logs-bar { display: flex; align-items: center; justify-content: space-between; }
+.settings-ext-logs-bar { display: flex; align-items: center; gap: 6px; }
+.settings-ext-logs-bar .settings-ext-logs-title { margin-right: auto; }
 .settings-ext-logs-title {
   font: 600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   text-transform: uppercase;
@@ -1478,6 +1504,21 @@ a:focus-visible,
 
 .settings-ext-install-input { display: flex; flex-direction: column; gap: 10px; }
 .settings-ext-install-busy { padding: 18px 0; text-align: center; color: var(--fg-mute); }
+.settings-ext-install-progress { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.settings-ext-install-progress-label { font-size: 12px; }
+.settings-ext-install-progress-bar {
+  width: 70%;
+  height: 4px;
+  background: var(--bg-input);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.settings-ext-install-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.15s ease;
+}
 .settings-ext-install-error { color: #e5534b; word-break: break-word; }
 
 .settings-ext-consent { display: flex; flex-direction: column; gap: 8px; }

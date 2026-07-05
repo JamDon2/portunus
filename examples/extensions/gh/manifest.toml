@@ -1,0 +1,47 @@
+api = 3
+name = "gh"
+version = "0.1.0"
+description = "Live GitHub search - repos and issues, instant cache, streaming results"
+author = "Portunus examples"
+homepage = "https://github.com"
+kinds = ["ext-gh"]
+
+# The host gates and strips these - the extension only ever sees the term.
+[trigger]
+prefixes = ["gh", "github"]
+min_query_len = 2
+
+[permissions]
+network = ["api.github.com"]
+kv = true
+
+[limits]
+search_timeout_ms = 50        # kv-only fast path, no network
+query_timeout_ms = 10000      # two API round-trips, off the keystroke path
+preview_timeout_ms = 8000     # metadata then README, streamed
+activate_timeout_ms = 3000
+
+# Warm the "my repos" cache daily (also runs once at load).
+[background]
+refresh_interval_secs = 86400
+
+[[settings]]
+key = "token"
+type = "secret"
+label = "GitHub token (PAT)"
+description = "Optional. Unlocks private repos and higher rate limits. Scopes: repo (or public_repo)."
+
+[[settings]]
+key = "search_issues"
+type = "bool"
+label = "Also search issues & PRs"
+default = true
+
+[[settings]]
+key = "max_per_endpoint"
+type = "number"
+label = "Results per endpoint"
+default = 6
+min = 1
+max = 15
+step = 1

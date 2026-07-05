@@ -5,6 +5,18 @@ import type { InstallPreview } from "../../../types";
 import Modal from "../Modal";
 import TextInput from "../TextInput";
 import PermissionChips from "./PermissionChips";
+import { useTauriListener } from "../../../hooks/useTauriListener";
+
+interface InstallProgress {
+  fetched: number;
+  total: number | null;
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 interface Props {
   onClose: () => void;
@@ -33,9 +45,18 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
   );
   const [source, setSource] = useState("");
   const [expectedSha, setExpectedSha] = useState("");
+  // Last source probed, so the error phase can offer a Retry.
+  const [lastSource, setLastSource] = useState("");
+  const [progress, setProgress] = useState<InstallProgress | null>(null);
+
+  useTauriListener<InstallProgress>("ext-install-progress", p => {
+    if (phase.step === "probing") setProgress(p);
+  }, [phase.step]);
 
   const probe = (src: string) => {
     if (!src.trim()) return;
+    setLastSource(src.trim());
+    setProgress(null);
     setPhase({ step: "probing" });
     invoke<InstallPreview>("preview_extension_install", {
       source: src.trim(),
@@ -93,6 +114,9 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
         ) : phase.step === "error" ? (
           <>
             <button className="settings-btn-secondary" onClick={onClose}>Close</button>
+            {!initialPreview && lastSource && (
+              <button className="settings-btn-secondary" onClick={() => probe(lastSource)}>Retry</button>
+            )}
             {!initialPreview && (
               <button className="settings-btn-primary" onClick={() => setPhase({ step: "input" })}>Back</button>
             )}
@@ -128,7 +152,23 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
 
       {(phase.step === "probing" || phase.step === "installing") && (
         <div className="settings-ext-install-busy">
-          {phase.step === "probing" ? "Fetching and verifying…" : "Installing…"}
+          {phase.step === "installing" ? "Installing…" : progress ? (
+            <div className="settings-ext-install-progress">
+              <div className="settings-ext-install-progress-label">
+                {progress.total
+                  ? `Downloading… ${fmtBytes(progress.fetched)} / ${fmtBytes(progress.total)}`
+                  : `Downloading… ${fmtBytes(progress.fetched)}`}
+              </div>
+              {progress.total && (
+                <div className="settings-ext-install-progress-bar">
+                  <div
+                    className="settings-ext-install-progress-fill"
+                    style={{ width: `${Math.min(100, (progress.fetched / progress.total) * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : "Fetching and verifying…"}
         </div>
       )}
 
