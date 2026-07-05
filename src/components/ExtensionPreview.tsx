@@ -1,11 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { PreviewProps } from "../providers/registry";
 import type { PreviewChunk, PreviewContent } from "../types";
 import { useTauriListener } from "../hooks/useTauriListener";
+import MarkdownView from "./MarkdownView";
 
 // Per-id preview cache so flipping between results doesn't re-invoke the
 // extension. Cleared wholesale when it grows - previews are tiny and queries
@@ -35,8 +34,11 @@ const subscribeVersion = (cb: () => void) => {
  * Renders the declarative preview an extension returned for the selected
  * result. Extensions never ship UI - they return data (markdown, metadata,
  * image, list) and this component renders it with the host's own widgets.
- * Raw HTML in markdown is NOT rendered (no rehype-raw) - extension content
- * stays inert.
+ *
+ * Markdown goes through the shared <MarkdownView> (the same renderer the file
+ * previews use), which sanitizes embedded HTML - scripts/handlers/javascript:
+ * URLs are stripped. The `html` type still renders in a sandboxed iframe
+ * (buildSrcdoc) - it's opaque host-authored HTML, not markdown.
  */
 
 const THEME_VARS = [
@@ -137,9 +139,11 @@ export default function ExtensionPreview({ result }: PreviewProps) {
 
   switch (content.type) {
     case "markdown":
+      // Same scroll container + renderer as the file previews, so extension
+      // markdown looks identical to a previewed .md file.
       return (
-        <div className="ext-preview">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content.content}</ReactMarkdown>
+        <div className="text-preview-wrap">
+          <MarkdownView source={content.content} />
         </div>
       );
     case "metadata":

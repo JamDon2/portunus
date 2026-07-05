@@ -393,7 +393,11 @@ export default function App() {
     return () => clearTimeout(t);
   }, [pendingExts, results, streamed, searching, searchError, query, contentMode, clipboardMode]);
 
-  useEffect(() => { setSelectedIndex(0); selectedIdRef.current = null; }, [query, contentMode]);
+  useEffect(() => {
+    setSelectedIndex(0);
+    selectedIdRef.current = null;
+    userMovedRef.current = false;
+  }, [query, contentMode]);
 
   // Sync base merged with streamed async batches: replace by id (newest wins),
   // stable-sort by score so late arrivals slot in without jitter on ties.
@@ -447,24 +451,30 @@ export default function App() {
     return merged;
   }, [query, results, merged, contentEnabled, resolvedEmpty, contentMode, searchError]);
 
-  // Cursor stability under streaming: pin the selection to its result id, so
-  // late batches re-sorting the list move the highlight with the result
-  // instead of leaving it on whatever slid into the old index. Falls back to
-  // an in-bounds clamp when the pinned result vanished (search-invalidated).
+  // Cursor stability under streaming. `selectedIdRef` is the identity of the
+  // highlighted result; it's written at every mutation site (nav handlers,
+  // click-select, this effect) so it never lags behind selectedIndex - the
+  // old split "write the id in a second effect keyed on displayResults" raced,
+  // reading a stale index against a fresh list and briefly pinning the wrong id.
+  //
+  // Pinning (follow a result to its new slot when a late batch re-sorts) only
+  // applies once the user has actually navigated. On the untouched default the
+  // highlight tracks row 0, so a better late arrival landing on top takes the
+  // highlight naturally instead of dragging it down to row 1 on its own.
   const selectedIdRef = useRef<string | null>(null);
+  const userMovedRef = useRef(false);
   useEffect(() => {
     setSelectedIndex(i => {
       const id = selectedIdRef.current;
-      if (id) {
+      let next = i >= displayResults.length ? 0 : i;
+      if (userMovedRef.current && id) {
         const idx = displayResults.findIndex(r => r.id === id);
-        if (idx >= 0) return idx;
+        if (idx >= 0) next = idx;
       }
-      return i >= displayResults.length ? 0 : i;
+      selectedIdRef.current = displayResults[next]?.id ?? null;
+      return next;
     });
   }, [displayResults]);
-  useEffect(() => {
-    selectedIdRef.current = displayResults[selectedIndex]?.id ?? null;
-  }, [selectedIndex, displayResults]);
 
   const requery = () => {
     const q = queryRef.current;
@@ -561,10 +571,20 @@ export default function App() {
       }
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelectedIndex(i => Math.min(i + 1, Math.max(displayResults.length - 1, 0)));
+        userMovedRef.current = true;
+        setSelectedIndex(i => {
+          const n = Math.min(i + 1, Math.max(displayResults.length - 1, 0));
+          selectedIdRef.current = displayResults[n]?.id ?? null;
+          return n;
+        });
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        setSelectedIndex(i => Math.max(i - 1, 0));
+        userMovedRef.current = true;
+        setSelectedIndex(i => {
+          const n = Math.max(i - 1, 0);
+          selectedIdRef.current = displayResults[n]?.id ?? null;
+          return n;
+        });
       } else if (e.shiftKey && e.key === "Enter") {
         // Quicklook: pin & expand the selected file/folder preview to fill the card.
         // Placed before the plain-Enter launch so Enter alone still opens.
@@ -852,7 +872,11 @@ export default function App() {
             selectedIndex={selectedIndex}
             active={hasSearchTerm}
             searching={searching}
-            onSelect={setSelectedIndex}
+            onSelect={i => {
+              userMovedRef.current = true;
+              selectedIdRef.current = displayResults[i]?.id ?? null;
+              setSelectedIndex(i);
+            }}
             onLaunch={launch}
             launchableResults={launchableResults}
             accents={accents}

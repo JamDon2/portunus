@@ -551,6 +551,116 @@ pub fn activate(input: Json<ActivateInput>) -> FnResult<Json<ActivateOutput>> {
 }
 
 // ---------------------------------------------------------------------------
+// README link rewriting. The raw README uses paths relative to the repo, which
+// the host's markdown preview can't resolve - it has no repo base. Rewrite them
+// to absolute github.com URLs so images load and links open the right page:
+//   images (md `![](x)`, HTML `src="x"`) -> raw.githubusercontent.com/<full>/<branch>/x
+//   links  (md  `[](x)`, HTML `href="x"`) -> github.com/<full>/blob/<branch>/x
+// Already-absolute (scheme://, //, data:, mailto:, tel:, #anchor) URLs pass through.
+// ---------------------------------------------------------------------------
+
+fn is_absolute_url(u: &str) -> bool {
+    let t = u.trim();
+    t.is_empty()
+        || t.starts_with('#')
+        || t.starts_with("//")
+        || t.contains("://")
+        || t.starts_with("data:")
+        || t.starts_with("mailto:")
+        || t.starts_with("tel:")
+}
+
+/// Join a repo-relative path onto a base URL that has no trailing slash.
+fn absolutize(url: &str, base: &str) -> String {
+    let u = url.trim();
+    let u = u.strip_prefix("./").unwrap_or(u);
+    let u = u.trim_start_matches('/');
+    format!("{base}/{u}")
+}
+
+/// Does the `]` at `rbracket` close an image span (`![...]`) rather than a link?
+fn is_image_link(s: &[u8], rbracket: usize) -> bool {
+    let mut depth = 0i32;
+    let mut j = rbracket;
+    while j > 0 {
+        j -= 1;
+        match s[j] {
+            b']' => depth += 1,
+            b'[' if depth == 0 => return j > 0 && s[j - 1] == b'!',
+            b'[' => depth -= 1,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Rewrite an HTML attribute (`src=` / `href=`) whose value is a quoted,
+/// repo-relative URL.
+fn rewrite_attr(input: &str, attr: &str, base: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find(attr) {
+        out.push_str(&rest[..pos + attr.len()]);
+        let after = &rest[pos + attr.len()..];
+        let q = after.as_bytes().first().copied();
+        if q == Some(b'"') || q == Some(b'\'') {
+            let quote = q.unwrap() as char;
+            if let Some(end) = after[1..].find(quote) {
+                let url = &after[1..1 + end];
+                out.push(quote);
+                if is_absolute_url(url) { out.push_str(url); } else { out.push_str(&absolutize(url, base)); }
+                out.push(quote);
+                rest = &after[1 + end + 1..];
+                continue;
+            }
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Rewrite markdown `](url)` targets, choosing the image or link base.
+fn rewrite_md_links(input: &str, raw_base: &str, blob_base: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b']' && bytes.get(i + 1) == Some(&b'(') {
+            if let Some(rel_end) = input[i + 2..].find(')') {
+                let inner = &input[i + 2..i + 2 + rel_end];
+                // `url "title"` - only the url part is rewritten.
+                let (url, title) = match inner.find(char::is_whitespace) {
+                    Some(sp) => (&inner[..sp], &inner[sp..]),
+                    None => (inner, ""),
+                };
+                let base = if is_image_link(bytes, i) { raw_base } else { blob_base };
+                out.push_str("](");
+                if is_absolute_url(url) { out.push_str(url); } else { out.push_str(&absolutize(url, base)); }
+                out.push_str(title);
+                out.push(')');
+                i += 2 + rel_end + 1;
+                continue;
+            }
+        }
+        // Not a link start - copy one whole char (UTF-8 safe; `]`/`(` are ASCII
+        // so a multibyte lead byte never trips the check above).
+        let ch = input[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+fn absolutize_readme(readme: &str, full: &str, branch: &str) -> String {
+    let raw_base = format!("https://raw.githubusercontent.com/{full}/{branch}");
+    let blob_base = format!("https://github.com/{full}/blob/{branch}");
+    let s = rewrite_md_links(readme, &raw_base, &blob_base);
+    let s = rewrite_attr(&s, "src=", &raw_base);
+    rewrite_attr(&s, "href=", &blob_base)
+}
+
+// ---------------------------------------------------------------------------
 // preview: stream Metadata immediately, then the README / issue body as
 // Markdown once fetched.
 // ---------------------------------------------------------------------------
@@ -656,7 +766,9 @@ fn preview_repo(full: &str) -> FnResult<Json<PreviewContent>> {
     }
 
     match api_get(&format!("/repos/{full}/readme"), "application/vnd.github.raw+json") {
-        Ok((200, mut readme)) if !readme.trim().is_empty() => {
+        Ok((200, readme)) if !readme.trim().is_empty() => {
+            // Rewrite repo-relative paths to absolute URLs before truncating.
+            let mut readme = absolutize_readme(&readme, full, &detail.default_branch);
             if readme.len() > README_CAP {
                 let mut cut = README_CAP;
                 while !readme.is_char_boundary(cut) {

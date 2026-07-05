@@ -1,39 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef, useContext, useCallback, Fragment } from "react";
 import type { ReactNode, MouseEvent as ReactMouseEvent, CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import type { Components } from "react-markdown";
 import { SearchResult } from "../types";
 import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable, isSvg, isCsv, isOfficeText, isSpreadsheet, fileCategory, folderSummary } from "../utils";
 import { ColoredIconsContext } from "../coloredIcons";
-import { highlightInElement, focusBestCluster, cellMatches, tokenize, keyOf, ensureKeys, loadQueryKeys } from "../highlight";
-
-/**
- * After the referenced element renders, wraps matched terms in `<mark>` and
- * scrolls the densest section (most distinct terms) into view. The caller must
- * remount the highlighted subtree (via a `key`) whenever content or terms change,
- * so the effect always runs on clean, React-untouched DOM.
- */
-function useTermHighlight<T extends HTMLElement>(terms: string[], dep: unknown) {
-  const ref = useRef<T>(null);
-  // Keying is async (one backend round-trip), so marks + scroll land just after the
-  // first paint. The caller remounts this subtree via `key` on content/term change,
-  // so a late-resolving highlight only ever mutates the current, React-untouched DOM.
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || !terms.length) return;
-    let cancelled = false;
-    highlightInElement(el, terms, () => cancelled).then(() => {
-      if (cancelled) return;
-      focusBestCluster(el)?.scrollIntoView({ block: "center" });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [dep, terms]);
-  return ref;
-}
+import { cellMatches, tokenize, keyOf, ensureKeys, loadQueryKeys } from "../highlight";
+import MarkdownView from "./MarkdownView";
+import { useTermHighlight } from "../hooks/useTermHighlight";
 
 /** Splits text into nodes with matched words wrapped in `<mark class="preview-hl">`.
  * Sync: requires the words to have been keyed already (`ensureKeys`). */
@@ -54,43 +27,7 @@ function highlightText(text: string, qkeys: Set<string>): ReactNode {
   return out;
 }
 import { EnterIcon, CopyIcon, FolderOpenIcon, CheckIcon, FolderFilledIcon, ChevronRightIcon, FileGlyphIcon, CategoryGlyph } from "../icons";
-import hljs from "highlight.js/lib/core";
-import langRust       from "highlight.js/lib/languages/rust";
-import langTS         from "highlight.js/lib/languages/typescript";
-import langJS         from "highlight.js/lib/languages/javascript";
-import langPy         from "highlight.js/lib/languages/python";
-import langGo         from "highlight.js/lib/languages/go";
-import langBash       from "highlight.js/lib/languages/bash";
-import langJson       from "highlight.js/lib/languages/json";
-import langIni        from "highlight.js/lib/languages/ini";
-import langYaml       from "highlight.js/lib/languages/yaml";
-import langMd         from "highlight.js/lib/languages/markdown";
-import langCss        from "highlight.js/lib/languages/css";
-import langXml        from "highlight.js/lib/languages/xml";
-import langC          from "highlight.js/lib/languages/c";
-import langCpp        from "highlight.js/lib/languages/cpp";
-import langSql        from "highlight.js/lib/languages/sql";
-import langPhp        from "highlight.js/lib/languages/php";
-import langLua        from "highlight.js/lib/languages/lua";
-import langSwift      from "highlight.js/lib/languages/swift";
-import langRuby       from "highlight.js/lib/languages/ruby";
-import langJava       from "highlight.js/lib/languages/java";
-import langKotlin     from "highlight.js/lib/languages/kotlin";
-import langDocker     from "highlight.js/lib/languages/dockerfile";
-import langMake       from "highlight.js/lib/languages/makefile";
-import langScss       from "highlight.js/lib/languages/scss";
-import langLess       from "highlight.js/lib/languages/less";
-import langPlain      from "highlight.js/lib/languages/plaintext";
-
-const HLJS_LANGS: [string, Parameters<typeof hljs.registerLanguage>[1]][] = [
-  ["rust", langRust], ["typescript", langTS], ["javascript", langJS], ["python", langPy],
-  ["go", langGo], ["bash", langBash], ["json", langJson], ["ini", langIni], ["yaml", langYaml],
-  ["markdown", langMd], ["css", langCss], ["xml", langXml], ["c", langC], ["cpp", langCpp],
-  ["sql", langSql], ["php", langPhp], ["lua", langLua], ["swift", langSwift], ["ruby", langRuby],
-  ["java", langJava], ["kotlin", langKotlin], ["dockerfile", langDocker], ["makefile", langMake],
-  ["scss", langScss], ["less", langLess], ["plaintext", langPlain],
-];
-for (const [name, def] of HLJS_LANGS) hljs.registerLanguage(name, def);
+import hljs from "../hljs";
 
 // ── pdf ───────────────────────────────────────────────────────────────────────
 
@@ -1033,7 +970,6 @@ function CsvPreview({ path, delim, terms }: { path: string; delim: string; terms
 
 function OfficeTextPreview({ path, terms }: { path: string; terms: string[] }) {
   const [source, setSource] = useState<string | null>(null);
-  const ref = useTermHighlight<HTMLDivElement>(terms, source);
 
   useEffect(() => {
     let cancelled = false;
@@ -1048,17 +984,9 @@ function OfficeTextPreview({ path, terms }: { path: string; terms: string[] }) {
   if (source === null) return <div className="text-preview-wrap" />;
 
   const baseDir = path.slice(0, path.lastIndexOf("/")) || "/";
-  const mdComponents: Components = {
-    code: mdCodeComponent,
-    img: ({ src, alt }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} baseDir={baseDir} />,
-    a: makeMdAnchor(baseDir),
-  };
-
   return (
     <div className="text-preview-wrap">
-      <div className="md-preview-wrap" ref={ref} key={`${source}${terms.join("")}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{source}</ReactMarkdown>
-      </div>
+      <MarkdownView source={source} baseDir={baseDir} terms={terms} />
     </div>
   );
 }
@@ -1199,73 +1127,8 @@ function FolderPreview({ result, onLaunch, quicklook }: { result: SearchResult; 
 
 // ── markdown preview ──────────────────────────────────────────────────────────
 
-const mdCodeComponent: Components["code"] = ({ className, children }) => {
-  const match = /language-(\w+)/.exec(className ?? "");
-  if (match) {
-    try {
-      const highlighted = hljs.highlight(String(children).replace(/\n$/, ""), {
-        language: match[1],
-        ignoreIllegals: true,
-      });
-      return (
-        <code
-          className={`hljs language-${match[1]}`}
-          dangerouslySetInnerHTML={{ __html: highlighted.value }}
-        />
-      );
-    } catch { /* fall through to plain */ }
-  }
-  return <code className={className}>{children}</code>;
-};
-
-// Resolve a markdown image src against the document's directory and load it via
-// render_image_preview (asset protocol is scoped to icon dirs, so local paths
-// can't be used directly). Remote (http/data) srcs pass through unchanged.
-function MarkdownImage({ src, alt, baseDir }: { src?: string; alt?: string; baseDir: string }) {
-  const isRemote = !!src && /^(https?:|data:)/.test(src);
-  const [resolved, setResolved] = useState<string | null>(isRemote ? src! : null);
-
-  useEffect(() => {
-    if (!src || isRemote) { setResolved(src ?? null); return; }
-    let cancelled = false;
-    setResolved(null);
-    const abs = src.startsWith("/") ? src : `${baseDir}/${src}`;
-    invoke<ArrayBuffer>("render_image_preview", { path: abs })
-      .then(buf => {
-        if (cancelled) return;
-        const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
-        setResolved(url);
-      })
-      .catch(() => { if (!cancelled) setResolved(null); });
-    return () => { cancelled = true; };
-  }, [src, baseDir, isRemote]);
-
-  if (!resolved) return null;
-  return <img src={resolved} alt={alt ?? ""} />;
-}
-
-// Intercept markdown link clicks. A bare <a href> would navigate the launcher
-// webview itself to the target, destroying the React app (transparent dead
-// window, keybinds gone). Route through the backend launch_app command (same
-// xdg-open path used to open results), which also hides the launcher.
-function makeMdAnchor(baseDir: string): Components["a"] {
-  return ({ href, children }) => {
-    const onClick = (e: ReactMouseEvent) => {
-      e.preventDefault();
-      if (!href || href.startsWith("#")) return;
-      const target = /^[a-z][a-z0-9+.-]*:/i.test(href) // already a URL/URI scheme
-        ? href
-        : href.startsWith("/") ? href
-        : `${baseDir}/${href}`;
-      invoke("launch_app", { exec: `xdg-open "${target}"` }).catch(err => console.error("[preview] open link failed:", err));
-    };
-    return <a href={href} onClick={onClick}>{children}</a>;
-  };
-}
-
 function MarkdownPreview({ path, terms }: { path: string; terms: string[] }) {
   const [source, setSource] = useState<string | null>(null);
-  const ref = useTermHighlight<HTMLDivElement>(terms, source);
   const baseDir = path.slice(0, path.lastIndexOf("/")) || "/";
 
   useEffect(() => {
@@ -1284,17 +1147,9 @@ function MarkdownPreview({ path, terms }: { path: string; terms: string[] }) {
 
   if (source === null) return <div className="text-preview-wrap" />;
 
-  const mdComponents: Components = {
-    code: mdCodeComponent,
-    img: ({ src, alt }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} baseDir={baseDir} />,
-    a: makeMdAnchor(baseDir),
-  };
-
   return (
     <div className="text-preview-wrap">
-      <div className="md-preview-wrap" ref={ref} key={`${source}${terms.join("")}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{source}</ReactMarkdown>
-      </div>
+      <MarkdownView source={source} baseDir={baseDir} terms={terms} />
     </div>
   );
 }
