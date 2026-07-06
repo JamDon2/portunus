@@ -146,8 +146,18 @@ fn cmd_validate(dir: Option<&str>) -> i32 {
         }
     };
     println!("manifest: ok ({} v{}, api {})", m.name, m.version, m.api);
-    if m.trigger.is_none() {
-        println!("note: no [trigger] section - the extension will run on every keystroke");
+    for c in &m.commands {
+        let how = if c.always {
+            "always (runs on every keystroke)".to_string()
+        } else if c.keywords.is_empty() {
+            "entry (found by title)".to_string()
+        } else {
+            format!("entry (keywords {:?})", c.keywords)
+        };
+        println!("command: {} \"{}\" [{}] - {how}", c.name, c.title, c.mode);
+    }
+    if m.commands.iter().any(|c| c.always) {
+        println!("note: an always command runs on every keystroke - prefer an entry command");
     }
 
     // Export scan only - never instantiate: a malicious module must not run

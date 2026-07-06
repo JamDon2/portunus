@@ -1,15 +1,39 @@
-api = 3
+api = 4
 name = "gh"
-version = "0.1.0"
+version = "0.2.0"
 description = "Live GitHub search - repos and issues, instant cache, streaming results"
 author = "Portunus examples"
 homepage = "https://github.com"
 kinds = ["ext-gh"]
 
-# The host gates and strips these - the extension only ever sees the term.
-[trigger]
-prefixes = ["gh", "github"]
+# Raycast-style multi-command manifest: each entry is its own searchable
+# launcher command (found by title + keywords, entered as a scope); the wire
+# `command` field tells the guest which one ran.
+[[commands]]
+name = "repos"
+title = "Search Repositories"
+description = "GitHub repositories"
+mode = "scope"
+keywords = ["gh", "github", "repos", "repositories"]
 min_query_len = 2
+chip = "Repos"
+placeholder = "Search GitHub repositories…"
+
+[[commands]]
+name = "issues"
+title = "Search Issues"
+description = "GitHub issues and pull requests"
+mode = "scope"
+keywords = ["ghi", "github", "issues", "pulls", "pr"]
+min_query_len = 2
+chip = "Issues"
+placeholder = "Search GitHub issues…"
+
+[[commands]]
+name = "notifications"
+title = "Open GitHub Notifications"
+description = "github.com/notifications in the browser"
+mode = "action"
 
 [permissions]
 network = ["api.github.com"]
@@ -30,12 +54,6 @@ key = "token"
 type = "secret"
 label = "GitHub token (PAT)"
 description = "Optional. Unlocks private repos and higher rate limits. Scopes: repo (or public_repo)."
-
-[[settings]]
-key = "search_issues"
-type = "bool"
-label = "Also search issues & PRs"
-default = true
 
 [[settings]]
 key = "max_per_endpoint"

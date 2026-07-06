@@ -1,13 +1,20 @@
-api = 3
+api = 4
 name = "cheatsh"
-version = "0.2.0"
+version = "0.3.0"
 description = "Look up command cheat sheets from cheat.sh"
 author = "Portunus examples"
 kinds = ["ext-cheatsh"]
 
-# The host gates and strips these - the extension only ever sees the term.
-[trigger]
-prefixes = ["ch", "cheat"]
+# A scope command: found by fuzzy-searching its title/keywords, entered from
+# its entry, then every keystroke routes to the extension as the whole term.
+[[commands]]
+name = "search"
+title = "Search Cheat Sheets"
+description = "cheat.sh command lookups"
+mode = "scope"
+keywords = ["ch", "cheat", "cheatsheet", "man"]
+chip = "Cheat"
+placeholder = "Command to look up…"
 
 [permissions]
 network = ["cheat.sh"]

@@ -9,7 +9,7 @@ registerProvider({
   Preview: null,
   handleLaunch: (result) => {
     if (!result.id.startsWith('ext:') || !result.ext) return false;
-    invoke('extension_activate', { id: result.id, ext: result.ext, action: null })
+    invoke('extension_activate', { id: result.id, ext: result.ext, action: null, command: result.ext_command ?? null })
       .catch(e => console.error(`[extension] activate failed: ${e}`));
     return true;
   },

@@ -3,14 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
-import { Config, SearchResult, SearchResponse, StreamPayload, ClipboardCapabilities, ExtAction } from "./types";
+import { Config, SearchResult, SearchResponse, StreamPayload, ClipboardCapabilities, ExtAction, CommandDescriptor } from "./types";
+import { commandById } from "./commands/store";
 import ClipboardMode from "./components/clipboard/ClipboardMode";
 import { applyTheme, injectMatugenTheme } from "./theme";
 import ResultsList from "./components/ResultsList";
 import PreviewPanel from "./components/PreviewPanel";
 import QuickLook from "./components/QuickLook";
 import ActionPicker from "./components/ActionPicker";
-import { useExtensionMeta, matchTrigger } from "./extensions/meta";
 import { deriveContentTerms } from "./highlight";
 import FooterHints from "./components/FooterHints";
 import { pdfView } from "./components/FilePreview";
@@ -24,16 +24,13 @@ import "./providers";
 import "./App.css";
 import "./themes.css";
 
-const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'content-hint', 'content-disabled', 'search-error', 'ext-error']);
+const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'content-hint', 'content-disabled', 'search-error', 'ext-error', 'command']);
 
-// Greyed-out completion shown after a partial command word (e.g. "def" -> "ine").
-// Tab accepts it. Returns the suffix to append, or null when nothing completes.
-function ghostFor(q: string): string | null {
-  if (q.length < 2 || q.includes(' ')) return null;
-  if ('define'.startsWith(q) && q.length < 6) return 'define'.slice(q.length);
-  if ('dict'.startsWith(q) && q.length < 4 && !'define'.startsWith(q)) return 'dict'.slice(q.length);
-  if ('clipboard'.startsWith(q) && q.length >= 4 && q.length < 9) return 'clipboard'.slice(q.length);
-  return null;
+// Active launcher mode: a Scope command the user entered. Null = root search.
+interface ActiveMode {
+  command: CommandDescriptor;
+  /** Entered via `portunus --clipboard`, so Esc hides the window. */
+  fromFlag?: boolean;
 }
 
 export default function App() {
@@ -89,7 +86,6 @@ export default function App() {
   const mirrorRef = useRef<HTMLSpanElement>(null);
   const [inputWidth, setInputWidth] = useState(0);
   const queryRef = useRef(query);
-  const ghostRef = useRef<string | null>(null);
   // Whether the launcher window currently holds focus. Guards the global key
   // handler so an always-on-top, unfocused window doesn't eat arrow keys etc.
   const focusedRef = useRef(true);
@@ -102,67 +98,79 @@ export default function App() {
   // Transient toast from an extension's ShowToast activate effect.
   const [toast, setToast] = useState<string | null>(null);
 
-  // Dedicated clipboard-history browser. While active the launcher's search effect
-  // and global key handler stand down; ClipboardMode owns input handling.
-  const [clipboardMode, setClipboardMode] = useState(false);
-  const clipboardModeRef = useRef(false);
-  useEffect(() => { clipboardModeRef.current = clipboardMode; }, [clipboardMode]);
+  // Single active-mode scalar: the Scope command the user is inside, or null
+  // for root search. UI-takeover scopes (clipboard) swap in their own
+  // component and own input handling; every other scope reuses the normal
+  // results list with the search routed to the command's owner.
+  const [mode, setMode] = useState<ActiveMode | null>(null);
+  const modeRef = useRef<ActiveMode | null>(null);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  const isTakeover = (m: ActiveMode | null) => m?.command.route.type === "ui_takeover";
+  const inClipboard = isTakeover(mode);
+  const inContents = mode?.command.id === "cmd:contents";
   const [clipCaps, setClipCaps] = useState<ClipboardCapabilities>({ smart_paste: false });
   const capsFetched = useRef(false);
-  // Whether the browser was opened via `portunus --clipboard` (so Esc hides the
-  // window) vs typed into the launcher (so Esc returns to the launcher).
-  const clipFromFlag = useRef(false);
 
-  const enterClipboardMode = (seed = "", fromFlag = false) => {
-    if (!capsFetched.current) {
+  // Enters a Scope command's mode. `seed` pre-fills the scoped query (Tab
+  // keeps the typed text so a search flips between name and content matching;
+  // entry launches pass "").
+  const enterMode = (command: CommandDescriptor, opts: { seed?: string; fromFlag?: boolean } = {}) => {
+    if (command.route.type === "ui_takeover" && !capsFetched.current) {
       capsFetched.current = true;
       invoke<ClipboardCapabilities>("clipboard_capabilities").then(setClipCaps).catch(() => {});
     }
-    clipFromFlag.current = fromFlag;
-    // Clipboard overrides content mode so only one chip is ever active.
-    setContentMode(false);
-    setClipboardMode(true);
-    setQuery(seed);
+    setMode({ command, fromFlag: opts.fromFlag });
+    if (opts.seed !== undefined) setQuery(opts.seed);
     setResults([]);
+    setResolvedEmpty(false);
     inputRef.current?.focus();
   };
 
-  const exitClipboardMode = () => {
-    if (clipFromFlag.current) {
-      setClipboardMode(false);
+  const enterClipboardMode = (seed = "", fromFlag = false) => {
+    const cmd = commandById("cmd:clipboard");
+    if (cmd) enterMode(cmd, { seed, fromFlag });
+  };
+
+  const enterContentMode = (seed?: string) => {
+    const cmd = commandById("cmd:contents");
+    if (cmd) enterMode(cmd, { seed });
+  };
+
+  // Leaves whatever mode is active. Takeover scopes clear the query (their
+  // filter is mode-local); others keep it so the search re-runs at root.
+  const exitMode = () => {
+    const m = modeRef.current;
+    setMode(null);
+    setResults([]);
+    setResolvedEmpty(false);
+    if (isTakeover(m)) {
       setQuery("");
-      setResults([]);
-      invoke("hide_window");
+      if (m?.fromFlag) { invoke("hide_window"); return; }
+    }
+    inputRef.current?.focus();
+  };
+
+  // Invokes a command entry (Enter on a `kind: "command"` row).
+  const runCommand = (command: CommandDescriptor) => {
+    // Frecency: frequently-used commands float up in root search.
+    invoke("command_used", { id: command.id }).catch(() => {});
+    if (command.mode_kind === "scope") {
+      enterMode(command, { seed: "" });
       return;
     }
-    setClipboardMode(false);
-    setQuery("");
-    setResults([]);
-    inputRef.current?.focus();
-  };
-
-  // Dedicated full-text "Contents" mode. Unlike clipboard it reuses the normal
-  // results list/preview - only the search routing, chrome, and a few keys change.
-  // Tab toggles it; Backspace on an empty query drops the chip.
-  const [contentMode, setContentMode] = useState(false);
-  const contentModeRef = useRef(false);
-  useEffect(() => { contentModeRef.current = contentMode; }, [contentMode]);
-
-  // Tab toggles content mode, keeping the typed query so a search flips between
-  // matching names and matching file contents.
-  const enterContentMode = (seed?: string) => {
-    setContentMode(true);
-    if (seed !== undefined) setQuery(seed);
-    setResults([]);
-    setResolvedEmpty(false);
-    inputRef.current?.focus();
-  };
-
-  const exitContentMode = () => {
-    setContentMode(false);
-    setResults([]);
-    setResolvedEmpty(false);
-    inputRef.current?.focus();
+    // Action command: one-shot - run the extension's activate with the
+    // command name and a synthetic default result (there's no search result
+    // behind an entry row). The backend hides the window first.
+    if (command.route.type === "extension") {
+      setQuery("");
+      setResults([]);
+      invoke("extension_activate", {
+        id: command.id,
+        ext: { id: command.route.command, title: command.title, relevance: 0 },
+        action: null,
+        command: command.route.command,
+      }).catch(e => console.error(`[command] action failed: ${e}`));
+    }
   };
 
   useEffect(() => { queryRef.current = query; }, [query]);
@@ -225,8 +233,7 @@ export default function App() {
     focusedRef.current = true;
     // A plain `--show` always opens the clean launcher, never a stale clipboard
     // session. (`--clipboard` uses window-show-query, which re-enters the mode.)
-    setClipboardMode(false);
-    setContentMode(false);
+    setMode(null);
     setActionResult(null);
     setQuery("");
     setResults([]);
@@ -261,10 +268,10 @@ export default function App() {
   // remainder (e.g. "clipboard foo" → mode filtered by "foo"). Same prefix the
   // backend provider triggers on; mirrors the inline provider's old behavior.
   useEffect(() => {
-    if (clipboardMode || contentMode) return;
+    if (mode) return;
     const m = /^(clip|clipb|clipbo|clipboa|clipboar|clipboard)\s+(.*)$/i.exec(query);
     if (m) enterClipboardMode(m[2], false);
-  }, [query, clipboardMode, contentMode]);
+  }, [query, mode]);
 
   // Refs mirroring the async-tier state for use inside the (deliberately
   // dependency-light) search effect below.
@@ -274,11 +281,12 @@ export default function App() {
   useEffect(() => { pendingRef.current = pendingExts.size > 0; }, [pendingExts]);
 
   useEffect(() => {
-    if (clipboardMode) { setSearching(false); return; }
+    if (inClipboard) { setSearching(false); return; }
     const trimmed = query.trim();
-    // Content search needs >= 2 chars (matches the backend guard); below that
-    // there's nothing to run, so clear and show the prompt empty state.
-    if (!trimmed || (contentMode && trimmed.length < 2)) {
+    // A scope's min_query_len (e.g. contents needs >= 2 chars, matching the
+    // backend guard) gates the dispatch; below it, clear and show the prompt.
+    const minLen = Math.max(1, mode?.command.min_query_len ?? 1);
+    if (!trimmed || trimmed.length < minLen) {
       setResults([]); setSearching(false); setResolvedEmpty(false);
       // Nothing to search = nothing the async tier should keep working on.
       if (streamedRef.current || pendingRef.current) {
@@ -299,29 +307,13 @@ export default function App() {
     // Content search is the heavy path (FTS + snippet + per-keystroke preview
     // match-page), so coalesce keystrokes harder there. Name/app search is cheap
     // and stays near-instant.
-    const debounceMs = contentMode ? 90 : 10;
+    const debounceMs = inContents ? 90 : 10;
     // A dead prefix mid-word (or the porter stem gap prefix matching can't cover)
     // resolves to zero for a beat before the next keystroke matches. Hold the
     // empty verdict behind this settle so the list stays neutral-blank instead of
     // flashing "no results" while the user is still typing.
     const EMPTY_SETTLE_MS = 220;
     const t = setTimeout(() => {
-      if (contentMode) {
-        invoke<SearchResult[]>("search_content", { query }).then(r => {
-          if (cancelled) return;
-          setResults(r);
-          setSearching(false);
-          if (r.length === 0) {
-            graceTimer = setTimeout(() => { if (!cancelled) setResolvedEmpty(true); }, EMPTY_SETTLE_MS);
-          } else {
-            setResolvedEmpty(false);
-          }
-        }).catch(e => {
-          console.error(`[search] search_content failed:`, e);
-          if (!cancelled) { setResults([]); setSearching(false); setResolvedEmpty(false); setSearchError(true); }
-        });
-        return;
-      }
       const queryId = ++queryIdRef.current;
       // New dispatch: everything streamed belongs to an older query now.
       // Clear here, not in .then - the backend dispatches async workers
@@ -330,7 +322,8 @@ export default function App() {
       setStreamed(new Map());
       setExtErrors(new Map());
       doneExtsRef.current = new Set();
-      invoke<SearchResponse>("search", { query, queryId }).then(resp => {
+      const scope = mode?.command.id ?? null;
+      invoke<SearchResponse>("search", { query, queryId, scope }).then(resp => {
         if (cancelled || resp.query_id !== queryIdRef.current) return;
         setResults(resp.results);
         setPendingExts(new Set(
@@ -352,7 +345,7 @@ export default function App() {
       });
     }, debounceMs);
     return () => { cancelled = true; clearTimeout(t); if (graceTimer) clearTimeout(graceTimer); };
-  }, [query, clipboardMode, contentMode]);
+  }, [query, mode]);
 
   // Streamed async-query batches: merge per extension, replacing by result id
   // (a later batch re-emitting an id updates it in place - the intended
@@ -406,18 +399,18 @@ export default function App() {
   // Deferred empty verdict for the async tier: sync results were empty, and
   // the last pending extension just finished without delivering anything.
   useEffect(() => {
-    if (contentMode || clipboardMode || searching || searchError) return;
+    if (mode || searching || searchError) return;
     if (!query.trim()) return;
     if (pendingExts.size > 0 || results.length > 0 || streamed.size > 0) return;
     const t = setTimeout(() => setResolvedEmpty(true), 220);
     return () => clearTimeout(t);
-  }, [pendingExts, results, streamed, searching, searchError, query, contentMode, clipboardMode]);
+  }, [pendingExts, results, streamed, searching, searchError, query, mode]);
 
   useEffect(() => {
     setSelectedIndex(0);
     selectedIdRef.current = null;
     userMovedRef.current = false;
-  }, [query, contentMode]);
+  }, [query, mode]);
 
   // Sync base merged with streamed async batches: replace by id (newest wins),
   // stable-sort by score so late arrivals slot in without jitter on ties.
@@ -457,7 +450,7 @@ export default function App() {
         score: 0,
       }];
     }
-    if (contentMode) {
+    if (inContents) {
       if (!contentEnabled) {
         return [{
           id: "content:disabled",
@@ -490,7 +483,7 @@ export default function App() {
     }
     // Real results first, failed-extension rows pinned to the bottom.
     return extErrorRows.length > 0 ? [...merged, ...extErrorRows] : merged;
-  }, [query, results, merged, extErrorRows, contentEnabled, resolvedEmpty, contentMode, searchError]);
+  }, [query, results, merged, extErrorRows, contentEnabled, resolvedEmpty, inContents, searchError]);
 
   // Cursor stability under streaming. `selectedIdRef` is the identity of the
   // highlighted result; it's written at every mutation site (nav handlers,
@@ -529,11 +522,8 @@ export default function App() {
   const requery = () => {
     const q = queryRef.current;
     if (!q.trim()) return;
-    if (contentModeRef.current) {
-      invoke<SearchResult[]>("search_content", { query: q }).then(setResults)
-        .catch(e => console.error(`[search] search_content requery failed:`, e));
-      return;
-    }
+    const scope = modeRef.current?.command.id ?? null;
+    if (modeRef.current && isTakeover(modeRef.current)) return;
     const queryId = ++queryIdRef.current;
     // Same event-vs-response race as the main search effect: reset done-set
     // at dispatch, filter pending against it. Unlike a keystroke, the query
@@ -542,7 +532,7 @@ export default function App() {
     // watcher can fire search-invalidated while the user is idle; the
     // selection must not jump).
     doneExtsRef.current = new Set();
-    invoke<SearchResponse>("search", { query: q, queryId }).then(resp => {
+    invoke<SearchResponse>("search", { query: q, queryId, scope }).then(resp => {
       if (resp.query_id !== queryIdRef.current) return;
       setResults(resp.results);
       setPendingExts(new Set(
@@ -569,7 +559,7 @@ export default function App() {
     setQuery,
     setResults,
     requery,
-    enterClipboardMode: () => enterClipboardMode("", false),
+    runCommand,
     config: configRef.current,
   });
 
@@ -586,6 +576,10 @@ export default function App() {
     }
     if (result.kind === "content-hint") {
       enterContentMode(queryRef.current.trim());
+      return;
+    }
+    if (result.kind === "command" && result.command) {
+      runCommand(result.command);
       return;
     }
     const ctx = makeCtx();
@@ -608,7 +602,7 @@ export default function App() {
       // While the onboarding wizard is open it owns all input.
       if (showOnboardingRef.current) return;
       // ClipboardMode owns all key handling while the browser is open.
-      if (clipboardModeRef.current) return;
+      if (isTakeover(modeRef.current)) return;
       // Ignore keys when the window isn't focused - an always-on-top launcher can
       // otherwise still receive (and act on) keystrokes meant for another window.
       if (!focusedRef.current) return;
@@ -658,25 +652,24 @@ export default function App() {
         setSelectedIndex(displayResults.indexOf(target));
         launch(target);
       } else if (e.key === "Tab") {
-        // Ghost completion wins if one is showing; otherwise Tab toggles the
-        // full-text "Contents" mode, keeping the query for an in-place re-search.
+        // Tab toggles the full-text "Contents" mode, keeping the query for an
+        // in-place re-search.
         e.preventDefault();
-        const ghost = ghostRef.current;
-        if (ghost) { setQuery(queryRef.current + ghost); return; }
-        if (contentModeRef.current) exitContentMode(); else enterContentMode();
+        if (modeRef.current?.command.id === "cmd:contents") exitMode();
+        else if (!modeRef.current) enterContentMode();
       } else if (e.key === "Backspace" && !e.ctrlKey && !e.altKey && !e.metaKey
-                 && contentModeRef.current && !queryRef.current) {
-        // Empty-query Backspace drops the Contents chip, back to normal search.
+                 && modeRef.current && !queryRef.current) {
+        // Empty-query Backspace drops the mode chip, back to normal search.
         e.preventDefault();
-        exitContentMode();
+        exitMode();
       } else if (e.key === "Escape") {
         e.preventDefault();
         // Esc closes the Quicklook overlay first.
         if (quickResult) { setQuickResult(null); return; }
-        // In content mode, Esc backs out one level: clear the query, else drop
-        // the chip. Only the bare launcher Esc hides the window.
-        if (contentModeRef.current) {
-          if (queryRef.current.trim()) setQuery(""); else exitContentMode();
+        // In a mode, Esc backs out one level: clear the query, else drop the
+        // chip. Only the bare launcher Esc hides the window.
+        if (modeRef.current) {
+          if (queryRef.current.trim()) setQuery(""); else exitMode();
           return;
         }
         setQuery("");
@@ -691,7 +684,7 @@ export default function App() {
         // rather than KeyH - hence the Backspace fallback, gated on Ctrl being held
         // (a bare Backspace is handled above; Ctrl+Backspace = delete-word is rare
         // in the content query and acceptable to repurpose here).
-        if (!contentModeRef.current) return;
+        if (modeRef.current?.command.id !== "cmd:contents") return;
         e.preventDefault();
         setHighlight(h => !h);
       } else {
@@ -750,29 +743,21 @@ export default function App() {
     setActionResult(null);
     setQuery("");
     setResults([]);
-    invoke("extension_activate", { id: result.id, ext: result.ext, action: action.id })
+    invoke("extension_activate", { id: result.id, ext: result.ext, action: action.id, command: result.ext_command ?? null })
       .catch(e => console.error(`[extension] activate failed: ${e}`));
   };
-
-  // Passive trigger-prefix affordance: when the first token of the query is a
-  // registered extension prefix, annotate the input with the extension's name.
-  const extensionMeta = useExtensionMeta();
-  const triggerHit = useMemo(
-    () => (clipboardMode || contentMode ? null : matchTrigger(query, extensionMeta)),
-    [query, extensionMeta, clipboardMode, contentMode],
-  );
 
   const calcResult = results.find(r => r.kind === "calc");
   // Whether there's an actual term to search (drives the empty state). Content
   // mode needs >= 2 chars; below that the list stays blank instead of "No results".
-  const hasSearchTerm = contentMode
+  const hasSearchTerm = inContents
     ? query.trim().length >= 2
     : query.trim().length > 0;
 
   // Terms to highlight in the preview - only in content (full-text) mode.
   const previewTerms = useMemo(
-    () => (contentMode ? deriveContentTerms(query) : []),
-    [contentMode, query],
+    () => (inContents ? deriveContentTerms(query) : []),
+    [inContents, query],
   );
 
   const launchableResults = useMemo(
@@ -780,34 +765,7 @@ export default function App() {
     [displayResults]
   );
 
-  // Ghost-complete the dict word from the top prefix match in the results
-  // (e.g. "define dispos" → ghosts "al" for "disposal"). The first dict result
-  // is the literal typed word; the next prefix match is the completion.
-  const dictGhost = useMemo(() => {
-    const m = /^(?:define|dict) (\S+)$/.exec(query);
-    if (!m) return null;
-    const typed = m[1];
-    const lc = typed.toLowerCase();
-    const comp = results.find(
-      r => r.kind === "dict" && r.title.toLowerCase().startsWith(lc) && r.title.toLowerCase() !== lc
-    );
-    return comp ? comp.title.slice(typed.length) : null;
-  }, [query, results]);
-
-  const ghostSuffix = useMemo(() => ghostFor(query) ?? dictGhost, [query, dictGhost]);
-  useEffect(() => { ghostRef.current = ghostSuffix; }, [ghostSuffix]);
-
-  const hintChip = useMemo((): string | null => {
-    const q = query;
-    if (q === 'define' || q === 'define ') return '<word>';
-    if (q === 'dict' || q === 'dict ') return '<word>';
-    if (q === 'clipboard' || q === 'clipboard ') return '<search>';
-    // Bare extension trigger: mirror the define/dict placeholder treatment.
-    if (triggerHit && q.trimEnd() === triggerHit.prefix) return '<query>';
-    return null;
-  }, [query, triggerHit]);
-
-  const contentSized = ghostSuffix !== null || hintChip !== null || calcResult != null;
+  const contentSized = calcResult != null;
 
   return (
     <ColoredIconsContext.Provider value={coloredIcons}>
@@ -843,7 +801,7 @@ export default function App() {
               />
             </div>
           )}
-          {clipboardMode ? (
+          {inClipboard ? (
             <svg
               className="search-icon"
               viewBox="0 0 24 24"
@@ -856,7 +814,7 @@ export default function App() {
               <rect x="8" y="2" width="8" height="4" rx="1" />
               <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
             </svg>
-          ) : contentMode ? (
+          ) : inContents ? (
             <svg
               className="search-icon"
               viewBox="0 0 24 24"
@@ -886,38 +844,32 @@ export default function App() {
             </svg>
           )}
           <div className="search-input-area">
-            {clipboardMode && <span className="search-hint-chip" style={{ marginLeft: 0, marginRight: 10 }}>Clipboard</span>}
-            {contentMode && <span className="search-hint-chip" style={{ marginLeft: 0, marginRight: 10 }}>Contents</span>}
+            {mode && <span className="search-hint-chip" style={{ marginLeft: 0, marginRight: 10 }}>{mode.command.chip}</span>}
             <span ref={mirrorRef} className="input-mirror" aria-hidden="true">{query}</span>
             <input
               ref={inputRef}
               className="search-input"
               type="text"
-              placeholder={clipboardMode ? "Search clipboard history…" : contentMode ? "Search file contents…" : (loading ? "Loading…" : "Search…")}
+              placeholder={mode ? (mode.command.placeholder ?? `Search ${mode.command.title.toLowerCase()}…`) : (loading ? "Loading…" : "Search…")}
               value={query}
               onChange={e => setQuery(e.target.value)}
               autoFocus
               spellCheck={false}
-              style={!clipboardMode && !contentMode && contentSized ? { width: inputWidth + 4 } : { flex: 1 }}
+              style={!mode && contentSized ? { width: inputWidth + 4 } : { flex: 1 }}
             />
-            {!clipboardMode && !contentMode && ghostSuffix && <span className="search-ghost">{ghostSuffix}</span>}
-            {!clipboardMode && !contentMode && hintChip && <span className="search-hint-chip">{hintChip}</span>}
-            {!clipboardMode && !contentMode && calcResult && <div className="calc-inline">= {calcResult.title}</div>}
-            {!clipboardMode && !contentMode && contentSized && <div className="search-spacer" />}
-            {!clipboardMode && !contentMode && triggerHit && (
-              <span className="search-hint-chip search-trigger-chip">{triggerHit.info.name}</span>
-            )}
+            {!mode && calcResult && <div className="calc-inline">= {calcResult.title}</div>}
+            {!mode && contentSized && <div className="search-spacer" />}
           </div>
         </div>
 
-        {clipboardMode ? (
+        {inClipboard ? (
           <ClipboardMode
             query={query}
             capabilities={clipCaps}
-            onExit={exitClipboardMode}
+            onExit={exitMode}
             onClearQuery={() => setQuery("")}
-            onDeleteTag={() => { setClipboardMode(false); setQuery(""); setResults([]); inputRef.current?.focus(); }}
-            onPasted={() => { setClipboardMode(false); setQuery(""); setResults([]); }}
+            onDeleteTag={() => { setMode(null); setQuery(""); setResults([]); inputRef.current?.focus(); }}
+            onPasted={() => { setMode(null); setQuery(""); setResults([]); }}
           />
         ) : (
         <div className="body">
@@ -934,9 +886,9 @@ export default function App() {
             onLaunch={launch}
             launchableResults={launchableResults}
             accents={accents}
-            emptyLabel={contentMode ? "No file contents match" : undefined}
+            emptyLabel={inContents ? "No file contents match" : undefined}
             emptyReady={resolvedEmpty}
-            pending={contentMode ? [] : [...pendingExts]}
+            pending={inContents ? [] : [...pendingExts]}
           />
           <div className="preview-col">
             <PreviewPanel
@@ -950,7 +902,7 @@ export default function App() {
         </div>
         )}
 
-        {quickResult && !clipboardMode && (
+        {quickResult && !inClipboard && (
           <QuickLook
             result={quickResult}
             terms={previewTerms}
@@ -960,7 +912,7 @@ export default function App() {
           />
         )}
 
-        {actionResult && !clipboardMode && (
+        {actionResult && !inClipboard && (
           <ActionPicker
             result={actionResult}
             onRun={action => runExtensionAction(actionResult, action)}
@@ -971,15 +923,14 @@ export default function App() {
         {toast && <div className="extension-toast">{toast}</div>}
 
         <div className="footer">
-          <FooterHints selected={selected} canComplete={ghostSuffix !== null} quicklookOpen={quickResult != null} clipboardMode={clipboardMode} contentMode={contentMode} smartPaste={clipCaps.smart_paste} clipboardIdle={clipboardMode && query.trim() === ""} pdfHighlight={highlight} actionPickerOpen={actionResult != null} />
+          <FooterHints selected={selected} quicklookOpen={quickResult != null} clipboardMode={inClipboard} contentMode={inContents} smartPaste={clipCaps.smart_paste} clipboardIdle={inClipboard && query.trim() === ""} pdfHighlight={highlight} actionPickerOpen={actionResult != null} />
           <div className="footer-right">
             <button
               className="footer-settings-btn"
               onClick={() => {
-                // Leave clipboard / content mode and clear the query so the launcher
-                // is clean when it's next shown over (or instead of) the settings window.
-                setClipboardMode(false);
-                setContentMode(false);
+                // Leave any active mode and clear the query so the launcher is
+                // clean when it's next shown over (or instead of) the settings window.
+                setMode(null);
                 setQuery("");
                 setResults([]);
                 invoke("open_settings_window").catch(e => console.error("[settings] open failed:", e));

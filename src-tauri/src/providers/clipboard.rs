@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
 
-use super::{Provider, SearchResult, SCORE_CLIPBOARD};
+use super::{CommandDescriptor, Provider, SearchResult};
 use crate::{ClipboardOcrState, ConfigState};
 
 /// How long to wait after hiding the launcher before synthesizing Ctrl+V. On a
@@ -488,28 +488,33 @@ impl Provider for ClipboardProvider {
         "clipboard"
     }
 
-    fn search(&self, query: &str) -> Vec<SearchResult> {
-        let q = query.trim().to_lowercase();
-        // Trigger: "clip" through "clipboard" (4-char minimum avoids false matches).
-        // Note: "clip <x>" prefixes (e.g. "clip grab") are hijacked into clipboard
-        // mode - the same tradeoff the inline provider had.
-        const KEYWORD: &str = "clipboard";
-        if q.len() < 4 {
-            return vec![];
-        }
-        if !KEYWORD.starts_with(q.as_str()) && !q.starts_with(KEYWORD) {
-            return vec![];
-        }
-        // A single command row opens the dedicated clipboard browser; entries are
-        // no longer listed inline (no max_results cap, images searchable there).
-        vec![SearchResult {
-            id: "clipboard:mode".to_string(),
+    // The clipboard browser is a frontend takeover; the provider contributes
+    // no inline rows - only the command entry below.
+    fn search(&self, _query: &str) -> Vec<SearchResult> {
+        vec![]
+    }
+
+    fn commands(&self) -> Vec<CommandDescriptor> {
+        use crate::providers::command::{CommandRoute, CommandSource, ModeKind};
+        vec![CommandDescriptor {
+            id: "cmd:clipboard".to_string(),
             title: "Clipboard History".to_string(),
+            chip: "Clipboard".to_string(),
             subtitle: Some("Browse, paste and manage copied items".to_string()),
-            kind: "clipboard-mode".to_string(),
-            score: SCORE_CLIPBOARD,
-            exec: Some("clipboard:mode".to_string()),
-            ..Default::default()
+            source: CommandSource::Builtin,
+            mode_kind: ModeKind::Scope,
+            keywords: vec![
+                "clip".into(),
+                "clipboard".into(),
+                "paste".into(),
+                "history".into(),
+                "copy".into(),
+            ],
+            placeholder: Some("Search clipboard history…".to_string()),
+            min_query_len: 0,
+            result_kind: "clipboard".to_string(),
+            icon_data_uri: None,
+            route: CommandRoute::UiTakeover,
         }]
     }
 }

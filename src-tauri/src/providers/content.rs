@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{Provider, SearchResult, SCORE_CONTENT};
+use super::{CommandDescriptor, Provider, SearchResult, SCORE_CONTENT};
 use crate::content_index::ContentIndex;
 
 pub struct ContentProvider {
@@ -24,8 +24,33 @@ impl Provider for ContentProvider {
         "content"
     }
 
+    fn commands(&self) -> Vec<CommandDescriptor> {
+        use crate::providers::command::{CommandRoute, CommandSource, ModeKind};
+        vec![CommandDescriptor {
+            id: "cmd:contents".to_string(),
+            title: "Search File Contents".to_string(),
+            chip: "Contents".to_string(),
+            subtitle: Some("Full-text search inside files".to_string()),
+            source: CommandSource::Builtin,
+            mode_kind: ModeKind::Scope,
+            keywords: vec![
+                "contents".into(),
+                "grep".into(),
+                "search".into(),
+                "text".into(),
+                "fulltext".into(),
+            ],
+            placeholder: Some("Search file contents…".to_string()),
+            min_query_len: 2,
+            result_kind: "file".to_string(),
+            icon_data_uri: None,
+            route: CommandRoute::Builtin { provider_id: "content".to_string() },
+        }]
+    }
+
+    // search_scoped falls through to search(): the whole query is the term.
     fn search(&self, query: &str) -> Vec<SearchResult> {
-        // Content scope is selected by the caller (PluginRegistry::search_content),
+        // Content scope is selected by the caller (PluginRegistry::search_scope),
         // so the raw query is the search term - no activation prefix to strip.
         let q = query.trim();
         if q.len() < 2 {

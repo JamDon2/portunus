@@ -6,7 +6,7 @@ activation (Enter) and an optional preview panel, all through a small, versioned
 JSON wire contract. Extensions never ship UI; the host renders everything.
 
 - **Runtime:** [Extism](https://extism.org/) (wasmtime). No WASI.
-- **Wire API version:** `3` (see `extension-sdk/`, the single source of truth).
+- **Wire API version:** `4` (see `extension-sdk/`, the single source of truth).
 - **Distribution:** a `.portext` archive installed from Settings → Extensions
   (URL or file), or a directory in `~/.local/share/portunus/extensions/`.
 
@@ -20,7 +20,9 @@ cp target/wasm32-unknown-unknown/release/my_ext.wasm extension.wasm
 portunus ext dev .              # link into Portunus + auto-reload on rebuild
 ```
 
-Enable it once in Settings → Extensions, then type `my-ext ` in the launcher.
+Enable it once in Settings → Extensions, then either type `my-ext ` in the
+launcher or search for its "Search my-ext" entry and press Enter — the
+scaffolded manifest declares one `[[commands]]` entry that answers to both.
 When it's ready to ship: `portunus ext pack .` produces `my-ext.portext` and
 prints its sha256.
 
@@ -28,7 +30,7 @@ prints its sha256.
 
 ```
 ~/.local/share/portunus/extensions/<name>/
-├── manifest.toml      # identity, trigger, permissions, limits, settings
+├── manifest.toml      # identity, commands, permissions, limits, settings
 └── extension.wasm     # your compiled module
 ```
 
@@ -40,7 +42,7 @@ arrive enabled. Dropping a folder never runs code.
 ## manifest.toml
 
 ```toml
-api = 3                        # REQUIRED: wire API major; unknown majors are rejected
+api = 4                        # REQUIRED: wire API major; unknown majors are rejected
 name = "emoji"                 # must match the directory name; [a-zA-Z0-9_-] only
 version = "0.2.0"
 description = "Search and copy emoji"
@@ -49,11 +51,21 @@ homepage = "https://github.com/you/emoji"  # optional, shown in Settings
 kinds = ["ext-emoji"]          # result kind; must start with "ext-"; defaults to "ext-<name>"
 entry = "extension.wasm"       # default; no path separators
 
-# Strongly recommended. Without [trigger] the extension runs on EVERY keystroke.
-[trigger]
-prefixes = ["emoji", "em"]     # lowercase ascii/digits/-/_ only; "define"/"dict" are reserved
-min_query_len = 1              # applies to the post-strip query; clamped to [0, 32]
-always = false                 # true = also run on non-prefixed queries (discouraged)
+# REQUIRED: at least one [[commands]] entry. Each is a searchable launcher
+# entry ("Search Emoji") the user finds by fuzzy-matching its title/keywords
+# and opens. One wasm module can serve several commands - the wire's `command`
+# field says which one is running.
+[[commands]]
+name = "search"                # [a-z0-9_-]+, unique within the extension; wire id
+title = "Search Emoji"         # required: the searchable launcher entry's title
+description = "Find and copy emoji by name"  # optional: entry subtitle
+mode = "scope"                 # scope | action (default scope; "inline" is a legacy alias for scope)
+keywords = ["emoji", "em", "smiley"]  # optional search synonyms folded into the fuzzy match
+min_query_len = 1              # applies to the scope query; clamped to [0, 32]
+always = false                 # run live in root search on every keystroke (discouraged)
+chip = "Emoji"                 # optional: active-mode chip label; defaults to title
+placeholder = "Search emoji…"  # optional: input placeholder while the mode is active
+kind = "ext-emoji"             # optional: per-command result-kind override; must be in `kinds`
 
 [permissions]
 network = ["api.github.com"]   # exact hosts only; wildcards are rejected; omit for none
@@ -91,23 +103,44 @@ shown to the user before enabling/installing, and an update whose permissions
 *grow* past that snapshot refuses to load until the user re-approves in
 Settings. Declare the minimum you need.
 
-## Triggers
+## Commands
 
-With `[trigger]` declared, the host only calls your `search` when the query's
-first token equals one of your prefixes (case-insensitive), and it strips the
-prefix before you see it:
+Every extension is one or more **commands**. A command is a searchable entry in
+the launcher root: its `title` ("Search Emoji") is matched by the same fuzzy
+search as apps and files, alongside any `keywords` you declare (search synonyms
+like `["emoji", "smiley"]`). There is no prefix or trigger syntax — the user
+finds a command by typing something that fuzzy-matches its title or keywords,
+then opens it.
 
-| User types | Your `search` gets |
+`mode` picks what opening it does:
+
+| Mode | Behavior |
 |---|---|
-| `emoji smi` | `{ "query": "smi", "raw_query": "emoji smi", "trigger": "emoji" }` |
-| `emoji` / `emoji ` | `{ "query": "", … }` — the *browse state*: return default/popular results (or nothing) |
-| `firefox` | *(not called at all)* |
+| `scope` (default) | Enter opens an enterable mode with its own chip and input placeholder; every keystroke then routes to your `search`. Backspace on an empty query exits. (`inline` is accepted as a legacy alias for `scope`.) |
+| `action` | One-shot: Enter calls `activate` immediately with a synthetic default result and closes. |
 
-This is the main performance lever: a gated-out extension costs the keystroke
-path literally nothing. Trigger-matched results also rank in the launcher's
-intent band (above apps, calc and dict) because the user explicitly asked for
-you. Without `[trigger]` (always-mode) your results compete just above apps and
-you pay a wasm call per keystroke.
+Inside a scope, your `search` receives the whole typed term (`query` and
+`raw_query` are identical); an empty `query` is the *browse state*:
+
+| User did | Your `search` gets |
+|---|---|
+| opened "Search Emoji", typed `smi` | `{ "command": "search", "query": "smi", "raw_query": "smi" }` |
+| opened "Search Emoji", empty input | `{ "command": "search", "query": "", … }` — return default/popular results (or nothing) |
+
+Scope results rank in the launcher's intent band (above apps, calc and dict)
+because the user explicitly entered your command.
+
+**`always` commands** are the one exception that runs in root search: set
+`always = true` and your `search` runs on *every keystroke* with the raw query,
+like a built-in provider (results compete just above apps). It pays a wasm call
+per keystroke, so reserve it for provider-style extensions (e.g. a live unit
+converter) where an entered scope genuinely doesn't fit. `always` does not apply
+to `action` commands.
+
+**Multiple commands** share one wasm module; dispatch on the wire's `command`
+field (the `[[commands]]` entry's `name`) in `search`/`activate`/`preview`/
+`query`. See `examples/extensions/gh/manifest.toml` for a three-command
+extension (two `scope` search commands, one `action` command).
 
 ## Exports
 
@@ -124,7 +157,7 @@ you can hit the network without blocking the launcher.
 
 ```jsonc
 // in
-{ "query": "smile", "raw_query": "emoji smile", "trigger": "emoji" }
+{ "command": "search", "query": "smile", "raw_query": "smile" }
 // out
 { "results": [ {
     "id": "grinning-face",       // opaque local id; host namespaces it
@@ -144,8 +177,8 @@ you can hit the network without blocking the launcher.
 ```
 
 - Relevance is your only ranking input. The host maps 0-100 into a band whose
-  base depends on whether the query was trigger-matched. Out-of-range values
-  are clamped.
+  base depends on whether the results came from an entered scope (higher) or an
+  `always` command in root search (lower). Out-of-range values are clamped.
 - At most 200 results are taken per query; titles/subtitles/badges are clamped to 2 KB.
 - Icons are validated host-side: png/jpeg/gif/webp, at most 32 KB base64. An
   invalid icon is dropped (the result keeps the default glyph) and the error
@@ -159,7 +192,7 @@ dedicated instance under `[limits] query_timeout_ms` (default 10 s), off the
 keystroke path — built-in results and your `search` results render instantly
 while `query` is still running, shown with a per-extension loading row.
 
-Input is identical to `search` (`query`, `raw_query`, `trigger`). Push partial
+Input is identical to `search` (`command`, `query`, `raw_query`). Push partial
 batches with `guest::emit` as they arrive; the return value is the final batch.
 
 ```rust
@@ -192,7 +225,7 @@ pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
 
 ```jsonc
 // in: the result EXACTLY as you returned it, plus the chosen action id (or null)
-{ "result": { ...ExtensionResult }, "action": "copy" }
+{ "command": "search", "result": { ...ExtensionResult }, "action": "copy" }
 // out: declarative effects the host executes for you
 { "effects": [
   { "type": "copy_text", "text": "😄" },
@@ -202,6 +235,14 @@ pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
 
 The full result round-trips back to you, so you never need to persist search
 state. Budget: 2 s by default.
+
+**Action commands** (`mode = "action"`) skip `search` entirely: selecting
+their launcher entry calls `activate` directly, with `command` set to the
+command's name and a synthetic default result (empty `id`/`title`) standing
+in for the "result exactly as you returned it" — there was nothing to return.
+Use this for one-shot side effects like "open GitHub notifications in the
+browser" (see `examples/extensions/gh/manifest.toml`'s `notifications`
+command).
 
 **Effects** run host-side after your call returns, in order. Because they only
 ever run on an explicit keypress, they need **no permissions**:
@@ -389,7 +430,7 @@ wholesale), which is the right shape for token-by-token LLM output. Raise
 
 Two good recipes for network extensions:
 
-- **`query` (api 3):** hit the network directly in the async tier and stream
+- **`query` (api 3+):** hit the network directly in the async tier and stream
   results in. Optionally keep a `search` that serves a kv cache instantly, then
   emit the fresh result from `query` with the same `id` to replace it.
 - **`refresh` + kv:** for data that's shared across queries or slow to warm —
@@ -529,22 +570,30 @@ history and logs.
 `api` in the manifest is the wire-contract major. The host refuses to load
 extensions targeting a different major and shows why. Additive changes (new
 optional fields, new preview types, new effects) do not bump the major; field
-removals or semantic changes do. **v3 broke from v2:** added the optional
-async `query` export with `emit`-based streaming, streaming previews via
-`emit_preview_update`, `secret` settings, and the `query_timeout_ms` /
-`preview_timeout_ms` limits. No compatibility shim — recompile against the v3
-SDK and set `api = 3`. (v2 broke from v1: `actions` became structured objects,
-`activate` returns effects, `search` input gained `raw_query`/`trigger`.)
+removals or semantic changes do. **v4 broke from v3:** removed `[trigger]` in
+favor of one or more `[[commands]]` entries (each a searchable launcher entry
+found by fuzzy-matching its title and `keywords`), removed prefix/alias
+triggering entirely (commands are opened as scopes, not invoked by a typed
+prefix; `SearchInput`/`QueryInput` dropped the `trigger` field), and
+`SearchInput`/`QueryInput`/`ActivateInput`/`PreviewInput` gained a `command`
+field naming which one is running. No compatibility shim — migrate `[trigger]`
+to `[[commands]]`, rename `prefixes` to `keywords`, and set `api = 4`.
+**v3 broke from v2:** added the optional async `query` export with
+`emit`-based streaming, streaming previews via `emit_preview_update`, `secret`
+settings, and the `query_timeout_ms` / `preview_timeout_ms` limits. (v2 broke
+from v1: `actions` became structured objects, `activate` returns effects,
+`search` input gained `raw_query`.)
 
 ## Examples
 
-- `examples/extensions/emoji/` - offline: triggers, structured actions,
-  activate effects (no permissions), settings, browse state, preview. Recompiled
-  for api 3 unchanged — the sync tier pays no complexity tax.
+- `examples/extensions/emoji/` - offline: a single scope command with search
+  keywords, structured actions, activate effects (no permissions), settings,
+  browse state, preview.
 - `examples/extensions/cheatsh/` - network: an async `query` that streams the
-  live sheet in over `search`'s instant kv cache, background refresh, trigger
-  prefixes, open-url/copy effects, HTML preview.
-- `examples/extensions/gh/` - full breadth: secret setting (PAT in the
+  live sheet in over `search`'s instant kv cache, background refresh, search
+  keywords, open-url/copy effects, HTML preview.
+- `examples/extensions/gh/` - full breadth: three `[[commands]]` (two `scope`
+  search commands plus an `action` command), secret setting (PAT in the
   keyring), dual-endpoint streaming `query` (repos + issues) merged over a kv
   repo cache by id, streaming Metadata→Markdown previews, clone-command copy
   effects, daily background cache warm.

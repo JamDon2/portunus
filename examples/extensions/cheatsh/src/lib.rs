@@ -1,5 +1,5 @@
-//! Example Portunus extension: cheat.sh lookups. Demonstrates the v3 API:
-//! host-side trigger prefixes (no query parsing in the extension), a
+//! Example Portunus extension: cheat.sh lookups. Demonstrates a scope command
+//! (found by title + keywords; the extension sees the whole term), a
 //! `[background]` refresh that warms the kv cache, an async `query` export
 //! that streams the live sheet in over the instant kv results, structured
 //! actions, and declarative activate effects (no clipboard/open_url perms).
@@ -131,7 +131,7 @@ pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
 
 #[plugin_fn]
 pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
-    // The host strips the trigger ("ch tar" → "tar") before we see it.
+    // `query` is the whole term typed in the scope (e.g. "tar").
     let term_owned = input.0.query.trim().to_lowercase();
     let term = term_owned.as_str();
     if term.is_empty() {

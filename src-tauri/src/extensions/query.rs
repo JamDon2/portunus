@@ -133,66 +133,124 @@ impl QueryManager {
             if !provider.has_query() || provider.query_disabled() || provider.is_benched() {
                 continue;
             }
-            let Some(gated) = provider.gate(raw_query) else { continue };
+            let Some(gc) = provider.gate(raw_query) else { continue };
+            // Root gate resolves only `always` commands; those are discovery-band.
+            let intent = false;
 
             pending.push(PendingExt {
                 name: name.clone(),
                 kind: provider.result_kind().to_string(),
             });
-            crate::util::lock(&self.slots).insert(name.clone(), provider.clone());
-
-            let app = self.app.clone();
-            let epoch = self.epoch.clone();
-            let frecency = frecency.clone();
-            let slots_name = name.clone();
-            std::thread::spawn(move || {
-                let epoch_for_emit = epoch.clone();
-                let emit = move |results: Vec<SearchResult>, done: bool, error: Option<String>| {
-                    // Stale-generation batches are dropped host-side too; this
-                    // is the second gate for anything racing the bump.
-                    if epoch_for_emit.load(Ordering::Relaxed) != generation {
-                        return;
-                    }
-                    let mut results = results;
-                    if let Some(store) = &frecency {
-                        providers::apply_frecency(&mut results, store, weight);
-                    }
-                    let _ = app.emit(
-                        "search-stream",
-                        StreamPayload { query_id, ext: slots_name.clone(), results, done, error },
-                    );
-                };
-
-                // Coalesce partial batches so chatty guests don't flood IPC.
-                let buffer = Arc::new(Mutex::new(Vec::<SearchResult>::new()));
-                let last_flush = Arc::new(Mutex::new(Instant::now() - Duration::from_millis(COALESCE_MS)));
-                let sink_emit = emit.clone();
-                let sink_buffer = buffer.clone();
-                let sink_last = last_flush.clone();
-                let sink = move |batch: Vec<SearchResult>| {
-                    let mut buf = sink_buffer.lock().unwrap_or_else(|e| e.into_inner());
-                    buf.extend(batch);
-                    let mut last = sink_last.lock().unwrap_or_else(|e| e.into_inner());
-                    if last.elapsed() >= Duration::from_millis(COALESCE_MS) && !buf.is_empty() {
-                        *last = Instant::now();
-                        let out = std::mem::take(&mut *buf);
-                        drop(buf);
-                        sink_emit(out, false, None);
-                    }
-                };
-
-                let outcome = provider.run_query(gated, generation, epoch.clone(), sink);
-                // Final flush: buffered partials + the returned final batch.
-                let mut tail = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
-                match outcome {
-                    Ok(finals) => {
-                        tail.extend(finals);
-                        emit(tail, true, None);
-                    }
-                    Err(e) => emit(tail, true, Some(e)),
-                }
-            });
+            self.spawn_worker(query_id, generation, name, provider, gc, intent, frecency.clone(), weight);
         }
         pending
+    }
+
+    /// Scoped variant for an entered extension command mode: cancels all
+    /// workers, then spawns only the target extension with the command forced
+    /// (the whole query is the command's input). Same epoch/reorder guards as
+    /// `dispatch`.
+    pub fn dispatch_scoped(
+        &self,
+        query_id: u64,
+        ext_name: &str,
+        command: &str,
+        query: &str,
+        registry: &PluginRegistry,
+    ) -> Vec<PendingExt> {
+        let prev = self.last_query_id.fetch_max(query_id, Ordering::Relaxed);
+        if query_id <= prev {
+            return Vec::new();
+        }
+        let generation = self.epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        {
+            let mut slots = crate::util::lock(&self.slots);
+            for provider in slots.values() {
+                provider.cancel_query();
+            }
+            slots.clear();
+        }
+
+        let Some(provider) = registry.extension(ext_name) else { return Vec::new() };
+        if !provider.has_query() || provider.query_disabled() || provider.is_benched() {
+            return Vec::new();
+        }
+        let Some(gc) = provider.gate_scoped(command, query) else { return Vec::new() };
+
+        let (frecency, weight) = registry.frecency_params();
+        let pending = vec![PendingExt {
+            name: ext_name.to_string(),
+            kind: provider.result_kind().to_string(),
+        }];
+        self.spawn_worker(query_id, generation, ext_name.to_string(), provider, gc, true, frecency, weight);
+        pending
+    }
+
+    /// Spawns one worker thread running an extension's `query` export,
+    /// streaming coalesced `search-stream` batches gated on `generation`.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_worker(
+        &self,
+        query_id: u64,
+        generation: u64,
+        name: String,
+        provider: Arc<WasmProvider>,
+        gc: crate::extensions::trigger::GatedCommand,
+        intent: bool,
+        frecency: Option<Arc<crate::frecency::FrecencyStore>>,
+        weight: f32,
+    ) {
+        crate::util::lock(&self.slots).insert(name.clone(), provider.clone());
+
+        let app = self.app.clone();
+        let epoch = self.epoch.clone();
+        let slots_name = name;
+        std::thread::spawn(move || {
+            let epoch_for_emit = epoch.clone();
+            let emit = move |results: Vec<SearchResult>, done: bool, error: Option<String>| {
+                // Stale-generation batches are dropped host-side too; this
+                // is the second gate for anything racing the bump.
+                if epoch_for_emit.load(Ordering::Relaxed) != generation {
+                    return;
+                }
+                let mut results = results;
+                if let Some(store) = &frecency {
+                    providers::apply_frecency(&mut results, store, weight);
+                }
+                let _ = app.emit(
+                    "search-stream",
+                    StreamPayload { query_id, ext: slots_name.clone(), results, done, error },
+                );
+            };
+
+            // Coalesce partial batches so chatty guests don't flood IPC.
+            let buffer = Arc::new(Mutex::new(Vec::<SearchResult>::new()));
+            let last_flush = Arc::new(Mutex::new(Instant::now() - Duration::from_millis(COALESCE_MS)));
+            let sink_emit = emit.clone();
+            let sink_buffer = buffer.clone();
+            let sink_last = last_flush.clone();
+            let sink = move |batch: Vec<SearchResult>| {
+                let mut buf = sink_buffer.lock().unwrap_or_else(|e| e.into_inner());
+                buf.extend(batch);
+                let mut last = sink_last.lock().unwrap_or_else(|e| e.into_inner());
+                if last.elapsed() >= Duration::from_millis(COALESCE_MS) && !buf.is_empty() {
+                    *last = Instant::now();
+                    let out = std::mem::take(&mut *buf);
+                    drop(buf);
+                    sink_emit(out, false, None);
+                }
+            };
+
+            let outcome = provider.run_query(gc, intent, generation, epoch.clone(), sink);
+            // Final flush: buffered partials + the returned final batch.
+            let mut tail = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
+            match outcome {
+                Ok(finals) => {
+                    tail.extend(finals);
+                    emit(tail, true, None);
+                }
+                Err(e) => emit(tail, true, Some(e)),
+            }
+        });
     }
 }

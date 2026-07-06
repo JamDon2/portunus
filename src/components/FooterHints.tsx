@@ -5,8 +5,6 @@ import { isPreviewable } from "../utils";
 
 interface Props {
   selected: SearchResult | null;
-  /** A ghost command-completion is showing, so Tab will accept it. */
-  canComplete: boolean;
   /** The Quicklook overlay is open, so Esc closes it and Shift+Enter dismisses. */
   quicklookOpen?: boolean;
   /** In the dedicated clipboard browser; hints + paste-vs-copy wording change. */
@@ -32,11 +30,8 @@ const CopyPath = () => <span className="hint"><kbd>ctrl</kbd><kbd>C</kbd> copy p
 const PdfPageNav = () => <span className="hint"><kbd>ctrl</kbd><kbd>←→</kbd> page</span>;
 const Peek = () => <span className="hint"><kbd>shift</kbd><kbd><EnterIcon /></kbd> peek</span>;
 
-const Complete = () => <span className="hint"><kbd>Tab</kbd> complete</span>;
-
 function hints(
   selected: SearchResult | null,
-  canComplete: boolean,
   quicklookOpen: boolean,
   clipboardMode: boolean,
   contentMode: boolean,
@@ -88,7 +83,7 @@ function hints(
     <span className="hint"><kbd>shift</kbd><kbd><EnterIcon /></kbd> / <kbd>Esc</kbd> close</span>
   </>;
 
-  if (k === "clipboard-mode") return <><Nav /><Open /><Esc /></>;
+  if (k === "command") return <><Nav /><span className="hint"><kbd><EnterIcon /></kbd> open</span><Esc /></>;
 
   if (k === "calc") return <><Nav /><span className="hint"><kbd>ctrl</kbd><kbd>C</kbd> copy value</span><Esc /></>;
 
@@ -107,11 +102,11 @@ function hints(
         {k === "file" && <span className="hint"><kbd>ctrl</kbd><kbd><EnterIcon /></kbd> reveal</span>}
         {isPdf && <PdfPageNav />}
         {selected && isPreviewable(selected) && <Peek />}
-        {canComplete && <Complete />}<Esc />
+        <Esc />
       </>
     );
   }
-  if (k === "app") return <><Nav /><span className="hint"><kbd><EnterIcon /></kbd> launch</span><Jump />{canComplete && <Complete />}<Esc /></>;
+  if (k === "app") return <><Nav /><span className="hint"><kbd><EnterIcon /></kbd> launch</span><Jump /><Esc /></>;
 
   // Extension result: show its real default-action label, and advertise the
   // picker only when there's more than one action to pick from.
@@ -127,9 +122,9 @@ function hints(
   }
 
   // Default: generic result row
-  return <><Nav /><Open /><Jump />{canComplete && <Complete />}<Esc /></>;
+  return <><Nav /><Open /><Jump /><Esc /></>;
 }
 
-export default function FooterHints({ selected, canComplete, quicklookOpen = false, clipboardMode = false, contentMode = false, smartPaste = false, clipboardIdle = false, pdfHighlight = true, actionPickerOpen = false }: Props) {
-  return <div className="hints">{hints(selected, canComplete, quicklookOpen, clipboardMode, contentMode, smartPaste, clipboardIdle, pdfHighlight, actionPickerOpen)}</div>;
+export default function FooterHints({ selected, quicklookOpen = false, clipboardMode = false, contentMode = false, smartPaste = false, clipboardIdle = false, pdfHighlight = true, actionPickerOpen = false }: Props) {
+  return <div className="hints">{hints(selected, quicklookOpen, clipboardMode, contentMode, smartPaste, clipboardIdle, pdfHighlight, actionPickerOpen)}</div>;
 }

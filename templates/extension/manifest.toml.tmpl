@@ -1,14 +1,25 @@
-api = 3
+api = 4
 name = "{{name}}"
 version = "0.1.0"
 description = "Describe what {{name}} does"
 author = ""
 
-# The extension only runs when the query starts with this prefix
-# ("{{name}} <query>"). Bare "{{name}}" shows your browse/default results.
-# Delete this section to run on every keystroke (discouraged - slower).
-[trigger]
-prefixes = ["{{name}}"]
+# One searchable command. It shows up as a "Search {{name}}" entry in the
+# launcher root, found by fuzzy-matching its title and `keywords`; Enter opens
+# it as a scope and every keystroke then routes to your `search`. An empty
+# scope query is the browse state - return your default/browse results. Add
+# more [[commands]] blocks for extensions that do several distinct things
+# (dispatch on the wire's `command` field in lib.rs) - see
+# examples/extensions/gh/manifest.toml.
+[[commands]]
+name = "{{name}}"               # [a-z0-9_-]+, unique within the extension
+title = "Search {{name}}"       # required; the searchable launcher entry
+mode = "scope"                  # scope | action
+keywords = ["{{name}}"]         # optional search synonyms folded into the fuzzy match
+# min_query_len = 1             # optional: gate `search` until the query is this long
+# always = false                # run live in root search on every keystroke (discouraged - slower)
+# chip = "{{name}}"             # optional: active-mode chip label; defaults to title
+# placeholder = "Search…"       # optional: input placeholder while the mode is active
 
 [limits]
 search_timeout_ms = 100

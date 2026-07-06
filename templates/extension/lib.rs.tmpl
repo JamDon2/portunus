@@ -4,8 +4,10 @@
 //!   cargo build --release --target wasm32-unknown-unknown
 //!   portunus ext dev .        # symlink + auto-reload on rebuild
 //!
-//! The host calls `search` on each (trigger-gated) keystroke, `activate` when
-//! the user picks a result/action, and optionally `preview`/`refresh`.
+//! The host calls `search` on each (command-gated) keystroke, `activate` when
+//! the user picks a result/action, and optionally `preview`/`refresh`. Every
+//! call carries `command`, naming which `[[commands]]` manifest entry is
+//! running - this scaffold declares one, so it's ignored below.
 
 // The pdk macros expand to `extism_pdk::…` paths - this alias satisfies them
 // without adding extism-pdk as a direct dependency.
@@ -18,9 +20,17 @@ use portunus_ext_sdk::{
 
 #[plugin_fn]
 pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
-    // The trigger prefix is already stripped: "{{name}} foo" arrives as "foo".
-    // An empty query means the user typed just the prefix - return browse
-    // results (or nothing).
+    // input.0.command names the [[commands]] entry being invoked - match on
+    // it here once you add more than one command to the manifest, e.g.:
+    //   match input.0.command.as_str() {
+    //       "{{name}}" => search_{{crate_name}}(&input.0),
+    //       "other" => search_other(&input.0),
+    //       _ => Ok(Json(SearchOutput::default())),
+    //   }
+
+    // `query` is the whole term the user typed in the scope. An empty query
+    // means they just entered the mode (via its launcher entry) - return
+    // browse results (or nothing).
     let query = input.0.query.trim().to_lowercase();
 
     let results = vec![ExtensionResult {
@@ -40,6 +50,8 @@ pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
 
 #[plugin_fn]
 pub fn activate(input: Json<ActivateInput>) -> FnResult<Json<ActivateOutput>> {
+    // input.0.command is set here too (an Action command's direct invocation
+    // gets its name with a synthetic default result).
     let result = input.0.result;
     // Effects run host-side after this returns; copying text and opening
     // http(s) urls need no permissions on the explicit activation path.

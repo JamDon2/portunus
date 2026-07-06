@@ -276,7 +276,7 @@ pub struct InstallPreview {
     pub author: String,
     pub homepage: String,
     pub permissions: ConsentPermissions,
-    pub triggers: Vec<String>,
+    pub keywords: Vec<String>,
     pub sha256: String,
     pub size_bytes: u64,
     /// Set when an extension with this name is already installed.
@@ -480,7 +480,7 @@ fn preview_install_blocking(
         author: m.author.clone(),
         homepage: m.homepage.clone(),
         permissions: ConsentPermissions::from_manifest(&m),
-        triggers: m.trigger.as_ref().map(|t| t.prefixes.clone()).unwrap_or_default(),
+        keywords: m.commands.iter().flat_map(|c| c.keywords.clone()).collect(),
         sha256,
         size_bytes: bytes.len() as u64,
         replaces,

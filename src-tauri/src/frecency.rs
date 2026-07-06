@@ -60,7 +60,7 @@ impl FrecencyStore {
     }
 
     pub fn record_launch(&self, id: &str, kind: &str) {
-        if !matches!(kind, "app" | "file" | "folder" | "extension") {
+        if !matches!(kind, "app" | "file" | "folder" | "extension" | "command") {
             return;
         }
         let normalized = id.to_string();

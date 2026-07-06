@@ -46,28 +46,3 @@ export function extensionByKind(kind: string): ExtensionInfo | undefined {
   ensureStarted();
   return cache.find(e => e.kind === kind);
 }
-
-export interface TriggerHit {
-  info: ExtensionInfo;
-  prefix: string;
-}
-
-/**
- * Longest-prefix trigger match for a raw launcher query: the first
- * whitespace-separated token must equal a registered prefix (the same rule
- * the backend gate applies). Used for the passive trigger chip only.
- */
-export function matchTrigger(query: string, extensions: ExtensionInfo[]): TriggerHit | null {
-  const token = query.split(/\s/, 1)[0]?.toLowerCase() ?? "";
-  if (!token) return null;
-  let best: TriggerHit | null = null;
-  for (const info of extensions) {
-    if (!info.enabled) continue;
-    for (const prefix of info.triggers) {
-      if (prefix.toLowerCase() === token && (!best || prefix.length > best.prefix.length)) {
-        best = { info, prefix };
-      }
-    }
-  }
-  return best;
-}

@@ -2,8 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use nucleo_matcher::Utf32Str;
-
 use super::{Provider, SearchResult};
 use crate::config::SharedConfig;
 
@@ -355,18 +353,25 @@ impl Provider for AppProvider {
             .apps
             .iter()
             .filter_map(|app| {
-                let name_score = pattern.score(Utf32Str::new(&app.name, &mut char_buf), &mut matcher);
-                let desc_score = app.description.as_deref().and_then(|desc| {
-                    pattern
-                        .score(Utf32Str::new(desc, &mut char_buf), &mut matcher)
-                        .map(|s| (s as f32 * 0.8) as u32)
-                });
-                let (score, base) = match (name_score, desc_score) {
-                    (Some(n), Some(d)) => (n.max(d), super::SCORE_APP),
-                    (Some(n), None) => (n, super::SCORE_APP),
-                    (None, Some(d)) => (d, super::SCORE_FILE),
-                    (None, None) => return None,
-                };
+                // Match name (primary) and description (down-weighted). A
+                // name hit stays app-band; a description-only hit demotes to
+                // the file band so apps matched only by blurb don't outrank
+                // apps matched by name.
+                let (idx, score) = match app.description.as_deref() {
+                    Some(desc) => super::fuzzy_best(
+                        &pattern,
+                        &mut matcher,
+                        &mut char_buf,
+                        &[(app.name.as_str(), 1.0), (desc, 0.8)],
+                    ),
+                    None => super::fuzzy_best(
+                        &pattern,
+                        &mut matcher,
+                        &mut char_buf,
+                        &[(app.name.as_str(), 1.0)],
+                    ),
+                }?;
+                let base = if idx == 0 { super::SCORE_APP } else { super::SCORE_FILE };
                 Some((score, SearchResult {
                     id: format!("app:{}", app.name),
                     title: app.name.clone(),

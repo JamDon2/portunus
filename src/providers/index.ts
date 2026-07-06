@@ -1,4 +1,4 @@
-import './clipboard';
+import './command';
 import './files';
 import './apps';
 import './calc';

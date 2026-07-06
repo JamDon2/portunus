@@ -2,7 +2,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
-use super::{Provider, SearchResult};
+use super::{CommandDescriptor, Provider, SearchResult};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Definition {
@@ -211,20 +211,6 @@ impl WordIndex {
     }
 }
 
-/// True if `query` is an explicit dictionary query: a prefix of "define"/"dict"
-/// (min 2 chars, no space) or a `define `/`dict `-prefixed lookup. The registry
-/// uses this to decide whether dict rows are explicit (always kept) or
-/// sparse-fill candidates (dropped when other results are plentiful).
-pub fn is_explicit_dict_query(query: &str) -> bool {
-    let q = query.trim_end();
-    let is_define_prefix = q.len() >= 2 && "define".starts_with(q) && !q.contains(' ');
-    let is_dict_prefix = q.len() >= 2 && "dict".starts_with(q) && !q.contains(' ');
-    is_define_prefix
-        || is_dict_prefix
-        || q.strip_prefix("define ").is_some()
-        || q.strip_prefix("dict ").is_some()
-}
-
 pub struct DictProvider {
     pub available: bool,
     index: WordIndex,
@@ -277,44 +263,61 @@ impl Provider for DictProvider {
             return vec![];
         }
 
-        let q = query.trim_end();
+        // Root search only offers sparse-fill candidates for the typed word:
+        // only words present in the embedded wordlist are returned (so the
+        // literal typed word is NOT emitted unless it's a real lemma), and the
+        // registry keeps them only when other results are sparse. Explicit
+        // lookups happen in the "Define Word" scope (search_scoped).
+        self.fill_results(query.trim_end())
+    }
 
-        // Tier 1: typing a prefix of "define" or "dict" (min 2 chars, no space)
-        let is_define_prefix =
-            q.len() >= 2 && "define".starts_with(q) && !q.contains(' ');
-        let is_dict_prefix =
-            q.len() >= 2 && "dict".starts_with(q) && !q.contains(' ');
-
-        if is_define_prefix || is_dict_prefix {
-            return vec![hint_result("Look up any word in the WordNet dictionary")];
+    fn commands(&self) -> Vec<CommandDescriptor> {
+        use crate::providers::command::{CommandRoute, CommandSource, ModeKind};
+        if !self.available {
+            return vec![];
         }
+        vec![CommandDescriptor {
+            id: "cmd:dict".to_string(),
+            title: "Define Word".to_string(),
+            chip: "Define".to_string(),
+            subtitle: Some("WordNet dictionary".to_string()),
+            source: CommandSource::Builtin,
+            mode_kind: ModeKind::Scope,
+            keywords: vec![
+                "define".into(),
+                "dict".into(),
+                "dictionary".into(),
+                "lookup".into(),
+                "word".into(),
+            ],
+            placeholder: Some("Type a word to look it up…".to_string()),
+            min_query_len: 1,
+            result_kind: "dict".to_string(),
+            icon_data_uri: None,
+            route: CommandRoute::Builtin { provider_id: "dict".to_string() },
+        }]
+    }
 
-        // Tier 2: prefix + trailing space but no word
-        if q == "define " || q == "dict " {
-            return vec![hint_result("Start typing a word to look it up\u{2026}")];
+    // In the "Define Word" scope the whole query is the word - no prefix.
+    fn search_scoped(&self, _command_id: &str, query: &str) -> Vec<SearchResult> {
+        if !self.available {
+            return vec![];
         }
+        self.lookup(query.trim())
+    }
+}
 
-        // Tier 3: actual lookup
-        let word = if let Some(w) = q.strip_prefix("define ") {
-            w.trim()
-        } else if let Some(w) = q.strip_prefix("dict ") {
-            w.trim()
-        } else {
-            // Tier 4: no prefix - sparse-fill candidates for the typed word.
-            // Only words present in the embedded wordlist are returned (so the
-            // literal typed word is NOT emitted unless it's a real lemma). The
-            // registry decides whether to keep these based on how many other
-            // results exist.
-            return self.fill_results(q);
-        };
-
+impl DictProvider {
+    /// Suggestion rows for an explicit lookup of `word`: the literal word
+    /// first, then prefix completions, then (when the prefix is sparse) spell
+    /// corrections. Serves only the embedded index - never calls `dict`, which
+    /// would block the keystroke path; the preview fetches definitions
+    /// asynchronously via get_dict_definitions.
+    fn lookup(&self, word: &str) -> Vec<SearchResult> {
         if word.is_empty() {
             return vec![hint_result("Start typing a word to look it up\u{2026}")];
         }
 
-        // Don't call dict here - that would block every keystroke. The preview
-        // fetches definitions asynchronously via get_dict_definitions. All
-        // suggestions are served from the embedded word index, never the DB.
         let word_lc = word.to_lowercase();
         let mut results: Vec<SearchResult> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -660,16 +663,6 @@ mod tests {
         let words: Vec<&str> =
             idx.fill_matches("recieve", 5, true).iter().map(|r| idx.word(*r)).collect();
         assert!(words.contains(&"receive"), "got {words:?}");
-    }
-
-    #[test]
-    fn is_explicit_dict_query_detects_prefixes_and_lookups() {
-        assert!(is_explicit_dict_query("de"));
-        assert!(is_explicit_dict_query("dict"));
-        assert!(is_explicit_dict_query("define apple"));
-        assert!(is_explicit_dict_query("dict apple"));
-        assert!(!is_explicit_dict_query("apple"));
-        assert!(!is_explicit_dict_query("d"));
     }
 
     #[test]

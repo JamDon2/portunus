@@ -2,7 +2,7 @@
 //!
 //! Everything crossing the extension boundary is defined here and versioned by
 //! [`API_VERSION`]. Extensions declare the API major they target in their
-//! `manifest.toml` (`api = 3`); the host refuses to load unknown majors.
+//! `manifest.toml` (`api = 4`); the host refuses to load unknown majors.
 //!
 //! Extension authors: enable the default `guest` feature and see the `guest`
 //! module for host-function wrappers. The Portunus host depends on this crate
@@ -11,21 +11,22 @@
 use serde::{Deserialize, Serialize};
 
 /// Wire-contract major version. Bumped only on breaking changes.
-pub const API_VERSION: u32 = 3;
+pub const API_VERSION: u32 = 4;
 
 /// Input to the extension's exported `search` function.
 ///
-/// With a `[trigger]` section in the manifest, `query` arrives with the
-/// matched prefix already stripped (`"emoji smi"` → `"smi"`); the raw text and
-/// the prefix that matched ride alongside. In always-mode `query == raw_query`
-/// and `trigger` is `None`.
+/// `command` names which of the extension's `[[commands]]` is being invoked -
+/// dispatch on it when you declare more than one. `query` is the whole typed
+/// term (there is no prefix stripping); `raw_query` equals it and is retained
+/// for forward compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchInput {
+    /// Name of the `[[commands]]` entry being invoked.
+    #[serde(default)]
+    pub command: String,
     pub query: String,
     #[serde(default)]
     pub raw_query: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger: Option<String>,
 }
 
 /// Output of the extension's exported `search` function.
@@ -89,18 +90,19 @@ pub struct ResultIcon {
 /// Input to the extension's optional exported `query` function - the async
 /// search tier.
 ///
-/// Same shape and trigger semantics as [`SearchInput`], but a separate type so
-/// the two tiers can evolve independently. `query` runs on a dedicated
-/// instance under a generous budget (`[limits] query_timeout_ms`, default
-/// 10 s) and may do blocking network I/O; partial batches stream to the
-/// launcher via [`guest::emit`] and the return value is the final batch.
+/// Same shape as [`SearchInput`], but a separate type so the two tiers can
+/// evolve independently. `query` runs on a dedicated instance under a generous
+/// budget (`[limits] query_timeout_ms`, default 10 s) and may do blocking
+/// network I/O; partial batches stream to the launcher via [`guest::emit`] and
+/// the return value is the final batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryInput {
+    /// Name of the `[[commands]]` entry being invoked.
+    #[serde(default)]
+    pub command: String,
     pub query: String,
     #[serde(default)]
     pub raw_query: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger: Option<String>,
 }
 
 /// Output of the optional exported `query` function: the final result batch.
@@ -131,6 +133,10 @@ pub struct EmitAck {
 /// Input to the extension's exported `activate` function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivateInput {
+    /// Name of the `[[commands]]` entry the result came from. For an Action
+    /// command's direct invocation, the command name with a default result.
+    #[serde(default)]
+    pub command: String,
     /// The result exactly as the extension returned it from `search`.
     pub result: ExtensionResult,
     /// Action id chosen by the user, or None for the default action.
@@ -165,6 +171,9 @@ pub enum ActivateEffect {
 /// Input to the extension's optional exported `preview` function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreviewInput {
+    /// Name of the `[[commands]]` entry the result came from.
+    #[serde(default)]
+    pub command: String,
     pub result: ExtensionResult,
 }
 

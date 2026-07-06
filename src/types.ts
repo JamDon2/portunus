@@ -150,6 +150,17 @@ export interface ExtensionSettingSpec {
   placeholder: string;
 }
 
+/** One command an extension declares (manifest [[commands]]). */
+export interface ExtensionCommandInfo {
+  name: string;
+  title: string;
+  mode: ModeKind;
+  /** Search synonyms folded into the command's fuzzy match. */
+  keywords: string[];
+  /** Command that runs live in root search on every keystroke. */
+  always: boolean;
+}
+
 /** One installed extension, as reported by the `list_extensions` command. */
 export interface ExtensionInfo {
   name: string;
@@ -164,8 +175,8 @@ export interface ExtensionInfo {
   benched: boolean;
   /** Set when the manifest declares a [background] refresh interval. */
   background_interval_secs: number | null;
-  /** Trigger prefixes; empty = runs on every keystroke. */
-  triggers: string[];
+  /** The extension's declared [[commands]]. */
+  commands: ExtensionCommandInfo[];
   /** Result kind the extension emits (drives launcher group labels). */
   kind: string | null;
   settings_schema: ExtensionSettingSpec[];
@@ -189,7 +200,7 @@ export interface InstallPreview {
   author: string;
   homepage: string;
   permissions: ExtensionPermissions;
-  triggers: string[];
+  keywords: string[];
   sha256: string;
   size_bytes: number;
   replaces: { old_version: string; permissions_grew: boolean } | null;
@@ -206,6 +217,38 @@ export interface ExtensionLogEntry {
   ts_ms: number;
   level: "info" | "error";
   message: string;
+}
+
+/** How a command behaves when invoked. */
+export type ModeKind = "scope" | "action";
+
+export type CommandSource = { type: "builtin" } | { type: "extension"; name: string };
+
+export type CommandRoute =
+  | { type: "builtin"; provider_id: string }
+  | { type: "extension"; name: string; command: string }
+  /** Frontend swaps in a dedicated component; the backend is not searched. */
+  | { type: "ui_takeover" };
+
+/** A searchable launcher command ("Define Word", "Search Issues"). */
+export interface CommandDescriptor {
+  /** `cmd:<name>` for built-ins, `ext:<name>:cmd:<command>` for extensions. */
+  id: string;
+  title: string;
+  /** Short label for the active-mode chip ("Contents", "Define"). */
+  chip: string;
+  subtitle?: string;
+  source: CommandSource;
+  mode_kind: ModeKind;
+  /** Search synonyms folded into the command's fuzzy match. */
+  keywords: string[];
+  /** Input placeholder while the scope is active. */
+  placeholder?: string;
+  min_query_len: number;
+  /** `SearchResult.kind` the command's own results carry. */
+  result_kind: string;
+  icon_data_uri?: string;
+  route: CommandRoute;
 }
 
 export interface SearchResult {
@@ -226,6 +269,10 @@ export interface SearchResult {
   match_page?: number;
   /** Original extension DTO for `ext:` results; passed back on activate/preview. */
   ext?: ExtensionResult;
+  /** Extension command that produced this result; passed back on activate/preview. */
+  ext_command?: string;
+  /** Descriptor behind a `kind: "command"` entry row. */
+  command?: CommandDescriptor;
 }
 
 /** One extension whose async `query` export is running for the current

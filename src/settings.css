@@ -1454,6 +1454,8 @@ a:focus-visible,
 /* Compact identity block: triggers, permissions, origin. */
 .settings-ext-meta { display: flex; flex-direction: column; gap: 6px; }
 
+.settings-ext-commands { display: flex; flex-direction: column; gap: 4px; }
+.settings-ext-command-title { font-size: 12px; color: var(--fg-mute); }
 .settings-ext-triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .settings-ext-triggers code {
   font-family: ui-monospace, "JetBrains Mono", monospace;

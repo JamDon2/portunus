@@ -62,18 +62,41 @@ struct SearchResponse {
 }
 
 #[tauri::command]
-fn search(query: String, query_id: u64, registry: tauri::State<'_, Registry>) -> SearchResponse {
+fn search(
+    query: String,
+    query_id: u64,
+    scope: Option<String>,
+    registry: tauri::State<'_, Registry>,
+) -> SearchResponse {
     let t = util::profile_search().then(std::time::Instant::now);
     let reg = registry.read().unwrap_or_else(|e| e.into_inner());
-    // Async tier first: cancels stale workers and spawns new ones, so their
-    // wall-clock overlaps the sync fan-out below.
-    let pending = extensions::query::manager()
-        .map(|qm| qm.dispatch(query_id, &query, &reg))
-        .unwrap_or_default();
-    let results = reg.search(&query);
+    let (results, pending) = match scope.as_deref() {
+        // A Scope command is active: route the whole query to its owner. No
+        // root fan-out, no command entries. Extension scopes also dispatch
+        // the async `query` tier (streaming), scoped to that one extension.
+        Some(scope_id) => {
+            let pending = scope_id
+                .strip_prefix("ext:")
+                .and_then(|rest| rest.split_once(":cmd:"))
+                .and_then(|(ext_name, cmd)| {
+                    extensions::query::manager()
+                        .map(|qm| qm.dispatch_scoped(query_id, ext_name, cmd, &query, &reg))
+                })
+                .unwrap_or_default();
+            (reg.search_scope(scope_id, &query), pending)
+        }
+        // Root search. Async tier first: cancels stale workers and spawns new
+        // ones, so their wall-clock overlaps the sync fan-out.
+        None => {
+            let pending = extensions::query::manager()
+                .map(|qm| qm.dispatch(query_id, &query, &reg))
+                .unwrap_or_default();
+            (reg.search(&query), pending)
+        }
+    };
     if let Some(t) = t {
         eprintln!(
-            "[profile] search cmd took={:.2}ms results={} pending={} q={query:?}",
+            "[profile] search cmd took={:.2}ms results={} pending={} scope={scope:?} q={query:?}",
             t.elapsed().as_secs_f64() * 1000.0,
             results.len(),
             pending.len(),
@@ -82,28 +105,28 @@ fn search(query: String, query_id: u64, registry: tauri::State<'_, Registry>) ->
     SearchResponse { query_id, results, pending }
 }
 
+/// The full command catalog, for the frontend's command cache (mode entry via
+/// Tab/flags needs descriptors without a search round-trip).
+#[tauri::command]
+fn list_commands(registry: tauri::State<'_, Registry>) -> Vec<providers::CommandDescriptor> {
+    registry.read().unwrap_or_else(|e| e.into_inner()).commands()
+}
+
+/// Records frecency for an invoked command entry so frequently-used commands
+/// rank higher in root search. Fired by the frontend on enter/run.
+#[tauri::command]
+fn command_used(id: String, frecency: tauri::State<'_, FrecencyState>) {
+    if let Some(store) = frecency.as_ref() {
+        store.record_launch(&id, "command");
+    }
+}
+
 /// Cancels all in-flight async extension queries (query cleared, window hidden).
 #[tauri::command]
 fn cancel_search() {
     if let Some(qm) = extensions::query::manager() {
         qm.cancel_all();
     }
-}
-
-/// Content-scope search (the Tab-activated "Contents" mode): full-text matches
-/// over file contents only, never names/apps.
-#[tauri::command]
-fn search_content(query: String, registry: tauri::State<'_, Registry>) -> Vec<providers::SearchResult> {
-    let t = util::profile_search().then(std::time::Instant::now);
-    let out = registry.read().unwrap_or_else(|e| e.into_inner()).search_content(&query);
-    if let Some(t) = t {
-        eprintln!(
-            "[profile] search_content cmd took={:.2}ms results={} q={query:?}",
-            t.elapsed().as_secs_f64() * 1000.0,
-            out.len(),
-        );
-    }
-    out
 }
 
 /// Best-matching 0-based PDF page for `query`, computed on demand for the single
@@ -993,7 +1016,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Core
             search,
-            search_content,
+            list_commands,
+            command_used,
             content_match_page,
             content_match_keys,
             launch_app,

@@ -9,7 +9,7 @@ export function groupLabel(kind: string): string | null {
   if (kind === "dict" || kind === "dict-hint") return "DICTIONARY";
   if (kind === "app") return "APPS";
   if (kind === "file" || kind === "folder") return "FILES";
-  if (kind === "clipboard-mode") return "CLIPBOARD";
+  if (kind === "command") return "COMMANDS";
   if (kind.startsWith("ext-")) {
     // Per-extension label from the meta store; generic until the first
     // list_extensions fetch lands (App re-renders on results anyway).

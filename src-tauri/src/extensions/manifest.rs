@@ -14,7 +14,7 @@ pub const SUPPORTED_API: u32 = portunus_ext_sdk::API_VERSION;
 /// Hard cap on `extension.wasm` size - anything bigger is rejected at load.
 const MAX_WASM_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Upper bound on `[trigger].min_query_len`. A larger value almost certainly
+/// Upper bound on a command's `min_query_len`. A larger value almost certainly
 /// means the author never meant to gate that aggressively, so it is rejected at
 /// parse time rather than silently clamped.
 pub const MAX_MIN_QUERY_LEN: usize = 32;
@@ -39,10 +39,10 @@ pub struct ExtensionManifest {
     pub kinds: Vec<String>,
     #[serde(default = "default_entry")]
     pub entry: String,
-    /// Absent = always-mode: the extension runs on every keystroke.
-    /// With prefixes declared, the host only calls `search` when the query
-    /// starts with one - dramatically cheaper and strongly recommended.
-    pub trigger: Option<TriggerConfig>,
+    /// The extension's commands - searchable launcher entries, each with its
+    /// own title, search keywords and behavior. At least one is required.
+    #[serde(default)]
+    pub commands: Vec<CommandSpec>,
     #[serde(default)]
     pub permissions: Permissions,
     #[serde(default)]
@@ -55,23 +55,58 @@ pub struct ExtensionManifest {
     pub settings_schema: Vec<SettingSpec>,
 }
 
-/// `[trigger]` - gates when the extension's `search` runs.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct TriggerConfig {
-    /// Prefix keywords; the extension runs when the query's first token
-    /// case-insensitively equals one. The prefix is stripped before the query
-    /// reaches the extension.
-    pub prefixes: Vec<String>,
+/// One `[[commands]]` entry - a searchable launcher command owned by this
+/// extension. `search`/`query`/`activate`/`preview` all receive the command
+/// name on the wire so one wasm module serves every command.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommandSpec {
+    /// Identifier on the wire and in `ext:<ext>:cmd:<name>` ids; `[a-z0-9_-]+`,
+    /// unique within the extension.
+    pub name: String,
+    /// Root-search entry title ("Search Repositories").
+    pub title: String,
+    /// Optional context line shown on the entry row.
+    #[serde(default)]
+    pub description: String,
+    /// "scope" (enter-able mode with a chip) or "action" (one-shot Enter).
+    /// "inline" is accepted as a legacy alias for "scope".
+    #[serde(default = "default_command_mode")]
+    pub mode: String,
+    /// Search synonyms folded into the command's fuzzy match alongside its
+    /// title, so `keywords = ["emoji", "smiley"]` makes the entry findable by
+    /// either. Free-text terms - they never gate or trigger execution.
+    #[serde(default)]
+    pub keywords: Vec<String>,
     /// Minimum (post-strip) query length before `search` is called.
+    #[serde(default)]
     pub min_query_len: usize,
-    /// Run on every keystroke like a built-in provider (discouraged).
+    /// Inline only: run on every keystroke like a built-in provider
+    /// (discouraged; costs a wasm call per keystroke).
+    #[serde(default)]
     pub always: bool,
+    /// Short label for the active-mode chip; defaults to the title.
+    #[serde(default)]
+    pub chip: String,
+    /// Input placeholder while the command's mode is active.
+    #[serde(default)]
+    pub placeholder: String,
+    /// `SearchResult.kind` override for this command's results; defaults to
+    /// the extension's default kind. Must be listed in `kinds`.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
-impl TriggerConfig {
+fn default_command_mode() -> String {
+    "scope".to_string()
+}
+
+impl CommandSpec {
     pub fn min_len(&self) -> usize {
         self.min_query_len.min(MAX_MIN_QUERY_LEN)
+    }
+
+    pub fn chip_label(&self) -> String {
+        if self.chip.is_empty() { self.title.clone() } else { self.chip.clone() }
     }
 }
 
@@ -125,10 +160,7 @@ fn default_entry() -> String {
     "extension.wasm".to_string()
 }
 
-/// Query keywords owned by built-in providers - extensions may not claim them
-/// as trigger prefixes. Kept in one place so new built-in keywords get added
-/// here (dict's live in `providers/dict.rs::is_explicit_dict_query`).
-pub const RESERVED_PREFIXES: [&str; 2] = ["define", "dict"];
+const VALID_COMMAND_MODES: [&str; 3] = ["inline", "scope", "action"];
 
 const VALID_SETTING_TYPES: [&str; 5] = ["string", "bool", "number", "select", "secret"];
 
@@ -215,8 +247,13 @@ fn load_impl(dir: &Path, check_dir_name: bool) -> Result<(ExtensionManifest, Pat
 
     if manifest.api != SUPPORTED_API {
         return Err(format!(
-            "requires API v{}, this Portunus supports v{SUPPORTED_API}",
-            manifest.api
+            "requires API v{}, this Portunus supports v{SUPPORTED_API}{}",
+            manifest.api,
+            if manifest.api == 3 {
+                " - migrate the [trigger] section to one or more [[commands]] entries"
+            } else {
+                ""
+            }
         ));
     }
     if check_dir_name && manifest.name != dir_name {
@@ -253,36 +290,7 @@ fn load_impl(dir: &Path, check_dir_name: bool) -> Result<(ExtensionManifest, Pat
             return Err(format!("kind \"{kind}\" must start with \"ext-\""));
         }
     }
-    if let Some(trigger) = &manifest.trigger {
-        if trigger.prefixes.is_empty() && !trigger.always {
-            return Err(
-                "[trigger] must declare prefixes (or set always = true)".to_string(),
-            );
-        }
-        if trigger.min_query_len > MAX_MIN_QUERY_LEN {
-            return Err(format!(
-                "[trigger] min_query_len = {} exceeds the max of {MAX_MIN_QUERY_LEN}",
-                trigger.min_query_len
-            ));
-        }
-        for p in &trigger.prefixes {
-            if p.is_empty()
-                || p.len() > 32
-                || !p.chars().all(|c| {
-                    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
-                })
-            {
-                return Err(format!(
-                    "trigger prefix \"{p}\": lowercase ASCII letters, digits, '-', '_' only (max 32 chars)"
-                ));
-            }
-            if RESERVED_PREFIXES.contains(&p.as_str()) {
-                return Err(format!(
-                    "trigger prefix \"{p}\" is reserved by a built-in provider"
-                ));
-            }
-        }
-    }
+    validate_commands(&manifest)?;
     validate_settings_schema(&manifest.settings_schema)?;
 
     let wasm_path = dir.join(&manifest.entry);
@@ -306,6 +314,71 @@ fn load_impl(dir: &Path, check_dir_name: bool) -> Result<(ExtensionManifest, Pat
     }
 
     Ok((manifest, canon_wasm))
+}
+
+fn validate_commands(manifest: &ExtensionManifest) -> Result<(), String> {
+    if manifest.commands.is_empty() {
+        return Err(
+            "at least one [[commands]] entry is required (api 3 manifests: migrate [trigger] to [[commands]])"
+                .to_string(),
+        );
+    }
+    let mut names = std::collections::HashSet::new();
+    for cmd in &manifest.commands {
+        if cmd.name.is_empty()
+            || cmd.name.len() > 64
+            || !cmd
+                .name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        {
+            return Err(format!(
+                "command name \"{}\": lowercase ASCII letters, digits, '-', '_' only (max 64 chars)",
+                cmd.name
+            ));
+        }
+        if !names.insert(cmd.name.as_str()) {
+            return Err(format!("duplicate command name \"{}\"", cmd.name));
+        }
+        if cmd.title.trim().is_empty() {
+            return Err(format!("command \"{}\": title is required", cmd.name));
+        }
+        if !VALID_COMMAND_MODES.contains(&cmd.mode.as_str()) {
+            return Err(format!(
+                "command \"{}\": mode \"{}\" is not one of inline/scope/action",
+                cmd.name, cmd.mode
+            ));
+        }
+        if cmd.min_query_len > MAX_MIN_QUERY_LEN {
+            return Err(format!(
+                "command \"{}\": min_query_len = {} exceeds the max of {MAX_MIN_QUERY_LEN}",
+                cmd.name, cmd.min_query_len
+            ));
+        }
+        if cmd.always && cmd.mode == "action" {
+            return Err(format!(
+                "command \"{}\": always = true does not apply to action commands",
+                cmd.name
+            ));
+        }
+        if let Some(kind) = &cmd.kind {
+            if !manifest.kinds.contains(kind) && *kind != format!("ext-{}", manifest.name) {
+                return Err(format!(
+                    "command \"{}\": kind \"{kind}\" is not listed in kinds",
+                    cmd.name
+                ));
+            }
+        }
+        for k in &cmd.keywords {
+            if k.trim().is_empty() || k.len() > 64 {
+                return Err(format!(
+                    "command \"{}\": keyword \"{k}\" must be non-empty and at most 64 chars",
+                    cmd.name
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_settings_schema(schema: &[SettingSpec]) -> Result<(), String> {

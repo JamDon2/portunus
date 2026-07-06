@@ -180,9 +180,9 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
             {phase.preview.author && <span className="settings-ext-consent-author">by {phase.preview.author}</span>}
           </div>
           {phase.preview.description && <div className="settings-field-desc">{phase.preview.description}</div>}
-          {phase.preview.triggers.length > 0 && (
+          {phase.preview.keywords.length > 0 && (
             <div className="settings-field-desc">
-              Trigger: {phase.preview.triggers.map(t => <code key={t}>{t}&nbsp;</code>)}
+              Keywords: {phase.preview.keywords.map(k => <code key={k}>{k}&nbsp;</code>)}
             </div>
           )}
           <PermissionChips permissions={phase.preview.permissions} />

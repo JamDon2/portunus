@@ -327,6 +327,16 @@ pub struct PermissionsInfo {
     has_secrets: bool,
 }
 
+/// One command an extension declares, as shown in Settings/launcher meta.
+#[derive(serde::Serialize)]
+pub struct CommandInfo {
+    name: String,
+    title: String,
+    mode: String,
+    keywords: Vec<String>,
+    always: bool,
+}
+
 #[derive(serde::Serialize)]
 pub struct ExtensionInfo {
     name: String,
@@ -344,8 +354,9 @@ pub struct ExtensionInfo {
     benched: bool,
     /// Set when the manifest declares `[background]` - shown as a chip.
     background_interval_secs: Option<u64>,
-    /// Trigger prefixes from `[trigger]`; empty = always-mode.
-    triggers: Vec<String>,
+    /// The extension's `[[commands]]`, for the Settings command list and the
+    /// launcher's passive prefix chip.
+    commands: Vec<CommandInfo>,
     /// The result kind this extension emits (drives launcher group labels).
     kind: Option<String>,
     /// Declared `[[settings]]` schema, rendered by the Settings UI.
@@ -417,9 +428,19 @@ pub fn list_extensions(
                 benched: provider.as_ref().is_some_and(|p| p.is_benched()),
                 background_interval_secs: m
                     .and_then(|m| m.background.as_ref().map(|b| b.interval_secs())),
-                triggers: m
-                    .and_then(|m| m.trigger.as_ref())
-                    .map(|t| t.prefixes.clone())
+                commands: m
+                    .map(|m| {
+                        m.commands
+                            .iter()
+                            .map(|c| CommandInfo {
+                                name: c.name.clone(),
+                                title: c.title.clone(),
+                                mode: c.mode.clone(),
+                                keywords: c.keywords.clone(),
+                                always: c.always,
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 kind: m.map(|m| m.default_kind()),
                 settings_schema: m.map(|m| m.settings_schema.clone()).unwrap_or_default(),
@@ -613,6 +634,7 @@ pub fn extension_activate(
     id: String,
     ext: ExtensionResult,
     action: Option<String>,
+    command: Option<String>,
 ) -> Result<(), String> {
     // Hide first: activation may block for seconds (network I/O inside the
     // extension) - the launcher must dismiss instantly on Enter, like
@@ -622,7 +644,7 @@ pub fn extension_activate(
         let _ = window.hide();
     }
     let provider = provider_for_id(&crate::util::read(&registry), &id)?;
-    let effects = provider.activate(ext, action)?;
+    let effects = provider.activate(command.unwrap_or_default(), ext, action)?;
     run_activate_effects(&app, &id, effects);
     if let Some(store) = frecency.as_ref() {
         store.record_launch(&id, "extension");
@@ -681,6 +703,7 @@ pub async fn extension_preview(
     id: String,
     ext: ExtensionResult,
     request_id: u64,
+    command: Option<String>,
 ) -> Result<Option<PreviewContent>, String> {
     // Resolve the provider synchronously (fast read-lock), then run the wasm
     // call on the blocking thread pool so rapid navigation never stalls the
@@ -690,7 +713,7 @@ pub async fn extension_preview(
     // call must not delay this one behind the preview-instance mutex.
     provider.cancel_preview();
     tauri::async_runtime::spawn_blocking(move || {
-        provider.preview(ext, move |content| {
+        provider.preview(command.unwrap_or_default(), ext, move |content| {
             use tauri::Emitter;
             let _ = app.emit("extension-preview-chunk", PreviewChunk { request_id, content });
         })

@@ -1,11 +1,14 @@
-//! Example Portunus extension: live GitHub search. The v3 breadth showcase:
-//! a secret `token` setting (stored in the system keyring), an async `query`
-//! export that hits /search/repositories and /search/issues and streams each
-//! endpoint's batch as it returns, a kv repo cache that `search` serves
-//! instantly (same ids, so live rows swap cached rows in place), streaming
-//! Metadata -> Markdown previews via `emit_preview_update`, declarative
-//! open/copy activate effects, and a daily `[background]` refresh that warms
-//! the "my repos" cache.
+//! Example Portunus extension: live GitHub search. The v4 multi-command
+//! showcase: two `scope` commands (`repos` -> /search/repositories, `issues`
+//! -> /search/issues) that each own a launcher chip, plus an `action` command
+//! (`notifications`) that opens github.com/notifications on activate. Each
+//! export dispatches on the wire `command` field. Also: a secret `token`
+//! setting (stored in the system keyring), an async `query` export that
+//! streams each endpoint's batch as it returns, a kv repo cache that `search`
+//! serves instantly (same ids, so live rows swap cached rows in place),
+//! streaming Metadata -> Markdown previews via `emit_preview_update`,
+//! declarative open/copy activate effects, and a daily `[background]` refresh
+//! that warms the "my repos" cache.
 
 use portunus_ext_sdk::guest::extism_pdk::{self, http, HttpRequest};
 use portunus_ext_sdk::guest::{self, kv_read, kv_write, plugin_fn, FnResult, Json};
@@ -366,19 +369,30 @@ fn rate_limit_result() -> ExtensionResult {
 }
 
 // ---------------------------------------------------------------------------
-// search: instant tier. kv cache only - never touches the network.
+// search: instant tier. kv cache only - never touches the network. Dispatches
+// on the wire `command`: `repos` serves the warm repo cache, `issues` has no
+// offline cache so it hands straight over to the streaming `query` tier.
 // ---------------------------------------------------------------------------
 
 #[plugin_fn]
 pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
-    // The host strips the trigger ("gh tokio" -> "tokio") before we see it.
-    let term = input.0.query.trim().to_lowercase();
+    // `query` is the whole term typed in the scope (e.g. "tokio").
+    let term = input.0.query.trim().to_string();
     if term.is_empty() {
         return Ok(Json(SearchOutput::default()));
     }
-    // Qualifier-only queries ("language:rust") still stream via `query`;
-    // match the cache on the free-text part.
+    match input.0.command.as_str() {
+        "issues" => Ok(Json(search_issues(&term))),
+        // Default to the repo cache path ("repos", or an unknown command).
+        _ => Ok(Json(search_repos(&term))),
+    }
+}
+
+/// Instant repo results from the kv cache, matched on the free-text part of
+/// the query (qualifiers like `language:rust` are left for the `query` tier).
+fn search_repos(term: &str) -> SearchOutput {
     let needle = term
+        .to_lowercase()
         .split_whitespace()
         .filter(|w| !w.contains(':'))
         .collect::<Vec<_>>()
@@ -386,16 +400,9 @@ pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
 
     let cache = read_cache();
     if cache.is_empty() {
-        return Ok(Json(SearchOutput {
-            results: vec![ExtensionResult {
-                id: format!("gh:searching:{term}"),
-                title: format!("Search GitHub for \u{201c}{}\u{201d}", input.0.query.trim()),
-                subtitle: Some("cache warming - live results stream in".into()),
-                relevance: 10.0,
-                badge: Some("live".into()),
-                ..Default::default()
-            }],
-        }));
+        return SearchOutput {
+            results: vec![searching_row(term, "repo")],
+        };
     }
 
     let mut results: Vec<ExtensionResult> = cache
@@ -427,12 +434,34 @@ pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
 
     results.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
     results.truncate(20);
-    Ok(Json(SearchOutput { results }))
+    SearchOutput { results }
+}
+
+/// Issues have no offline cache - show a "searching" placeholder that the
+/// streaming `query` tier replaces once the /search/issues call returns.
+fn search_issues(term: &str) -> SearchOutput {
+    SearchOutput {
+        results: vec![searching_row(term, "issue")],
+    }
+}
+
+/// The placeholder row shown while the live `query` tier is still fetching.
+/// `mode` picks the id namespace so `activate` opens the right web search.
+fn searching_row(term: &str, mode: &str) -> ExtensionResult {
+    ExtensionResult {
+        id: format!("gh:searching:{mode}:{term}"),
+        title: format!("Search GitHub for \u{201c}{term}\u{201d}"),
+        subtitle: Some("live results stream in".into()),
+        relevance: 10.0,
+        badge: Some("live".into()),
+        ..Default::default()
+    }
 }
 
 // ---------------------------------------------------------------------------
-// query: async streaming tier. Each endpoint's batch is emitted as soon as it
-// returns; repo rows reuse the cached ids so they swap in place.
+// query: async streaming tier. Dispatches on the wire `command` so each
+// launcher command hits exactly one endpoint. Batches are emitted as soon as
+// they return; repo rows reuse the cached ids so they swap in place.
 // ---------------------------------------------------------------------------
 
 #[plugin_fn]
@@ -447,10 +476,19 @@ pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
         .map(|n| n as u32)
         .unwrap_or(6)
         .clamp(1, 15);
-    let q = urlencode(&term);
 
-    // Endpoint 1: repositories. GitHub qualifiers pass through verbatim
-    // ("tokio language:rust" works).
+    match input.0.command.as_str() {
+        "issues" => query_issues(&term, max),
+        _ => query_repos(&term, max),
+    }
+    Ok(Json(QueryOutput::default()))
+}
+
+/// The `repos` command: /search/repositories only. GitHub qualifiers pass
+/// through verbatim ("tokio language:rust" works). Feeds the kv cache so the
+/// next keystroke serves these instantly.
+fn query_repos(term: &str, max: u32) {
+    let q = urlencode(term);
     match api_get(&format!("/search/repositories?q={q}&per_page={max}"), "application/vnd.github+json") {
         Ok((200, body)) => {
             if let Ok(resp) = serde_json::from_str::<SearchResp<RepoItem>>(&body) {
@@ -465,7 +503,7 @@ pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
                 // Stream the batch; Ok(false) = user typed a new query, stop.
                 // A host Err also stops - no point trapping over a lost batch.
                 if !guest::emit(results).unwrap_or(false) {
-                    return Ok(Json(QueryOutput::default()));
+                    return;
                 }
                 merge_cache(&cached);
             }
@@ -473,7 +511,6 @@ pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
         Ok((status, _)) if is_rate_limited(status) => {
             let _ = guest::debug(&format!("repo search rate limited ({status})"));
             let _ = guest::emit(vec![rate_limit_result()]);
-            return Ok(Json(QueryOutput::default()));
         }
         Ok((status, _)) => {
             let _ = guest::debug(&format!("repo search failed ({status})"));
@@ -482,37 +519,32 @@ pub fn query(input: Json<QueryInput>) -> FnResult<Json<QueryOutput>> {
             let _ = guest::debug(&format!("repo search error: {e}"));
         }
     }
+}
 
-    // Endpoint 2: issues & PRs. Independent of endpoint 1's outcome.
-    // GitHub's advanced issue search (now the default for authenticated
-    // requests) rejects a query unless it names a type, so issues and PRs are
-    // fetched as two separate `is:` searches and merged.
-    let issues_on = guest::setting_bool("search_issues").ok().flatten().unwrap_or(true);
-    if issues_on {
-        let mut items: Vec<IssueItem> = Vec::new();
-        let mut rate_limited = false;
-        for kind in ["is:issue", "is:pull-request"] {
-            let (mut batch, limited) = fetch_issues(&term, kind, max);
-            items.append(&mut batch);
-            rate_limited |= limited;
-        }
-        if items.is_empty() && rate_limited {
-            let _ = guest::emit(vec![rate_limit_result()]);
-        } else {
-            items.truncate(max as usize);
-            let n = items.len();
-            let results: Vec<ExtensionResult> = items
-                .iter()
-                .enumerate()
-                .filter_map(|(i, item)| {
-                    issue_result(item, 60.0 - (i as f32 / n.max(1) as f32) * 30.0)
-                })
-                .collect();
-            let _ = guest::emit(results);
-        }
+/// The `issues` command: /search/issues only. GitHub's advanced issue search
+/// (now the default for authenticated requests) rejects a query unless it names
+/// a type, so issues and PRs are fetched as two separate `is:` searches and
+/// merged.
+fn query_issues(term: &str, max: u32) {
+    let mut items: Vec<IssueItem> = Vec::new();
+    let mut rate_limited = false;
+    for kind in ["is:issue", "is:pull-request"] {
+        let (mut batch, limited) = fetch_issues(term, kind, max);
+        items.append(&mut batch);
+        rate_limited |= limited;
     }
-
-    Ok(Json(QueryOutput::default()))
+    if items.is_empty() && rate_limited {
+        let _ = guest::emit(vec![rate_limit_result()]);
+    } else {
+        items.truncate(max as usize);
+        let n = items.len();
+        let results: Vec<ExtensionResult> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| issue_result(item, 60.0 - (i as f32 / n.max(1) as f32) * 30.0))
+            .collect();
+        let _ = guest::emit(results);
+    }
 }
 
 /// Fetch one title-scoped issue-or-PR batch. `kind` is the required advanced-
@@ -544,11 +576,22 @@ fn fetch_issues(term: &str, kind: &str, max: u32) -> (Vec<IssueItem>, bool) {
 
 // ---------------------------------------------------------------------------
 // activate: declarative effects only - urls derive from the result id, so no
-// state needs stashing and no clipboard/open_url permissions are needed.
+// state needs stashing and no clipboard/open_url permissions are needed. The
+// `notifications` action command has no result to open, so it dispatches on
+// the wire `command` before touching the id.
 // ---------------------------------------------------------------------------
 
 #[plugin_fn]
 pub fn activate(input: Json<ActivateInput>) -> FnResult<Json<ActivateOutput>> {
+    // Action command: invoked directly with a synthetic default result.
+    if input.0.command == "notifications" {
+        return Ok(Json(ActivateOutput {
+            effects: vec![ActivateEffect::OpenUrl {
+                url: "https://github.com/notifications".into(),
+            }],
+        }));
+    }
+
     let id = input.0.result.id;
     let action = input.0.action.as_deref().unwrap_or("open");
 
@@ -577,10 +620,14 @@ pub fn activate(input: Json<ActivateInput>) -> FnResult<Json<ActivateOutput>> {
     } else if id == "gh:ratelimit" {
         vec![ActivateEffect::OpenUrl { url: "https://github.com/settings/tokens".into() }]
     } else {
-        // "gh:searching:<term>" hint row -> open the web search.
-        let term = id.strip_prefix("gh:searching:").unwrap_or("");
+        // "gh:searching:<mode>:<term>" hint row -> open the matching web search
+        // (repos vs. issues) so Enter on the placeholder still does the right
+        // thing before live results arrive.
+        let rest = id.strip_prefix("gh:searching:").unwrap_or("");
+        let (mode, term) = rest.split_once(':').unwrap_or(("repo", rest));
+        let scope = if mode == "issue" { "&type=issues" } else { "" };
         vec![ActivateEffect::OpenUrl {
-            url: format!("https://github.com/search?q={}", urlencode(term)),
+            url: format!("https://github.com/search?q={}{scope}", urlencode(term)),
         }]
     };
 

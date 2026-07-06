@@ -1,12 +1,12 @@
 import type { ComponentType } from 'react';
-import type { Config, SearchResult } from '../types';
+import type { CommandDescriptor, Config, SearchResult } from '../types';
 
 export interface LaunchContext {
   setQuery: (q: string) => void;
   setResults: (r: SearchResult[]) => void;
   requery: () => void;
-  /** Open the dedicated clipboard-history browser (clipboard-mode result). */
-  enterClipboardMode: () => void;
+  /** Invoke a command (enter its scope, seed its alias, or run its action). */
+  runCommand: (command: CommandDescriptor) => void;
   config: Config | null;
 }
 

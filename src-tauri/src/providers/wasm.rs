@@ -23,8 +23,8 @@ use super::breaker::FailureBreaker;
 use super::{SearchResult, EXTENSION_BAND, SCORE_EXTENSION, SCORE_EXTENSION_TRIGGERED};
 use crate::extensions::hostfns::{self, ExtensionCtx, PreviewEmitSlot, QueryEmitSlot};
 use crate::extensions::kv::ExtensionKv;
-use crate::extensions::manifest::{ExtensionManifest, Limits};
-use crate::extensions::trigger::{self, GatedQuery};
+use crate::extensions::manifest::{CommandSpec, ExtensionManifest, Limits};
+use crate::extensions::trigger::{self, GatedCommand};
 use crate::util;
 
 /// 64 MB linear-memory cap, in 64 KiB wasm pages.
@@ -410,25 +410,43 @@ impl WasmProvider {
     }
 
     /// Maps one extension DTO into an internal result: namespaced id, fixed
-    /// kind, host-private score band, clamped fields, no exec. A triggered
-    /// query (user typed the extension's prefix) lands in the intent band
-    /// above calc/dict; always-mode results compete just above apps.
-    fn to_search_result(&self, mut dto: ExtensionResult, triggered: bool) -> SearchResult {
+    /// kind, host-private score band, clamped fields, no exec. A scoped
+    /// (explicitly entered) command lands in the band above calc/dict;
+    /// always-mode root results compete just above apps.
+    fn to_search_result(
+        &self,
+        mut dto: ExtensionResult,
+        command: &str,
+        intent: bool,
+    ) -> SearchResult {
         let relevance = if dto.relevance.is_finite() { dto.relevance } else { 0.0 };
         let icon_data_uri = dto.icon.as_ref().and_then(|i| self.icon_data_uri(i));
-        let base = if triggered { SCORE_EXTENSION_TRIGGERED } else { SCORE_EXTENSION };
+        let base = if intent { SCORE_EXTENSION_TRIGGERED } else { SCORE_EXTENSION };
         dto.badge = dto.badge.take().map(clamp_field);
         SearchResult {
             id: format!("ext:{}:{}", self.name, dto.id),
             title: clamp_field(dto.title.clone()),
             subtitle: dto.subtitle.clone().map(clamp_field),
-            kind: self.kind.clone(),
+            kind: self.command_kind(command),
             score: base + relevance.clamp(0.0, 100.0) / 100.0 * EXTENSION_BAND,
             icon_data_uri,
             // Round-tripped back to the extension on activate/preview.
             ext: Some(dto),
+            ext_command: Some(command.to_string()),
             ..Default::default()
         }
+    }
+
+    /// The result kind for one of this extension's commands (per-command
+    /// override or the extension default).
+    fn command_kind(&self, command: &str) -> String {
+        self.command_spec(command)
+            .and_then(|c| c.kind.clone())
+            .unwrap_or_else(|| self.kind.clone())
+    }
+
+    fn command_spec(&self, command: &str) -> Option<&CommandSpec> {
+        self.manifest.commands.iter().find(|c| c.name == command)
     }
 
     /// Validates a result icon and builds its `data:` URI, or returns None
@@ -454,10 +472,11 @@ impl WasmProvider {
     /// layer) executes them - this type stays Tauri-free.
     pub fn activate(
         &self,
+        command: String,
         result: ExtensionResult,
         action: Option<String>,
     ) -> Result<Vec<ActivateEffect>, String> {
-        let input = ActivateInput { result, action };
+        let input = ActivateInput { command, result, action };
         let json = serde_json::to_string(&input).map_err(|e| e.to_string())?;
         match self.call_with_budget(
             &self.instance,
@@ -508,11 +527,12 @@ impl WasmProvider {
     /// content. A concurrent [`Self::cancel_preview`] aborts the call.
     pub fn preview(
         &self,
+        command: String,
         result: ExtensionResult,
         sink: impl FnMut(PreviewContent) + Send + 'static,
     ) -> Result<Option<PreviewContent>, String> {
         let Some(preview_slot) = &self.preview_instance else { return Ok(None) };
-        let input = PreviewInput { result };
+        let input = PreviewInput { command, result };
         let json = serde_json::to_string(&input).map_err(|e| e.to_string())?;
 
         // Cooperative cancel flag: registered before the call so a
@@ -614,7 +634,8 @@ impl WasmProvider {
     /// disable streak - never the interactive bench.
     pub fn run_query(
         self: &Arc<Self>,
-        gated: GatedQuery,
+        gc: GatedCommand,
+        intent: bool,
         generation: u64,
         current: Arc<AtomicU64>,
         mut sink: impl FnMut(Vec<SearchResult>) + Send + 'static,
@@ -623,24 +644,25 @@ impl WasmProvider {
             return Ok(Vec::new());
         }
         let Some(query_slot) = &self.query_instance else { return Ok(Vec::new()) };
-        let triggered = gated.trigger.is_some();
+        let command = gc.command;
         let input = serde_json::to_string(&QueryInput {
-            query: gated.query,
-            raw_query: gated.raw_query,
-            trigger: gated.trigger,
+            command: command.clone(),
+            query: gc.gated.query,
+            raw_query: gc.gated.raw_query,
         })
         .map_err(|e| e.to_string())?;
 
         // The emit slot maps DTOs host-side before they reach the manager, so
         // streamed results pass the exact same clamps/validation as sync ones.
         let mapper = self.clone();
+        let map_command = command.clone();
         let slot = QueryEmitSlot {
             generation,
             current: current.clone(),
             sink: Box::new(move |dtos: Vec<ExtensionResult>| {
                 let mapped = dtos
                     .into_iter()
-                    .map(|dto| mapper.to_search_result(dto, triggered))
+                    .map(|dto| mapper.to_search_result(dto, &map_command, intent))
                     .collect();
                 sink(mapped);
             }),
@@ -666,7 +688,7 @@ impl WasmProvider {
                     .results
                     .into_iter()
                     .take(MAX_RESULTS)
-                    .map(|dto| self.to_search_result(dto, triggered))
+                    .map(|dto| self.to_search_result(dto, &command, intent))
                     .collect())
             }
             Ok(None) => Ok(Vec::new()),
@@ -726,20 +748,63 @@ impl WasmProvider {
         &self.reg_id
     }
 
-    /// Applies this extension's `[trigger]` config to a raw launcher query.
-    /// None = don't run (the registry spawns no thread). Pure and cheap - it
-    /// runs for every loaded extension on every keystroke.
-    pub fn gate(&self, raw_query: &str) -> Option<GatedQuery> {
-        trigger::gate(self.manifest.trigger.as_ref(), raw_query)
+    /// The command descriptors this extension contributes to the catalog -
+    /// one per `[[commands]]` manifest entry.
+    pub fn commands(&self) -> Vec<crate::providers::CommandDescriptor> {
+        use crate::providers::command::{CommandDescriptor, CommandRoute, CommandSource, ModeKind};
+        self.manifest
+            .commands
+            .iter()
+            .map(|c| CommandDescriptor {
+                id: format!("ext:{}:cmd:{}", self.name, c.name),
+                title: c.title.clone(),
+                chip: c.chip_label(),
+                subtitle: Some(if c.description.is_empty() {
+                    self.name.clone()
+                } else {
+                    c.description.clone()
+                }),
+                source: CommandSource::Extension { name: self.name.clone() },
+                mode_kind: match c.mode.as_str() {
+                    "action" => ModeKind::Action,
+                    // "inline" (legacy) and "scope" both open an enterable scope.
+                    _ => ModeKind::Scope,
+                },
+                keywords: c.keywords.clone(),
+                placeholder: (!c.placeholder.is_empty()).then(|| c.placeholder.clone()),
+                min_query_len: c.min_len(),
+                result_kind: c.kind.clone().unwrap_or_else(|| self.kind.clone()),
+                icon_data_uri: None,
+                route: CommandRoute::Extension {
+                    name: self.name.clone(),
+                    command: c.name.clone(),
+                },
+            })
+            .collect()
     }
 
-    /// Runs the extension's `search` export for a gated query.
-    pub fn search_gated(&self, gated: GatedQuery) -> Vec<SearchResult> {
-        let triggered = gated.trigger.is_some();
+    /// Resolves which command (if any) a root-search keystroke invokes.
+    /// None = don't run (the registry spawns no thread). Pure and cheap - it
+    /// runs for every loaded extension on every keystroke.
+    pub fn gate(&self, raw_query: &str) -> Option<GatedCommand> {
+        trigger::gate(&self.manifest.commands, raw_query)
+    }
+
+    /// Gate for an entered command mode: the whole query is the command's
+    /// input, min_query_len applies, empty = browse state.
+    pub fn gate_scoped(&self, command: &str, query: &str) -> Option<GatedCommand> {
+        trigger::gate_scoped(self.command_spec(command)?, query)
+    }
+
+    /// Runs the extension's `search` export for a gated command. `intent` is
+    /// true when the user explicitly invoked the command (typed prefix or an
+    /// entered mode) - always-mode invocations band lower.
+    pub fn search_gated(&self, gc: GatedCommand, intent: bool) -> Vec<SearchResult> {
+        let command = gc.command;
         let input = match serde_json::to_string(&SearchInput {
-            query: gated.query,
-            raw_query: gated.raw_query,
-            trigger: gated.trigger,
+            command: command.clone(),
+            query: gc.gated.query,
+            raw_query: gc.gated.raw_query,
         }) {
             Ok(j) => j,
             Err(_) => return Vec::new(),
@@ -769,7 +834,7 @@ impl WasmProvider {
             .results
             .into_iter()
             .take(MAX_RESULTS)
-            .map(|dto| self.to_search_result(dto, triggered))
+            .map(|dto| self.to_search_result(dto, &command, intent))
             .collect()
     }
 }

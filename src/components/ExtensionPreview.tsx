@@ -116,7 +116,7 @@ export default function ExtensionPreview({ result }: PreviewProps) {
     let stale = false;
     const requestId = ++previewRequestCounter;
     requestIdRef.current = requestId;
-    invoke<PreviewContent | null>("extension_preview", { id: result.id, ext: result.ext, requestId })
+    invoke<PreviewContent | null>("extension_preview", { id: result.id, ext: result.ext, requestId, command: result.ext_command ?? null })
       .then(c => {
         if (cache.size >= CACHE_MAX) cache.clear();
         cache.set(result.id, c);

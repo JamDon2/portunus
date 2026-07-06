@@ -112,10 +112,16 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
       {expanded && (
         <div className="settings-ext-card-body">
           <div className="settings-ext-meta">
-            {info.triggers.length > 0 && (
-              <div className="settings-ext-triggers">
-                {info.triggers.map(t => <code key={t}>{t}</code>)}
-                <span className="settings-ext-triggers-hint">type to search</span>
+            {info.commands.length > 0 && (
+              <div className="settings-ext-commands">
+                {info.commands.map(c => (
+                  <div className="settings-ext-triggers" key={c.name}>
+                    <span className="settings-ext-command-title">{c.title}</span>
+                    <Badge>{c.mode}</Badge>
+                    {c.keywords.map(k => <code key={k}>{k}</code>)}
+                    {c.always && <span className="settings-ext-triggers-hint">every keystroke</span>}
+                  </div>
+                ))}
               </div>
             )}
             <PermissionChips permissions={info.permissions} backgroundIntervalSecs={info.background_interval_secs} />

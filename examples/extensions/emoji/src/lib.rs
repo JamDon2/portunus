@@ -1,8 +1,8 @@
 //! Example Portunus extension: search emoji by name, copy on Enter.
 //!
-//! Demonstrates the v2 API: trigger prefixes (see manifest.toml), structured
-//! actions, declarative activate effects (no clipboard permission needed),
-//! user settings, and a browse state for the bare prefix.
+//! Demonstrates a scope command (found by title + keywords, see manifest.toml),
+//! structured actions, declarative activate effects (no clipboard permission
+//! needed), user settings, and a browse state for the empty query.
 //!
 //! Build:  cargo build --release --target wasm32-unknown-unknown
 //! Install: copy target/.../emoji.wasm to
@@ -73,10 +73,10 @@ fn to_result(emoji: &str, name: &str, keywords: &str, relevance: f32) -> Extensi
 
 #[plugin_fn]
 pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
-    // The host has already stripped the trigger prefix ("emoji smi" → "smi").
+    // `query` is the whole term typed in the scope (e.g. "smi").
     let query = input.0.query.trim().to_lowercase();
 
-    // Bare prefix = browse state: show the whole set, dataset order.
+    // Empty query = browse state: show the whole set, dataset order.
     if query.is_empty() {
         let results = EMOJI
             .iter()
@@ -105,7 +105,7 @@ pub fn search(input: Json<SearchInput>) -> FnResult<Json<SearchOutput>> {
 
 #[plugin_fn]
 pub fn activate(input: Json<ActivateInput>) -> FnResult<Json<ActivateOutput>> {
-    let ActivateInput { result, action } = input.0;
+    let ActivateInput { result, action, .. } = input.0;
     let effects = match action.as_deref() {
         Some("copy-name") => vec![
             ActivateEffect::CopyText { text: format!(":{}:", result.id.replace(' ', "_")) },
