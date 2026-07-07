@@ -5,15 +5,15 @@ export function shortenPath(path: string): string {
 }
 
 export function groupLabel(kind: string): string | null {
-  if (kind === "calc") return "CALCULATOR";
-  if (kind === "dict" || kind === "dict-hint") return "DICTIONARY";
-  if (kind === "app") return "APPS";
-  if (kind === "file" || kind === "folder") return "FILES";
-  if (kind === "command") return "COMMANDS";
+  if (kind === "calc") return "Calculator";
+  if (kind === "dict" || kind === "dict-hint") return "Dictionary";
+  if (kind === "app") return "Apps";
+  if (kind === "file" || kind === "folder") return "Files";
+  if (kind === "command") return "Commands";
   if (kind.startsWith("ext-")) {
     // Per-extension label from the meta store; generic until the first
     // list_extensions fetch lands (App re-renders on results anyway).
-    return extensionByKind(kind)?.name.toUpperCase() ?? "EXTENSIONS";
+    return extensionByKind(kind)?.name ?? "Extensions";
   }
   return null;
 }

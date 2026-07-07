@@ -127,7 +127,7 @@ function ContentDirCard({
         onRemove={onRemove}
       />
       <div className="settings-dir-card-exts">
-        <span className="settings-dir-card-exts-label">Override extensions:</span>
+        <span className="settings-dir-card-exts-label">File types</span>
         <ExtensionEditor
           extensions={dir.extensions ?? []}
           onChange={exts => onChange({ extensions: exts.length > 0 ? exts : null })}

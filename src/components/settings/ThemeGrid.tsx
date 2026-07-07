@@ -62,12 +62,12 @@ const STYLES = `
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .theme-card {
   position: relative;
-  padding: 13px 14px 12px;
+  padding: 14px 15px 13px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--kbd-bg);
@@ -88,10 +88,10 @@ const STYLES = `
 }
 
 .theme-card-label {
-  font-size: 11px;
+  font-size: var(--fs-desc, 12px);
   font-weight: 600;
   color: var(--fg);
-  margin-bottom: 8px;
+  margin-bottom: 9px;
   letter-spacing: -0.01em;
   line-height: 1;
 }
@@ -103,8 +103,8 @@ const STYLES = `
 }
 
 .theme-swatch {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   flex-shrink: 0;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);

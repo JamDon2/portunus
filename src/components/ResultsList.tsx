@@ -163,7 +163,7 @@ export default function ResultsList({ results, selectedIndex, active, searching,
                 <div className="result-title">{result.title}</div>
                 {result.subtitle && <div className="result-subtitle">{shortenPath(result.subtitle)}</div>}
               </div>
-              <div className="result-meta">
+              <div className={`result-meta${result.ext?.badge ? " has-badge" : ""}`}>
                 {result.ext?.badge
                   ? <span className="result-badge">{result.ext.badge}</span>
                   : result.kind === "file" && result.file_size != null

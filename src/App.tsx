@@ -2,7 +2,6 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperti
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { getVersion } from "@tauri-apps/api/app";
 import { Config, SearchResult, SearchResponse, StreamPayload, ClipboardCapabilities, ExtAction, CommandDescriptor, ActivateResponse, ExtensionResult, FormDto, ToastLevel } from "./types";
 import { commandById } from "./commands/store";
 import ClipboardMode from "./components/clipboard/ClipboardMode";
@@ -102,7 +101,6 @@ export default function App() {
   // Matched-term highlighting in the PDF preview overlay; Ctrl+H toggles it.
   const [highlight, setHighlight] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [version, setVersion] = useState("");
   const [indexingProgress, setIndexingProgress] = useState<{ indexed: number; total: number } | null>(null);
   const [contentEnabled, setContentEnabled] = useState(true);
   const [coloredIcons, setColoredIcons] = useState(true);
@@ -220,7 +218,36 @@ export default function App() {
   };
 
   useEffect(() => { queryRef.current = query; }, [query]);
-  useEffect(() => { getVersion().then(setVersion); }, []);
+
+  // Alt-held tracker: Alt+1..9 badges render only while Alt is down. Lives in
+  // its own effect (not the main keydown handler, which early-returns in
+  // clipboard/onboarding modes - badges must work there too) and writes the
+  // attribute imperatively so holding Alt never re-renders the tree.
+  // Alt+digit hides the window while Alt is still down, so the keyup lands in
+  // another app - blur/visibility/focus handlers clear the stuck state.
+  useEffect(() => {
+    const root = document.documentElement;
+    const set = (held: boolean) => {
+      if (held) {
+        if (root.dataset.altHeld !== "true") root.dataset.altHeld = "true";
+      } else if (root.dataset.altHeld) {
+        delete root.dataset.altHeld;
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.altKey) set(true); };
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === "Alt" || !e.altKey) set(false); };
+    const onClear = () => set(false);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onClear);
+    document.addEventListener("visibilitychange", onClear);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onClear);
+      document.removeEventListener("visibilitychange", onClear);
+    };
+  }, []);
 
   // Load config on mount to apply theme and read content.enabled; re-apply theme on settings changes.
   useEffect(() => {
@@ -277,6 +304,7 @@ export default function App() {
 
   useTauriListener("window-show", () => {
     focusedRef.current = true;
+    delete document.documentElement.dataset.altHeld;
     // A plain `--show` always opens the clean launcher, never a stale clipboard
     // session. (`--clipboard` uses window-show-query, which re-enters the mode.)
     setMode(null);
@@ -296,6 +324,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     win.onFocusChanged(({ payload: focused }) => {
       focusedRef.current = focused;
+      if (!focused) delete document.documentElement.dataset.altHeld;
       // Don't steal focus back into the input while Quicklook is open (modal).
       if (focused && !quicklookRef.current) inputRef.current?.focus();
     }).then(fn => { unlisten = fn; });
@@ -1105,7 +1134,6 @@ export default function App() {
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
               </svg>
             </button>
-            <div className="brand">Portunus{version && <span className="brand-version">v{version}</span>}</div>
           </div>
         </div>
         </div>

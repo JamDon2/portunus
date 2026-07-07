@@ -730,7 +730,7 @@ pub fn run() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("Portunus Settings")
-            .inner_size(800.0, 560.0)
+            .inner_size(860.0, 620.0)
             .decorations(false)
             .transparent(true)
             .always_on_top(false)

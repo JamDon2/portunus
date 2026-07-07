@@ -88,6 +88,14 @@ a:focus-visible,
 
   --font-size-base: 13px;
 
+  /* Settings type scale - four sizes, no one-offs. Unique names on purpose:
+     both windows load the same CSS bundle, so these must not collide with
+     anything in App.css. */
+  --fs-title: 17px;   /* section name */
+  --fs-body:  13px;   /* field names, nav, inputs */
+  --fs-desc:  12px;   /* descriptions, status text */
+  --fs-micro: 10.5px; /* eyebrows, badges, mono metadata */
+
   --radius:     14px;
   --radius-sm:  8px;
 
@@ -110,7 +118,7 @@ a:focus-visible,
   background: var(--bg-card);
   overflow: hidden;
   display: grid;
-  grid-template-rows: 44px 1fr 52px;
+  grid-template-rows: 44px 1fr 48px;
   box-shadow: 0 30px 80px -20px rgba(0,0,0,.7), 0 8px 24px -8px rgba(0,0,0,.5);
 }
 
@@ -121,8 +129,8 @@ a:focus-visible,
   align-items: center;
   justify-content: space-between;
   padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-bar);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-card);
   user-select: none;
   cursor: default;
 }
@@ -142,7 +150,7 @@ a:focus-visible,
 }
 
 .settings-brand-text {
-  font: 600 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg-mute);
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -150,11 +158,11 @@ a:focus-visible,
 
 .settings-brand-sep {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
 }
 
 .settings-section-title {
-  font: 500 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 500 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--fg-mute);
 }
 
@@ -184,7 +192,7 @@ a:focus-visible,
 
 .settings-body {
   display: grid;
-  grid-template-columns: 156px 1fr;
+  grid-template-columns: 172px 1fr;
   min-height: 0;
   overflow: hidden;
 }
@@ -194,7 +202,7 @@ a:focus-visible,
 .settings-sidebar {
   background: var(--bg-sidebar);
   border-right: 1px solid var(--line-soft);
-  padding: 10px 6px;
+  padding: 14px 10px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -203,11 +211,12 @@ a:focus-visible,
 .settings-nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
+  gap: 9px;
+  padding: 8px 10px;
+  min-height: 32px;
+  border-radius: 7px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--fg-mute);
   background: none;
@@ -226,7 +235,6 @@ a:focus-visible,
 .settings-nav-item.active {
   background: var(--bg-row-sel);
   color: var(--fg);
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .settings-nav-icon {
@@ -246,22 +254,23 @@ a:focus-visible,
 
 .settings-content {
   overflow-y: auto;
-  padding: 22px 28px;
-  scroll-padding-top: 22px;
+  padding: 32px 36px;
+  scroll-padding-top: 32px;
 }
 
-.settings-content::-webkit-scrollbar { width: 6px; }
-.settings-content::-webkit-scrollbar-thumb { background: var(--bg-input); border-radius: 3px; }
+.settings-content::-webkit-scrollbar { width: 4px; }
+.settings-content::-webkit-scrollbar-thumb { background: transparent; border-radius: 2px; }
+.settings-content:hover::-webkit-scrollbar-thumb { background: var(--bg-input); }
 .settings-content::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- section ---------- */
 
 .settings-section-header {
-  margin-bottom: 20px;
+  margin-bottom: 28px;
 }
 
 .settings-section-name {
-  font-size: 16px;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--fg);
   letter-spacing: -0.01em;
@@ -269,24 +278,20 @@ a:focus-visible,
 
 .settings-section-desc {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--fs-desc);
   color: var(--fg-desc);
   line-height: 1.5;
 }
 
-/* ---------- field rows ---------- */
+/* ---------- field rows ----------
+   Whitespace rhythm, no dividers: adjacent rows separate on spacing alone. */
 
 .settings-field {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.settings-field:last-child {
-  border-bottom: none;
+  padding: 13px 0;
 }
 
 .settings-field-label {
@@ -295,17 +300,18 @@ a:focus-visible,
 }
 
 .settings-field-name {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--fg);
-  line-height: 1.3;
+  line-height: 1.4;
 }
 
 .settings-field-desc {
-  margin-top: 3px;
-  font-size: 11px;
+  margin-top: 4px;
+  font-size: var(--fs-desc);
   color: var(--fg-desc);
   line-height: 1.5;
+  max-width: 52ch;
 }
 
 .settings-field-control {
@@ -343,35 +349,33 @@ a:focus-visible,
 }
 
 .toggle-track {
-  width: 36px;
-  height: 20px;
+  width: 40px;
+  height: 22px;
   background: var(--toggle-bg);
-  border-radius: 10px;
-  border: 1px solid var(--border-raised);
+  border-radius: 11px;
   position: relative;
   cursor: pointer;
-  transition: background 0.18s, border-color 0.18s;
+  transition: background 0.18s;
   display: block;
 }
 
 .toggle-input:checked + .toggle-track {
   background: var(--accent);
-  border-color: var(--accent);
 }
 
 .toggle-thumb {
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
   background: var(--toggle-thumb);
   border-radius: 50%;
   transition: transform 0.18s, background 0.18s;
 }
 
 .toggle-input:checked + .toggle-track .toggle-thumb {
-  transform: translateX(16px);
+  transform: translateX(18px);
   background: var(--text-on-accent);
 }
 
@@ -388,8 +392,8 @@ a:focus-visible,
 }
 
 .settings-number-btn {
-  width: 26px;
-  height: 28px;
+  width: 28px;
+  height: 32px;
   background: none;
   border: none;
   color: var(--fg-mute);
@@ -409,13 +413,11 @@ a:focus-visible,
 
 .settings-number-input {
   width: 60px;
-  height: 28px;
+  height: 32px;
   background: transparent;
   border: none;
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
   color: var(--fg);
-  font: 500 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 500 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   text-align: center;
   outline: none;
   padding: 0 4px;
@@ -426,24 +428,28 @@ a:focus-visible,
   -webkit-appearance: none;
 }
 
-/* ---------- text input ---------- */
+/* ---------- text input ----------
+   Single canonical definition (a second copy used to live in the appendix
+   layer below and win on source order - merged here). */
 
 .settings-text-input {
-  height: 28px;
+  height: 32px;
+  width: 100%;
   background: var(--kbd-bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 7px;
   color: var(--fg);
-  font: 400 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  padding: 0 10px;
+  font: 400 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: 0 11px;
   outline: none;
-  width: 120px;
   transition: border-color 0.12s;
 }
 
 .settings-text-input:focus {
   border-color: var(--accent);
 }
+
+.settings-text-input.mono { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: var(--fs-micro); }
 
 /* ---------- custom select ---------- */
 
@@ -452,13 +458,13 @@ a:focus-visible,
 }
 
 .settings-select-btn {
-  height: 28px;
+  height: 32px;
   min-width: 100px;
   background: var(--kbd-bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 7px;
   color: var(--fg);
-  font: 400 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   padding: 0 10px;
   outline: none;
   cursor: pointer;
@@ -505,12 +511,12 @@ a:focus-visible,
 .settings-select-option {
   display: block;
   width: 100%;
-  padding: 6px 10px;
+  padding: 7px 10px;
   background: none;
   border: none;
   border-radius: 4px;
   color: var(--fg-mute);
-  font: 400 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
   text-align: left;
   transition: background 0.1s, color 0.1s;
@@ -548,10 +554,10 @@ a:focus-visible,
 }
 
 .settings-dir-path {
-  height: 28px;
+  height: 32px;
   background: var(--kbd-bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 7px;
   color: var(--fg);
   font: 400 12px/1 "JetBrains Mono", "Fira Code", monospace;
   padding: 0 10px;
@@ -573,8 +579,8 @@ a:focus-visible,
 }
 
 .settings-dir-depth-btn {
-  width: 22px;
-  height: 28px;
+  width: 24px;
+  height: 32px;
   background: none;
   border: none;
   color: var(--fg-mute);
@@ -599,12 +605,12 @@ a:focus-visible,
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
   padding: 0 4px;
-  line-height: 28px;
+  line-height: 32px;
 }
 
 .settings-dir-remove {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   background: none;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -624,7 +630,7 @@ a:focus-visible,
 }
 
 .settings-dir-add {
-  height: 28px;
+  height: 30px;
   padding: 0 12px;
   background: none;
   border: 1px dashed var(--border);
@@ -647,8 +653,8 @@ a:focus-visible,
 }
 
 .settings-dir-confirm {
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border: 1px solid var(--accent-border);
   border-radius: 6px;
@@ -677,11 +683,10 @@ a:focus-visible,
 .settings-dir-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--kbd-bg);
+  gap: 10px;
+  padding: 12px 14px;
   border: 1px solid var(--line-soft);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .settings-dir-card-exts {
@@ -691,7 +696,7 @@ a:focus-visible,
 }
 
 .settings-dir-card-exts-label {
-  font-size: 11px;
+  font-size: var(--fs-desc);
   color: var(--fg-dim);
   white-space: nowrap;
 }
@@ -709,11 +714,8 @@ a:focus-visible,
   display: flex;
   align-items: center;
   gap: 7px;
-  font: 400 11px/1.3 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 var(--fs-micro)/1.3 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg-dim);
-  border-top: 1px solid var(--line-soft);
-  margin-top: 1px;
-  padding-top: 8px;
 }
 
 .settings-dir-estimate-sep { opacity: 0.45; }
@@ -747,11 +749,11 @@ a:focus-visible,
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  padding: 8px;
+  padding: 9px;
   background: var(--kbd-bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  min-height: 38px;
+  border-radius: 7px;
+  min-height: 40px;
   align-content: flex-start;
   transition: border-color 0.12s;
 }
@@ -764,12 +766,12 @@ a:focus-visible,
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg-mute);
   background: var(--icon-bg);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 2px 6px 2px 7px;
+  padding: 3px 7px;
   white-space: nowrap;
 }
 
@@ -792,7 +794,7 @@ a:focus-visible,
   background: none;
   border: none;
   outline: none;
-  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg);
   min-width: 60px;
   flex: 1;
@@ -804,21 +806,17 @@ a:focus-visible,
 /* ---------- section-wide note ---------- */
 
 .settings-section-note {
-  font-size: 11px;
+  font-size: var(--fs-desc);
   color: var(--fg-desc);
   line-height: 1.5;
-  padding: 10px 12px;
-  background: rgba(255,255,255,0.02);
-  border: 1px solid var(--line-soft);
-  border-radius: 6px;
-  margin-bottom: 14px;
+  margin-bottom: 20px;
 }
 
 /* ---------- dependency status (Providers) ---------- */
 
 .settings-dep-inline-warn {
   margin-top: 5px;
-  font-size: 11px;
+  font-size: var(--fs-desc);
   line-height: 1.4;
   color: var(--danger-fg);
 }
@@ -833,19 +831,19 @@ a:focus-visible,
 }
 
 .settings-subsection {
-  margin-top: 24px;
-  padding-top: 18px;
+  margin-top: 32px;
+  padding-top: 22px;
   border-top: 1px solid var(--line-soft);
 }
 
 .settings-deps {
-  margin-top: 24px;
-  padding-top: 18px;
+  margin-top: 32px;
+  padding-top: 22px;
   border-top: 1px solid var(--line-soft);
 }
 
 .settings-deps-title {
-  font-size: 12px;
+  font-size: var(--fs-micro);
   font-weight: 600;
   color: var(--fg-mute);
   letter-spacing: 0.08em;
@@ -858,7 +856,7 @@ a:focus-visible,
   align-items: baseline;
   gap: 10px;
   padding: 5px 0;
-  font-size: 12px;
+  font-size: var(--fs-desc);
 }
 
 .settings-dep-dot {
@@ -874,7 +872,7 @@ a:focus-visible,
 
 .settings-dep-feature {
   flex-shrink: 0;
-  width: 180px;
+  width: 168px;
   color: var(--fg);
 }
 
@@ -895,12 +893,15 @@ a:focus-visible,
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
-  margin: 0 0 14px;
+  padding: 12px 16px;
+  margin: 0 0 20px;
   border-radius: 10px;
   background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg-card);
-  border: 1px solid var(--accent-border);
-  font-size: 12px;
+  /* Transparent border keeps the box geometry; the error variant colours it.
+     The tinted wash is the only tinted surface in the tab - salience without
+     another stroke; the solid Apply button is the affordance. */
+  border: 1px solid transparent;
+  font-size: var(--fs-desc);
   color: var(--fg);
 }
 
@@ -917,9 +918,9 @@ a:focus-visible,
 .settings-reindex-revert,
 .settings-reindex-apply {
   flex-shrink: 0;
-  height: 26px;
+  height: 28px;
   padding: 0 12px;
-  border-radius: 5px;
+  border-radius: 6px;
   font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
   transition: background 0.1s;
@@ -1010,12 +1011,12 @@ a:focus-visible,
 
 .settings-footer {
   border-top: 1px solid var(--line-soft);
-  background: var(--bg-footer);
+  background: var(--bg-card);
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 0 20px;
+  padding: 0 24px;
 }
 
 .settings-footer-status {
@@ -1034,20 +1035,22 @@ a:focus-visible,
 }
 
 .btn-settings-save {
-  height: 28px;
+  height: 30px;
   padding: 0 16px;
-  border-radius: 6px;
+  border-radius: 7px;
   border: none;
   background: var(--accent);
   color: var(--text-on-accent);
-  font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  transition: filter 0.1s;
+  transition: background 0.1s;
 }
 
-.btn-settings-save:hover { filter: brightness(1.08); }
+/* Hover via background, not filter: a filter transition spawns a compositing
+   layer per hover, which flickers in WebKitGTK on transparent windows. */
+.btn-settings-save:hover { background: color-mix(in srgb, var(--accent) 90%, white); }
 .btn-settings-save:disabled { opacity: 0.5; cursor: default; }
 
 /* ============================================================================
@@ -1063,15 +1066,15 @@ a:focus-visible,
 }
 
 .settings-nav-group + .settings-nav-group {
-  margin-top: 14px;
+  margin-top: 18px;
 }
 
 .settings-nav-group-label {
-  font: 600 9.5px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
   letter-spacing: 0.13em;
   text-transform: uppercase;
   color: var(--fg-dim);
-  padding: 4px 10px 5px;
+  padding: 4px 10px 6px;
 }
 
 /* ---------- constrained content column ---------- */
@@ -1110,7 +1113,7 @@ a:focus-visible,
 }
 
 .settings-section-master-state {
-  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-dim);
@@ -1119,17 +1122,20 @@ a:focus-visible,
 
 .settings-section-master-state.on { color: var(--accent); }
 
-/* ---------- grouped cards ---------- */
+/* ---------- groups ----------
+   Bare heading + whitespace, no card. From here on a border means an
+   interactive or stateful object (reindex strip, dir cards, extension cards,
+   logs viewport) - never mere grouping. */
 
-.settings-group-block { margin-bottom: 18px; }
+.settings-group-block { margin-bottom: 36px; }
 .settings-group-block:last-child { margin-bottom: 0; }
 
 .settings-group-title {
-  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--fg-mute);
-  margin: 2px 2px 8px;
+  margin: 0 0 2px;
 }
 
 .settings-group-title-row {
@@ -1138,27 +1144,17 @@ a:focus-visible,
   justify-content: space-between;
   gap: 8px;
 }
-.settings-group-title-row .settings-group-title { margin-bottom: 8px; }
+.settings-group-title-row .settings-group-title { margin-bottom: 2px; }
 
 .settings-group-desc {
-  font-size: 11.5px;
+  font-size: var(--fs-desc);
   color: var(--fg-desc);
   line-height: 1.5;
-  margin: 0 2px 10px;
+  margin: 0 0 6px;
 }
-
-.settings-group {
-  background: var(--bg-deep);
-  border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  padding: 2px 16px;
-}
-
-/* Field rows: keep the divider but tighten the first/last inside a card. */
-.settings-group > .settings-field:last-child { border-bottom: none; }
 
 /* Non-field content (tag editor, dir list, dep rows, theme grid) gets its own
-   breathing room since it doesn't carry the field divider rhythm. */
+   breathing room since it doesn't carry the field rhythm. */
 .settings-group > .settings-ext-editor { margin: 12px 0; }
 .settings-group > .settings-dir-list { margin: 12px 0; }
 
@@ -1168,7 +1164,7 @@ a:focus-visible,
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 190px;
+  min-width: 200px;
 }
 
 .settings-slider-input {
@@ -1188,8 +1184,8 @@ a:focus-visible,
 .settings-slider-input::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--accent);
   border: 2px solid var(--bg-deep);
@@ -1217,7 +1213,7 @@ a:focus-visible,
 }
 
 .settings-number-suffix {
-  font-size: 11px;
+  font-size: var(--fs-desc);
   color: var(--fg-mute);
 }
 
@@ -1233,7 +1229,7 @@ a:focus-visible,
 /* ---------- keyboard chip ---------- */
 
 .settings-kbd {
-  font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: 4px;
@@ -1250,8 +1246,6 @@ a:focus-visible,
 
 .settings-dep-row:first-child { padding-top: 10px; }
 .settings-dep-row:last-child { padding-bottom: 10px; }
-
-.settings-dep-feature { width: 168px; }
 
 .settings-dep-tool--missing { color: var(--danger-fg); }
 
@@ -1274,8 +1268,8 @@ a:focus-visible,
 
 /* ---------- extension rows ---------- */
 
-.settings-ext-version { font-size: 11px; font-weight: 400; color: var(--fg-dim); }
-.settings-ext-new { font-size: 11px; font-weight: 500; color: var(--accent); }
+.settings-ext-version { font-size: var(--fs-micro); font-weight: 400; color: var(--fg-dim); }
+.settings-ext-new { font-size: var(--fs-micro); font-weight: 500; color: var(--accent); }
 
 .settings-ext-perms {
   display: flex;
@@ -1285,7 +1279,7 @@ a:focus-visible,
 
 .settings-ext-perms code {
   font-family: monospace;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 1px 5px;
   border-radius: 3px;
   background: var(--kbd-bg);
@@ -1295,13 +1289,13 @@ a:focus-visible,
 /* ---------- secondary button ---------- */
 
 .settings-btn-secondary {
-  height: 28px;
+  height: 30px;
   padding: 0 14px;
-  border-radius: 6px;
+  border-radius: 7px;
   border: 1px solid var(--border-raised);
   background: var(--kbd-bg);
   color: var(--fg);
-  font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
@@ -1311,55 +1305,39 @@ a:focus-visible,
 /* ---------- primary / danger buttons ---------- */
 
 .settings-btn-primary {
-  height: 28px;
+  height: 30px;
   padding: 0 14px;
-  border-radius: 6px;
+  border-radius: 7px;
   border: 1px solid var(--accent-border, var(--accent));
   background: var(--accent-soft);
   color: var(--accent);
-  font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
-  transition: filter 0.12s;
+  transition: background 0.12s;
 }
-.settings-btn-primary:hover { filter: brightness(1.15); }
-.settings-btn-primary:disabled { opacity: 0.5; cursor: default; filter: none; }
+.settings-btn-primary:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.settings-btn-primary:disabled { opacity: 0.5; cursor: default; }
 
 .settings-btn-danger {
-  height: 28px;
+  height: 30px;
   padding: 0 14px;
-  border-radius: 6px;
+  border-radius: 7px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--fg-mute);
-  font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
   transition: color 0.12s, border-color 0.12s;
 }
 .settings-btn-danger:hover { color: #e5534b; border-color: #e5534b55; }
 
-/* ---------- text input primitive ---------- */
-
-.settings-text-input {
-  height: 28px;
-  width: 100%;
-  padding: 0 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border-raised);
-  background: var(--kbd-bg);
-  color: var(--fg);
-  font-size: 12px;
-  outline: none;
-}
-.settings-text-input:focus { border-color: var(--accent); }
-.settings-text-input.mono { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 11px; }
-
 /* ---------- badge primitive ---------- */
 
 .settings-badge {
-  font: 600 9px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-micro)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 3px 6px;
+  padding: 2px 6px;
   border-radius: 3px;
   white-space: nowrap;
 }
@@ -1395,16 +1373,16 @@ a:focus-visible,
 }
 
 .settings-modal-title {
-  padding: 14px 16px 10px;
-  font: 600 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: 16px 18px 12px;
+  font: 600 var(--fs-body)/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--fg);
-  border-bottom: 1px solid var(--border-raised);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .settings-modal-body {
-  padding: 14px 16px;
+  padding: 16px 18px;
   overflow-y: auto;
-  font-size: 12px;
+  font-size: var(--fs-desc);
   color: var(--fg-mute);
   line-height: 1.5;
 }
@@ -1413,7 +1391,7 @@ a:focus-visible,
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 10px 16px 14px;
+  padding: 12px 18px 16px;
 }
 
 /* ---------- extension cards ---------- */
@@ -1421,11 +1399,10 @@ a:focus-visible,
 .settings-ext-cards { display: flex; flex-direction: column; gap: 8px; }
 
 .settings-ext-card {
-  /* Same surface tokens as .settings-group - these cards stand alone in the
-     section (not nested in a group), so they must read as sibling cards. */
+  /* A hairline only: cards are interactive containers, the one thing that
+     still earns a border in this window. */
   border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  background: var(--bg-deep);
+  border-radius: 10px;
   overflow: hidden;
 }
 
@@ -1433,7 +1410,7 @@ a:focus-visible,
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   cursor: pointer;
   user-select: none;
 }
@@ -1441,43 +1418,41 @@ a:focus-visible,
 .settings-ext-chevron { color: var(--fg-mute); transition: transform 0.12s; flex-shrink: 0; }
 .settings-ext-card.expanded > .settings-ext-card-header .settings-ext-chevron { transform: rotate(90deg); }
 
-.settings-ext-card-name { font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg); }
+.settings-ext-card-name { font: 600 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg); }
 .settings-ext-card-spacer { flex: 1; }
 
 .settings-ext-card-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 4px 12px 12px 30px;
+  gap: 14px;
+  padding: 4px 14px 14px 32px;
 }
 
 /* Compact identity block: triggers, permissions, origin. */
 .settings-ext-meta { display: flex; flex-direction: column; gap: 6px; }
 
 .settings-ext-commands { display: flex; flex-direction: column; gap: 4px; }
-.settings-ext-command-title { font-size: 12px; color: var(--fg-mute); }
+.settings-ext-command-title { font-size: var(--fs-desc); color: var(--fg-mute); }
 .settings-ext-triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .settings-ext-triggers code {
   font-family: ui-monospace, "JetBrains Mono", monospace;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 1px 5px;
   border-radius: 3px;
   background: var(--accent-soft);
   color: var(--accent);
 }
-.settings-ext-triggers-hint { font-size: 10px; color: var(--fg-dim); }
+.settings-ext-triggers-hint { font-size: var(--fs-micro); color: var(--fg-dim); }
 
-/* Labeled zone with a hairline spine (Settings, Logs). */
+/* Labeled zone (Settings, Logs) - the eyebrow + body gap does the zoning. */
 .settings-ext-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line-soft);
 }
 
 .settings-ext-eyebrow {
-  font: 600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-micro)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--fg-mute);
@@ -1498,8 +1473,8 @@ a:focus-visible,
 .settings-ext-disclosure:hover .settings-ext-chevron { color: var(--fg); }
 .settings-ext-disclosure[aria-expanded="true"] .settings-ext-chevron { transform: rotate(90deg); }
 
-.settings-ext-origin { font-size: 10px; color: var(--fg-dim); overflow-wrap: anywhere; }
-.settings-ext-origin code, .settings-ext-origin-url { font-size: 10px; word-break: break-all; }
+.settings-ext-origin { font-size: var(--fs-micro); color: var(--fg-dim); overflow-wrap: anywhere; }
+.settings-ext-origin code, .settings-ext-origin-url { font-size: var(--fs-micro); word-break: break-all; }
 .settings-ext-origin a { color: var(--fg-mute); }
 
 .settings-ext-card-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
@@ -1519,14 +1494,14 @@ a:focus-visible,
 .settings-ext-secret-row .settings-text-input { flex: 1; min-width: 0; }
 .settings-ext-secret-row .settings-badge { flex-shrink: 0; }
 .settings-ext-secret-hint {
-  font: 400 10px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-micro)/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--fg-mute);
 }
 .settings-ext-secret-warn { color: var(--danger-fg); }
 
 /* Inline validation error under an extension settings field. */
 .settings-ext-field-error {
-  font: 400 11px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-desc)/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--danger-fg);
   margin-top: 2px;
 }
@@ -1540,13 +1515,13 @@ a:focus-visible,
 .settings-ext-logs-list {
   max-height: 160px;
   overflow-y: auto;
-  border: 1px solid var(--border-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 8px;
   font-family: ui-monospace, "JetBrains Mono", monospace;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   line-height: 1.6;
-  background: var(--bg);
+  background: var(--bg-deep);
 }
 
 .settings-ext-log-row { display: flex; gap: 8px; }
@@ -1560,7 +1535,7 @@ a:focus-visible,
 .settings-ext-install-input { display: flex; flex-direction: column; gap: 10px; }
 .settings-ext-install-busy { padding: 18px 0; text-align: center; color: var(--fg-mute); }
 .settings-ext-install-progress { display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.settings-ext-install-progress-label { font-size: 12px; }
+.settings-ext-install-progress-label { font-size: var(--fs-desc); }
 .settings-ext-install-progress-bar {
   width: 70%;
   height: 4px;
@@ -1578,12 +1553,12 @@ a:focus-visible,
 
 .settings-ext-consent { display: flex; flex-direction: column; gap: 8px; }
 .settings-ext-consent-head { display: flex; align-items: baseline; gap: 8px; }
-.settings-ext-consent-name { font: 600 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg); }
-.settings-ext-consent-author { font-size: 11px; color: var(--fg-dim); }
+.settings-ext-consent-name { font: 600 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg); }
+.settings-ext-consent-author { font-size: var(--fs-desc); color: var(--fg-dim); }
 
-.settings-ext-hash { font-size: 10px; color: var(--fg-dim); }
+.settings-ext-hash { font-size: var(--fs-micro); color: var(--fg-dim); }
 .settings-ext-hash code {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   word-break: break-all;
   user-select: all;
 }
@@ -1592,7 +1567,7 @@ a:focus-visible,
 .settings-ext-card-title { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .settings-ext-card-titlerow { display: flex; align-items: center; gap: 8px; }
 .settings-ext-card-sub {
-  font-size: 11px;
+  font-size: var(--fs-desc);
   color: var(--fg-dim);
   white-space: nowrap;
   overflow: hidden;
