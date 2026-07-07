@@ -8,68 +8,81 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 bun tauri dev                                    # dev mode (hot reload)
 bun tauri build                                  # production build (OCR always on; needs libtesseract-dev + libleptonica-dev; linuxdeploy for AppImage)
 cargo check --manifest-path src-tauri/Cargo.toml # type-check Rust only
+cargo test --manifest-path src-tauri/Cargo.toml  # unit tests (inline #[cfg(test)]: breaker, calc/datetime, extensions/trigger, command)
 bun x tsc --noEmit                               # type-check TypeScript only
 ```
 
-Package manager is **bun**, not npm or yarn.
+Package manager is **bun**, not npm or yarn. There is no eslint/prettier/rustfmt config — Rust defaults; `bun run build` runs `tsc` before vite. There are no frontend tests; the Rust unit tests above are the only automated tests.
+
+Commit style: terse, subject-only, no trailers (see `git log`). Never use the word "plugins" for wasm modules in code, UI, or docs — they are **extensions**.
 
 ## Releasing
 
-Bundle filenames come from the **`src-tauri/Cargo.toml` `version`** field (Tauri reads it; there is no `version` in `tauri.conf.json`). A `bun tauri build` produces `portunus_<version>_amd64.deb` / `.AppImage`.
+CI (`.github/workflows/release.yml`) builds the AppImage + .deb on every push/PR (uploads to a GitHub Release only on `v*` tags) using `bun tauri build --config src-tauri/tauri.bundle.conf.json`, which bundles libpdfium, poppler tools, tesseract data. A plain local `bun tauri build` produces bundles *without* those assets. On tag pushes CI also renders `packaging/aur/PKGBUILD` (a template with `@PKGVER@`/`@SHA256@` placeholders) with the built .deb's checksum and attaches it — **no manual sha256 editing**.
 
-Before tagging/releasing `vX.Y.Z`, bump **both** version fields to `X.Y.Z` and rebuild:
-- `src-tauri/Cargo.toml` `version` — drives the bundle filenames.
-- `package.json` `version` — keep in sync.
-
-If you forget, the artifacts keep the old version in their names while the tag says the new one, so `packaging/aur/PKGBUILD` (which builds its download URL as `portunus_$pkgver_amd64.deb`) 404s. After building, update `sha256sums` in `packaging/aur/PKGBUILD` to the new deb's sha256 and upload the correctly-named assets to the release.
+Bundle filenames come from the **`src-tauri/Cargo.toml` `version`** field (Tauri reads it; there is no `version` in `tauri.conf.json`). Before tagging `vX.Y.Z`, bump **both** `src-tauri/Cargo.toml` and `package.json` versions to `X.Y.Z` — a mismatch makes the AUR download URL (`portunus_$pkgver_amd64.deb`) 404.
 
 ## Architecture
 
-Portunus is a Tauri 2 app: a Rust backend exposed via Tauri IPC to a React 19 / TypeScript frontend. The window is decorationless, transparent, always-on-top, and hidden at startup - it surfaces only when signaled via `portunus --show` (Unix socket IPC).
+Portunus is a Tauri 2 app: a Rust backend exposed via Tauri IPC to a React 19 / TypeScript frontend. The window is decorationless, transparent, always-on-top, and hidden at startup — it surfaces only when signaled via `portunus --show` (Unix socket IPC).
 
 ### Backend (`src-tauri/src/`)
 
-`lib.rs` defines all Tauri commands: `search`, `search_content`, `launch_app`, `get_config`, `save_config`, `trigger_full_reindex`, `is_content_index_empty`, `open_settings_window`, `hide_window`, `is_apps_ready`.
+Tauri commands are registered in `lib.rs` (`invoke_handler` near the bottom lists all of them, grouped: core search/config, `preview.rs` file-preview commands, clipboard, dict, and `extensions/` commands).
 
-**Provider system** - `providers/mod.rs` defines the `Provider` trait and `PluginRegistry`. The built-in providers are: `apps`, `files`, `clipboard`, `calc`, `dict`, `content` (plus WASM extensions). Each implements `id()` + `search(query) -> Vec<SearchResult>`. `PluginRegistry::search()` merges results, applies frecency bonuses, sorts by composite score, and truncates to `max_results` (default 9). The `content` provider is excluded from `search()`; it runs only via `PluginRegistry::search_content()`, the backend of the Tab-activated "Contents" mode (a launcher mode like clipboard - dedicated chip, Tab to toggle, Backspace to exit).
+**Provider system** — `providers/mod.rs` defines the `Provider` trait, `PluginRegistry`, and all scoring constants. Built-in providers: `apps`, `files`, `clipboard`, `calc` (fend-core + datetime + currency), `dict`, `content`, `command` (searchable command catalog), plus wasm extensions (`wasm.rs`). `PluginRegistry::search()` merges results, applies frecency bonuses, sorts by composite score, truncates to `max_results` (default 9). The `content` provider runs only via `search_content()` — backend of the Tab-activated "Contents" scope.
 
-**Scoring** - Composite score = category base + fuzzy score (nucleo-matcher) + frecency bonus. Base scores by kind: clipboard 5M, calc 3M, app 2M, file 1M, folder 0. Results with `nucleo_score < MIN_NUCLEO_SCORE` are filtered out.
+**Scoring** — composite = category base + normalized fuzzy bonus (`fuzzy_bonus()`, nucleo-matcher) + frecency bonus. Base constants in `providers/mod.rs`: content 6M, command 4.5M, extension-triggered 4M, calc/dict 3M, extension 2.5M, app 2M, file 1M, dict-fill 0.5M, folder 0. Keep these high-magnitude — they are deliberate.
 
-**Frecency** (`frecency.rs`) - SQLite DB at `$XDG_DATA_HOME/portunus/frecency.db`. Half-life exponential decay: `new_score = old_score × 2^(−elapsed_days / half_life) + 1.0`. Tracks `app`, `file`, `folder` kinds.
+**Frecency** (`frecency.rs`) — SQLite at `$XDG_DATA_HOME/portunus/frecency.db`. Half-life exponential decay: `new_score = old_score × 2^(−elapsed_days / half_life) + 1.0`. Frecency is the *only* history signal (a separate recency bonus was removed on purpose).
 
-**Content index** (`content_index.rs`) - SQLite full-text search over file contents. OCR via Tesseract (`leptess`) is always compiled in. Triggered by `trigger_full_reindex` command or watcher. Progress events emitted as `content-index-progress { indexed, total }`.
+**Content index** (`content_index.rs`) — SQLite FTS5 (Porter stemming) over file contents; `office.rs` extracts DOCX/PPTX/XLSX/ODF text (zip-bomb caps), `content_match.rs` normalizes queries/diacritics. Stopwords are stripped from queries because FTS5 bm25 has no top-k early exit. OCR via Tesseract (`leptess`) always compiled in. Progress events: `content-index-progress { indexed, total }`. `clipboard_ocr.rs` is a separate OCR cache for clipboard images.
 
-**Config** (`config.rs`) - TOML at `~/.config/portunus/config.toml`. Hot-reloaded via `watcher.rs`. Config changes propagate through `provider_reload.rs` which rebuilds affected providers and emits `search-invalidated` to the frontend.
+**Config** (`config.rs`, defaults in `default_config.toml`) — TOML at `~/.config/portunus/config.toml`. Hot-reloaded via `watcher.rs`; `provider_reload.rs` rebuilds affected providers and emits `search-invalidated`. Pre-release project: breaking config-schema changes are fine, no migration code needed.
 
-**IPC** (`ipc.rs`) - Unix socket at `$XDG_RUNTIME_DIR/portunus.sock` handles `--show`, `--clipboard`, `--reindex`, `--reload-config`, `--reload-extensions`, `--reload-extension <name>` CLI flags from a second instance.
+**IPC** (`ipc.rs`) — Unix socket at `$XDG_RUNTIME_DIR/portunus.sock`; CLI flags from a second instance: `--show`, `--clipboard`, `--reindex`, `--reload-config`, `--reload-extensions`, `--reload-extension <name>`, `--reload-theme` (`cli.rs`).
 
-**Extensions** (`extensions/`, wire contract in `extension-sdk/`, api=3, docs in `EXTENSIONS.md`) - sandboxed Extism/wasm search providers. Key pieces: `manifest.rs` (manifest v3: `[trigger]` prefixes gate execution per keystroke, `[[settings]]` schema), `trigger.rs` (pure gate fn), `install.rs` (`.portext` two-phase install, consents.toml permission snapshots, update check, uninstall), `logs.rs` (per-extension ring buffer feeding the Settings log viewer), `hostfns.rs` (kv/clipboard/open_url/settings_get). `activate` returns declarative effects (CopyText/OpenUrl/ShowToast) executed by the command layer - no permission needed on the activation path. Developer CLI: `portunus ext new/dev/validate/pack` (`cli_ext.rs`, scaffold templates in `templates/extension/`). User-facing terminology is "extensions", never "plugins".
+**Extensions** (`extensions/`, wire contract in `extension-sdk/`, **api = 4**, docs in `EXTENSIONS.md`) — sandboxed Extism/wasm providers. Manifest v4 declares `[[commands]]` (searchable launcher entries, `mode = "scope"` or `"action"`), `[permissions]`, `[limits]`, `[background]`, `[[settings]]` (including `secret` type stored via keyring, `secrets.rs`). Guest exports: `search` (sync fast path), `query` (async/streaming), `activate` (returns declarative effects: copy_text/open_url/show_toast/show_form/paste/hide/keep_open/refresh_results), `preview` (lazy, streamable), `refresh` (background). Key host pieces: `manifest.rs` (parse/validate), `install.rs` (`.portext` two-phase install, consents.toml permission snapshots, update check), `hostfns.rs` (kv/clipboard/open_url/settings/emit), `query.rs` (async query tier), `logs.rs` (per-extension ring buffer for Settings), `providers/wasm.rs` (instance slots, output-size caps), `providers/breaker.rs` (3-strike failure breaker with escalating cooldown). Developer CLI: `portunus ext new/dev/validate/pack` (`cli_ext.rs`, scaffolds from `templates/extension/`). Reference extensions in `examples/extensions/` (emoji = offline scope, cheatsh = network+cache+refresh, gh = multi-command/secrets/streaming/forms).
 
-**Startup sequence** - `CalcProvider` registers synchronously. `FileProvider` and `AppProvider` load in a background thread. Tauri emits `apps-ready` when done; frontend shows a loading state until then.
+**Startup** — `CalcProvider` registers synchronously; `FileProvider`/`AppProvider` load in a background thread; `apps-ready` event clears the frontend loading state. A tiny embedded PDF (`warmup.pdf`) is rendered at startup to prime fontconfig.
+
+### Critical backend invariants
+
+- **pdfium**: not `Send`; one long-lived worker thread owns it (`preview.rs`). `Pdfium::new` calls global `FPDF_InitLibrary` and Drop calls `FPDF_DestroyLibrary` — constructing a second instance deadlocks the worker. Availability probes must only *bind*, never construct.
+- **Extism cancellation is engine-wide** (epoch-based): each instance slot in `wasm.rs` gets its own `CompiledPlugin` (own engine) — `instance` (search/activate), `preview_instance`, `bg_instance`, `query_instance`. Never share a compiled plugin across slots or cancelling one call kills the others.
+- **Extension output is untrusted**: `wasm.rs` clamps output bytes, result count, field lengths, icon/image payloads, and whitelists image MIME types. Keep new fields behind similar caps.
 
 ### Frontend (`src/`)
 
-`App.tsx` - Main launcher UI. Manages query, results, selected index, and preview panel. Listens for Tauri events (`window-show`, `apps-ready`, `content-index-progress`, `appearance-changed`, `search-invalidated`). The `launch` function takes a full `SearchResult` (not a bare exec string) and calls `invoke("launch_app", { exec, id, kind })`.
+`main.tsx` routes by window label to `App.tsx` (launcher) or `Settings.tsx`.
 
-`Settings.tsx` - Config editor with 8 tabs (General, Providers, Files, Search, Frecency, Content, Debug, Appearance). Autosaves with 800 ms debounce for cheap edits. OCR and max-file-size changes are staged behind an "Apply & Reindex" confirmation to avoid surprise slow rebuilds.
+**App.tsx** — launcher state machine: `query` → debounced `invoke("search", { query, queryId, scope })` → sync `results` + per-extension `streamed` batches (via `search-stream` events, correlated by monotonic `queryId` to drop stale arrivals). Selection is pinned by result id across reorders. Modal states: QuickLook (Shift+Enter), ActionPicker (Alt+Enter/Ctrl+K), extension form modal. Scope commands (`mode`): clipboard is a UI-takeover mode, contents is Tab-toggled; Backspace on empty query exits a mode, Escape unwinds overlay → query → mode → hide.
 
-`components/FooterHints.tsx` - Context-aware keyboard hint bar; hints vary by result `kind`.
+**Provider plugin pattern** (`providers/registry.ts` + `providers/*.tsx`) — each result kind registers `{ kinds, Preview, handleLaunch, handleKeyDown }` via `registerProvider()`; `App.tsx` dispatches through the registry. New result kinds get a new provider registration, not special cases in App.tsx.
 
-`providers/registry.ts` - Keyboard dispatch: Up/Down/Enter/Tab/Alt+1-9/Ctrl+C/Ctrl+Enter/Escape.
+**Settings.tsx** — sidebar sections (General, Providers, Clipboard, Files, Dict, Ranking, Content, Extensions, Appearance, Debug). Autosaves cheap edits with 800 ms debounce; heavy content-index fields (dirs, extensions list, OCR options, size increases) are staged behind "Apply & Reindex". **Always build settings UI from the shared primitives** in `components/settings/` — `SettingsField`, `SettingsGroup`, `SectionHeader`, `Toggle`, `TextInput`, `Select`, `Slider`, `NumberStepper`, `Badge`, `Modal` — never bespoke per-file markup.
 
-`types.ts` - TypeScript interfaces: `Config`, `SearchResult`, `DirEntry`.
+**Styling** — plain CSS (`App.css`, `settings.css`, `themes.css`), no CSS modules/frameworks. Theme via CSS custom properties on `:root`; named themes as `:root[data-theme="…"]`; Matugen CSS injected at runtime (`theme.ts`). Behavior toggles ride data attributes (`data-animate-results`, `data-accent-bleed`, …). Use existing tokens (`--accent`, `--bg-*`, `--fg-*`) instead of hard-coded colors.
+
+**Events** — subscribe with the `useTauriListener` hook. Backend events: `window-show`, `apps-ready`, `search-stream`, `search-invalidated`, `content-index-progress`, `appearance-changed`, `theme-css-changed`.
+
+`types.ts` holds the shared interfaces (`Config`, `SearchResult`, …) — keep them in sync with the Rust structs they mirror.
 
 ### Two-window setup
 
-`tauri.conf.json` defines two windows: `main` (900×576, hidden at startup) and `settings` (800×560, pre-created hidden, shown via `open_settings_window` command). Both are WebKit2GTK 4.1 WebViews. Asset protocol is enabled to load system icons from `~/.local/share/icons` and XDG icon dirs.
+`tauri.conf.json` defines two windows: `main` (900×576, hidden at startup) and `settings` (800×560, pre-created hidden, shown via `open_settings_window`). Both are WebKit2GTK 4.1 WebViews. Asset protocol is enabled to load system icons from `~/.local/share/icons` and XDG icon dirs.
 
 ## System dependencies
 
-Packaged AppImage builds bundle libpdfium, the poppler tools, and English tesseract data (see `runtime_assets.rs` + `tauri.bundle.conf.json`); the items below are needed only for source builds or AppImage-excluded features.
+Packaged AppImage/.deb builds bundle libpdfium, the poppler tools, and English tesseract data (see `runtime_assets.rs` + `tauri.bundle.conf.json`); the items below are needed only for source builds or non-bundled features.
 
-- `libpdfium.so` - PDF preview via `pdfium-render`. Install on Arch: `yay -S pdfium-bin`. `runtime_assets::bind_pdfium` prefers a bundled `libpdfium.so`, else `Pdfium::bind_to_system_library()`.
-- `dict` (dictd) - Dictionary lookups. Silently disabled if not found at runtime. Not bundled.
-- `cliphist` + `wl-clipboard` - Clipboard history provider. Not bundled.
-- `poppler` - PDF content indexing (not preview). Bundled in the AppImage; system binary used for source builds.
-- `tesseract` data - OCR (via `leptess`, always compiled in). English data bundled in the AppImage; other languages need the system `tesseract-data-<lang>`.
-- `libgtk-layer-shell` - wlr-layer-shell overlay surface for the launcher window (`layer_shell.rs`, opt-in via `[general] layer_shell`). Required at build time on Linux. Install on Arch: `pacman -S gtk-layer-shell`; Debian: `libgtk-layer-shell-dev`. Wayland-only at runtime; no-op on X11.
+- `libpdfium.so` — PDF preview via `pdfium-render`. Arch: `yay -S pdfium-bin`. `runtime_assets::bind_pdfium` prefers a bundled `libpdfium.so`, else `Pdfium::bind_to_system_library()`.
+- `dict` (dictd) — dictionary lookups. Silently disabled if absent. Not bundled.
+- `cliphist` + `wl-clipboard` — clipboard history provider. Not bundled.
+- `poppler` — PDF content indexing (not preview). Bundled in packages; system binary for source builds.
+- `tesseract` data — OCR (always compiled in). English bundled; other languages need system `tesseract-data-<lang>`.
+- `libgtk-layer-shell` — wlr-layer-shell overlay for the launcher (`layer_shell.rs`, opt-in via `[general] layer_shell`). Build-time requirement on Linux. Arch: `gtk-layer-shell`; Debian: `libgtk-layer-shell-dev`. Wayland-only at runtime; no-op on X11.
+
+## Testing conventions
+
+Never use real personal data (names, emails) in test fixtures — use neutral strings (`café`, `naïve`, `example.org`). When debugging, don't create new scratch files/dirs in the repo; edit existing code or reason from it.
