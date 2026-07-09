@@ -26,6 +26,11 @@ import "./themes.css";
 
 const NON_INDEXABLE_KINDS = new Set(['calc', 'dict', 'dict-hint', 'content-hint', 'content-disabled', 'search-error', 'ext-error', 'command']);
 
+// Shared stable empty terms array - handed to the preview outside content mode
+// so its identity never changes across keystrokes (a fresh [] would churn the
+// preview subtree).
+const EMPTY_TERMS: string[] = [];
+
 // Optimistic-hide budget for extension activations: dismiss feels instant,
 // yet a fast response can still keep the window open (form/keep-open).
 const ACTIVATE_HIDE_MS = 150;
@@ -926,8 +931,10 @@ export default function App() {
     : browsing || query.trim().length > 0;
 
   // Terms to highlight in the preview - only in content (full-text) mode.
+  // Outside content mode return the shared frozen EMPTY_TERMS (stable identity)
+  // so every keystroke doesn't hand the preview subtree a fresh [] and churn it.
   const previewTerms = useMemo(
-    () => (inContents ? deriveContentTerms(query) : []),
+    () => (inContents ? deriveContentTerms(query) : EMPTY_TERMS),
     [inContents, query],
   );
 

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -39,6 +39,20 @@ const SANITIZE_SCHEMA = {
 
 const REHYPE: PluggableList = [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA]];
 const REMARK: PluggableList = [remarkGfm];
+
+// Rendered-tree cache keyed source\0baseDir. The per-instance useMemo below only
+// spares re-parsing while a preview stays mounted; arrowing/typing flips the
+// selected file, remounting the preview and losing that memo, so revisiting a
+// README (common while typing "readme.md") would re-run the whole
+// remark/rehype/hljs pipeline (~12ms cold, far more in dev) and peg the main
+// thread. This module-level cache survives remounts - a revisited document
+// paints from the cached element instead. Capped like the pdf/img/text caches;
+// eviction is insertion-order (approximate LRU).
+const treeCache = new Map<string, ReactElement>();
+const TREE_CACHE_CAP = 32;
+function treeCacheKey(source: string, baseDir: string): string {
+  return `${source}\0${baseDir}`;
+}
 
 const mdCodeComponent: Components["code"] = ({ className, children }) => {
   const match = /language-(\w+)/.exec(className ?? "");
@@ -126,18 +140,37 @@ function MarkdownView({
   }), [baseDir]);
 
   // Parsing + highlighting the whole document is ~12ms; memoize the rendered
-  // tree on (source, components) so incidental parent re-renders (a
-  // content-index-progress storm, say) don't re-run the remark/rehype/hljs
-  // pipeline and peg the main thread.
-  const rendered = useMemo(() => (
-    <ReactMarkdown
-      remarkPlugins={REMARK}
-      rehypePlugins={REHYPE}
-      components={components}
-    >
-      {source}
-    </ReactMarkdown>
-  ), [source, components]);
+  // tree so incidental parent re-renders (a content-index-progress storm, say)
+  // don't re-run the remark/rehype/hljs pipeline and peg the main thread. Backed
+  // by the module-level `treeCache` (keyed source\0baseDir) so the tree also
+  // survives remounts when the selected file flips - `components` is a pure
+  // function of baseDir, so the same key always yields an equivalent tree.
+  const rendered = useMemo(() => {
+    const key = treeCacheKey(source, baseDir);
+    const hit = treeCache.get(key);
+    if (hit) {
+      // Refresh insertion order (approximate LRU) on reuse.
+      treeCache.delete(key);
+      treeCache.set(key, hit);
+      return hit;
+    }
+    const tree = (
+      <ReactMarkdown
+        remarkPlugins={REMARK}
+        rehypePlugins={REHYPE}
+        components={components}
+      >
+        {source}
+      </ReactMarkdown>
+    );
+    treeCache.set(key, tree);
+    while (treeCache.size > TREE_CACHE_CAP) {
+      const oldest = treeCache.keys().next().value;
+      if (oldest === undefined) break;
+      treeCache.delete(oldest);
+    }
+    return tree;
+  }, [source, baseDir, components]);
 
   return (
     <div className="md-preview-wrap" ref={ref} key={`${source}${terms.join("")}`}>
