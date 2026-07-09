@@ -1139,6 +1139,7 @@ function FolderPreview({ result, onLaunch, quicklook }: { result: SearchResult; 
 function MarkdownPreview({ path, terms }: { path: string; terms: string[] }) {
   const [source, setSource] = useState<string | null>(null);
   const baseDir = path.slice(0, path.lastIndexOf("/")) || "/";
+  const termsKey = terms.join(" ");
 
   useEffect(() => {
     let cancelled = false;
@@ -1152,7 +1153,9 @@ function MarkdownPreview({ path, terms }: { path: string; terms: string[] }) {
         .catch(() => { if (!cancelled) setSource(""); });
     }, 40);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [path, terms]);
+    // termsKey stands in for the terms array (stable string identity) - a fresh
+    // [] each parent render must not re-fire this fetch and churn the preview.
+  }, [path, termsKey]);
 
   if (source === null) return <div className="text-preview-wrap" />;
 

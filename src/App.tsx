@@ -289,17 +289,31 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     let active = true;
     let doneTimer: ReturnType<typeof setTimeout> | undefined;
-    listen<{ indexed: number; total: number }>("content-index-progress", event => {
-      const p = event.payload;
+    // The backend emits progress every 10 files via a parallel walk - hundreds
+    // per second on a large index. Coalesce to one state write per frame so the
+    // storm can't peg the main thread re-rendering the tree (e.g. an open
+    // markdown preview). The completion event still lands immediately so the bar
+    // always resolves.
+    let pending: { indexed: number; total: number } | null = null;
+    let raf = 0;
+    const flush = () => {
+      raf = 0;
+      if (!pending) return;
+      const p = pending;
+      pending = null;
       setIndexingProgress(p);
       clearTimeout(doneTimer);
       if (p.indexed >= p.total && p.total > 0) {
         doneTimer = setTimeout(() => setIndexingProgress(null), 150);
       }
+    };
+    listen<{ indexed: number; total: number }>("content-index-progress", event => {
+      pending = event.payload;
+      if (!raf) raf = requestAnimationFrame(flush);
     }).then(fn => {
       if (active) unlisten = fn; else fn();
     });
-    return () => { active = false; clearTimeout(doneTimer); unlisten?.(); };
+    return () => { active = false; if (raf) cancelAnimationFrame(raf); clearTimeout(doneTimer); unlisten?.(); };
   }, []);
 
   useTauriListener("window-show", () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
@@ -73,16 +73,17 @@ function MarkdownImage({ src, alt, baseDir }: { src?: string; alt?: string; base
     // content) - render nothing rather than probing a bogus path.
     if (!baseDir) { setResolved(null); return; }
     let cancelled = false;
+    let objectUrl: string | null = null;
     setResolved(null);
     const abs = src.startsWith("/") ? src : `${baseDir}/${src}`;
     invoke<ArrayBuffer>("render_image_preview", { path: abs })
       .then(buf => {
         if (cancelled) return;
-        const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
-        setResolved(url);
+        objectUrl = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
+        setResolved(objectUrl);
       })
       .catch(() => { if (!cancelled) setResolved(null); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [src, baseDir, isRemote]);
 
   if (!resolved) return null;
@@ -108,7 +109,7 @@ function makeMdAnchor(baseDir: string): Components["a"] {
   };
 }
 
-export default function MarkdownView({
+function MarkdownView({
   source,
   baseDir = "",
   terms = [],
@@ -124,15 +125,25 @@ export default function MarkdownView({
     a: makeMdAnchor(baseDir),
   }), [baseDir]);
 
+  // Parsing + highlighting the whole document is ~12ms; memoize the rendered
+  // tree on (source, components) so incidental parent re-renders (a
+  // content-index-progress storm, say) don't re-run the remark/rehype/hljs
+  // pipeline and peg the main thread.
+  const rendered = useMemo(() => (
+    <ReactMarkdown
+      remarkPlugins={REMARK}
+      rehypePlugins={REHYPE}
+      components={components}
+    >
+      {source}
+    </ReactMarkdown>
+  ), [source, components]);
+
   return (
     <div className="md-preview-wrap" ref={ref} key={`${source}${terms.join("")}`}>
-      <ReactMarkdown
-        remarkPlugins={REMARK}
-        rehypePlugins={REHYPE}
-        components={components}
-      >
-        {source}
-      </ReactMarkdown>
+      {rendered}
     </div>
   );
 }
+
+export default memo(MarkdownView);
