@@ -381,3 +381,35 @@ export interface DepStatus {
   available: boolean;
   install_hint: string;
 }
+
+/** Normalized [x, y, w, h], 0..1, top-left origin (same space as the PDF/OCR
+ *  highlight rects). Mirrors the backend's `[f32; 4]`. */
+export type NormRect = [number, number, number, number];
+
+/** One word of a PDF page text layer, from `pdf_text_layer` (preview.rs). */
+export interface PdfTextWord {
+  text: string;
+  rect: NormRect;
+}
+
+export interface PdfTextLine {
+  rect: NormRect;
+  words: PdfTextWord[];
+}
+
+export interface PdfTextLayerData {
+  /** Page size in PDF points (aspect/font sizing; rects are normalized). */
+  page_w: number;
+  page_h: number;
+  /** The extraction hit its char/word caps; the layer covers a prefix. */
+  truncated: boolean;
+  lines: PdfTextLine[];
+}
+
+/** One OCR'd word, from `image_text_layer` / `clipboard_image_text_layer`.
+ *  Original case; group by `line` to reconstruct reading order. */
+export interface OcrWord {
+  text: string;
+  rect: NormRect;
+  line: number;
+}

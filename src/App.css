@@ -1237,6 +1237,141 @@ kbd {
   }
 }
 
+/* ── virtual text selection (src/selection/) ─────────────────────────────────
+   The overlay is portaled INTO the selectable root so rects ride its scroll
+   and zoom transforms. A zero-size anchor keeps it out of layout; children
+   position absolutely from the root's content origin. */
+[data-selectable] {
+  cursor: text;
+  /* Anchor for the portaled .sel-overlay (later rules may override for
+     layers that are themselves absolutely positioned). */
+  position: relative;
+}
+
+/* A zero-size anchor at the root's content origin; children position in content
+   coordinates and scroll with the content (the root's own overflow clips a
+   selection scrolled out of view). Kept out of layout so it never affects the
+   preview. The popover is a sibling in the same content space. */
+.sel-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.sel-rect {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 2px;
+}
+
+/* White PDF pages / images: multiply keeps dark glyphs legible through the
+   tint (same trick as .pdf-hl-box). */
+[data-sel-blend="multiply"] .sel-rect {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  mix-blend-mode: multiply;
+}
+
+/* Keyboard select-mode caret. */
+.sel-caret {
+  position: absolute;
+  width: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--accent) 50%, transparent);
+  animation: sel-caret-blink 1.1s steps(1) infinite;
+}
+
+.sel-caret[data-moving] {
+  animation: none;
+}
+
+@keyframes sel-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Invisible geometry text layers over PDF pages / images (TextLayer.tsx).
+   The layer is hit-transparent - only line boxes take pointer events, so
+   drags on page whitespace keep panning and the I-beam appears exactly over
+   text (the Live Text signature on images). */
+.pdf-text-layer,
+.ocr-text-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  /* No overflow:hidden here - the selection popover is portaled into this root
+     and must be able to render past the page edge (words are positioned within
+     0..1, so they don't overflow meaningfully anyway). */
+}
+
+.geo-line {
+  position: absolute;
+  pointer-events: auto;
+  cursor: text;
+}
+
+.geo-word {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  color: transparent;
+  white-space: pre;
+  transform-origin: 0 0;
+  font-family: sans-serif;
+}
+
+/* Selection action pill: Copy · Search · smart entity chip. */
+.sel-popover {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+  animation: sel-pop-in 0.12s ease-out both;
+  white-space: nowrap;
+}
+
+.sel-popover-btn {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font: 500 11px/1.4 "Inter", system-ui, sans-serif;
+  color: var(--fg-mute);
+  cursor: pointer;
+}
+
+.sel-popover-btn:hover {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+.sel-popover-entity {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  color: var(--accent);
+}
+
+@keyframes sel-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .pdf-preview-msg {
   font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg-dim);

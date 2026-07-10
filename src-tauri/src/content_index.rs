@@ -15,11 +15,19 @@ use std::cell::RefCell;
 static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// One OCR'd word and its normalized bounding box `[x, y, w, h]` (0..1, top-left
-/// origin) within the source image. `word` is lowercased for case-insensitive
-/// prefix matching at preview time. Produced by `parse_tsv`, stored in
-/// `ocr_word_box` when `ocr_highlight_cache` is on, and read back by the preview's
-/// `image_match_rects`.
-pub(crate) type WordBox = (String, [f32; 4]);
+/// origin) within the source image. `text` keeps Tesseract's original case —
+/// selection copy must yield "London", not "london"; matching folds at compare
+/// time via `content_match::match_key`. `line` is the 0-based line ordinal
+/// within the image (block/paragraph/line changes in the TSV), so the frontend
+/// can rebuild selection text. Produced by `parse_tsv`, stored in
+/// `ocr_word_box` when `ocr_highlight_cache` is on, and read back by the
+/// preview's `image_match_rects` / `image_text_layer`.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct OcrWord {
+    pub text: String,
+    pub rect: [f32; 4],
+    pub line: u32,
+}
 
 /// Common English stopwords stripped from a content query when meaningful terms
 /// remain. A stopword matches nearly every document, and FTS5 bm25 has no top-k
@@ -143,7 +151,7 @@ struct FileUpdate {
     pages: Option<Vec<String>>,
     /// OCR word boxes for an image, captured only when `ocr_highlight_cache` is on.
     /// Empty otherwise. Written to `ocr_word_box` so previews skip per-open OCR.
-    boxes: Vec<WordBox>,
+    boxes: Vec<OcrWord>,
     mtime: i64,
     size: u64,
 }
@@ -163,7 +171,8 @@ impl ContentIndex {
         // Schema version, bumped whenever the on-disk layout changes. A mismatch drops
         // every table and recreates them, which triggers a one-time full reindex.
         //   v2: added `pdf_page_fts` (per-page PDF text, for match-page preview).
-        const SCHEMA_VERSION: i64 = 2;
+        //   v3: `ocr_word_box` gained `line`; `word` now keeps original case.
+        const SCHEMA_VERSION: i64 = 3;
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap_or(0);
@@ -171,7 +180,8 @@ impl ContentIndex {
             conn.execute_batch(
                 "DROP TABLE IF EXISTS file_meta;
                  DROP TABLE IF EXISTS content_fts;
-                 DROP TABLE IF EXISTS pdf_page_fts;",
+                 DROP TABLE IF EXISTS pdf_page_fts;
+                 DROP TABLE IF EXISTS ocr_word_box;",
             )?;
         }
 
@@ -198,7 +208,8 @@ impl ContentIndex {
              CREATE TABLE IF NOT EXISTS ocr_word_box (
                  path TEXT NOT NULL,
                  word TEXT NOT NULL,
-                 x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL
+                 x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,
+                 line INTEGER NOT NULL DEFAULT 0
              );
              CREATE INDEX IF NOT EXISTS idx_ocr_word_box_path ON ocr_word_box(path);",
         )?;
@@ -278,10 +289,11 @@ impl ContentIndex {
                     }
                 }
                 // Word boxes (only present when ocr_highlight_cache is on, for images).
-                for (word, [x, y, w, h]) in &u.boxes {
+                for b in &u.boxes {
+                    let [x, y, w, h] = b.rect;
                     tx.execute(
-                        "INSERT INTO ocr_word_box(path, word, x, y, w, h) VALUES (?, ?, ?, ?, ?, ?)",
-                        params![u.path, word, x, y, w, h],
+                        "INSERT INTO ocr_word_box(path, word, x, y, w, h, line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        params![u.path, b.text, x, y, w, h, b.line],
                     )?;
                 }
             }
@@ -472,10 +484,12 @@ impl ContentIndex {
     }
 
     /// Cached OCR word boxes for an image path, for the preview's `image_match_rects`
-    /// fast path. `None` means the path is not indexed (so the caller may fall back to
-    /// on-demand OCR); `Some(vec)` — possibly empty — means it is indexed and these are
-    /// all its boxes (empty = OCR found no text, so no fallback is warranted).
-    pub fn cached_word_boxes(&self, path: &str) -> Option<Vec<WordBox>> {
+    /// / `image_text_layer` fast paths. `None` means the path is not indexed (so the
+    /// caller may fall back to on-demand OCR); `Some(vec)` — possibly empty — means it
+    /// is indexed and these are all its boxes (empty = OCR found no text, so no
+    /// fallback is warranted). `ORDER BY rowid` preserves insertion (reading) order,
+    /// which selection-text reconstruction depends on.
+    pub fn cached_word_boxes(&self, path: &str) -> Option<Vec<OcrWord>> {
         let db = util::lock(&self.db);
         let indexed = db
             .query_row("SELECT 1 FROM file_meta WHERE path = ? LIMIT 1", [path], |_| Ok(()))
@@ -484,19 +498,20 @@ impl ContentIndex {
             return None;
         }
         let mut stmt = db
-            .prepare("SELECT word, x, y, w, h FROM ocr_word_box WHERE path = ?")
+            .prepare("SELECT word, x, y, w, h, line FROM ocr_word_box WHERE path = ? ORDER BY rowid")
             .ok()?;
         let rows = stmt
             .query_map([path], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    [
+                Ok(OcrWord {
+                    text: r.get::<_, String>(0)?,
+                    rect: [
                         r.get::<_, f64>(1)? as f32,
                         r.get::<_, f64>(2)? as f32,
                         r.get::<_, f64>(3)? as f32,
                         r.get::<_, f64>(4)? as f32,
                     ],
-                ))
+                    line: r.get::<_, i64>(5)? as u32,
+                })
             })
             .ok()?;
         Some(rows.filter_map(|r| r.ok()).collect())
@@ -554,27 +569,14 @@ fn ocr_file(path: &str, lang: &str) -> Result<String, String> {
 
 /// OCR an image, returning both its confidence-filtered text and its word boxes
 /// in one pass (both from the TSV layout). Used during indexing when
-/// `ocr_highlight_cache` is on, so the boxes land in `ocr_word_box`.
-fn ocr_file_text_and_boxes(path: &str, lang: &str) -> Result<(String, Vec<WordBox>), String> {
+/// `ocr_highlight_cache` is on (so the boxes land in `ocr_word_box`) and by the
+/// preview's on-demand OCR worker, which inits that thread's own `LEPTESS`.
+pub(crate) fn ocr_file_text_and_boxes(path: &str, lang: &str) -> Result<(String, Vec<OcrWord>), String> {
     with_leptess(lang, |api| {
         api.set_image(path).map_err(|e| format!("{e:?}"))?;
         let tsv = api.get_tsv_text(0).map_err(|e| format!("{e:?}"))?;
         let (w, h) = api.get_image_dimensions().unwrap_or((0, 0));
         Ok(parse_tsv(&tsv, w, h))
-    })
-}
-
-/// OCR an image for its word boxes only (no text), for the preview's on-demand
-/// highlight path when boxes aren't cached. Runs on the caller's thread (the
-/// preview OCR worker), so it inits that thread's own `LEPTESS`.
-pub(crate) fn ocr_image_boxes(path: &str, lang: &str) -> Result<Vec<WordBox>, String> {
-    with_leptess(lang, |api| {
-        api.set_image(path).map_err(|e| format!("{e:?}"))?;
-        let (w, h) = api
-            .get_image_dimensions()
-            .ok_or_else(|| "no image dimensions".to_string())?;
-        let tsv = api.get_tsv_text(0).map_err(|e| format!("{e:?}"))?;
-        Ok(parse_tsv(&tsv, w, h).1)
     })
 }
 
@@ -586,10 +588,11 @@ const MIN_WORD_CONFIDENCE: f32 = 50.0;
 /// Single pass over Tesseract TSV → (reconstructed text, normalized word boxes),
 /// both filtered to word-level rows (`level`==5) at or above `MIN_WORD_CONFIDENCE`
 /// with non-empty text. Text joins kept words with a space, breaking to a newline
-/// when the block/paragraph/line index changes. Boxes map the pixel
-/// `left/top/width/height` (top-left origin) into 0..1 of the source image; they
-/// need valid image dims, the text does not.
-fn parse_tsv(tsv: &str, img_w: u32, img_h: u32) -> (String, Vec<WordBox>) {
+/// when the block/paragraph/line index changes; boxes carry the same break as a
+/// 0-based `line` ordinal. Box text keeps original case (matching folds at compare
+/// time). Boxes map the pixel `left/top/width/height` (top-left origin) into 0..1
+/// of the source image; they need valid image dims, the text does not.
+fn parse_tsv(tsv: &str, img_w: u32, img_h: u32) -> (String, Vec<OcrWord>) {
     // Defensive cap: a pathological image can't blow up memory / the DB row count.
     const MAX_BOXES: usize = 2000;
     let dims_ok = img_w != 0 && img_h != 0;
@@ -597,6 +600,7 @@ fn parse_tsv(tsv: &str, img_w: u32, img_h: u32) -> (String, Vec<WordBox>) {
     let mut text = String::new();
     let mut boxes = Vec::new();
     let mut cur_line: Option<(&str, &str, &str)> = None;
+    let mut line_ord: u32 = 0;
     for line in tsv.lines() {
         let cols: Vec<&str> = line.split('\t').collect();
         // Columns: level page block par line word left top width height conf text.
@@ -611,10 +615,16 @@ fn parse_tsv(tsv: &str, img_w: u32, img_h: u32) -> (String, Vec<WordBox>) {
             continue;
         }
 
-        // Text: newline when block/paragraph/line changes, else a space.
+        // Text: newline when block/paragraph/line changes, else a space. The box
+        // line ordinal advances with the same breaks so text and boxes agree.
         let key = (cols[2], cols[3], cols[4]);
         if !text.is_empty() {
-            text.push(if cur_line == Some(key) { ' ' } else { '\n' });
+            if cur_line == Some(key) {
+                text.push(' ');
+            } else {
+                text.push('\n');
+                line_ord += 1;
+            }
         }
         cur_line = Some(key);
         text.push_str(word);
@@ -628,15 +638,16 @@ fn parse_tsv(tsv: &str, img_w: u32, img_h: u32) -> (String, Vec<WordBox>) {
                 cols[9].parse::<f32>(),
             ) {
                 if w > 0.0 && h > 0.0 {
-                    boxes.push((
-                        word.to_lowercase(),
-                        [
+                    boxes.push(OcrWord {
+                        text: word.to_string(),
+                        rect: [
                             (left / fw).clamp(0.0, 1.0),
                             (top / fh).clamp(0.0, 1.0),
                             (w / fw).clamp(0.0, 1.0),
                             (h / fh).clamp(0.0, 1.0),
                         ],
-                    ));
+                        line: line_ord,
+                    });
                 }
             }
         }
@@ -644,20 +655,16 @@ fn parse_tsv(tsv: &str, img_w: u32, img_h: u32) -> (String, Vec<WordBox>) {
     (text, boxes)
 }
 
-/// OCR raw image bytes (e.g. a clipboard image). `leptess`/leptonica only reads
-/// from a file path, so we spill the bytes to a unique temp file first; the
-/// format is sniffed from content, so the extension is irrelevant. The temp file
-/// is always removed, including on error.
-pub(crate) fn ocr_bytes(bytes: &[u8], lang: &str) -> Result<String, String> {
-    let tmp_path = std::env::temp_dir().join(format!(
-        "portunus_clipocr_{}_{}",
-        std::process::id(),
-        TMP_COUNTER.fetch_add(1, Ordering::Relaxed),
-    ));
-    std::fs::write(&tmp_path, bytes).map_err(|e| e.to_string())?;
-    let result = ocr_file(&tmp_path.to_string_lossy(), lang);
-    std::fs::remove_file(&tmp_path).ok();
-    result
+/// OCR raw image bytes (e.g. a clipboard image), returning text + word boxes in
+/// one TSV pass. leptess reads bytes directly (`set_image_from_mem`), so no temp
+/// file; leptonica sniffs the format from content.
+pub(crate) fn ocr_bytes_text_and_boxes(bytes: &[u8], lang: &str) -> Result<(String, Vec<OcrWord>), String> {
+    with_leptess(lang, |api| {
+        api.set_image_from_mem(bytes).map_err(|e| format!("{e:?}"))?;
+        let tsv = api.get_tsv_text(0).map_err(|e| format!("{e:?}"))?;
+        let (w, h) = api.get_image_dimensions().unwrap_or((0, 0));
+        Ok(parse_tsv(&tsv, w, h))
+    })
 }
 
 fn extract_pdf(path: &str, ocr_fallback: bool, lang: &str) -> Result<String, String> {
@@ -735,7 +742,7 @@ const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "tiff",
 /// Extracted text plus, for images when `ocr_highlight_cache` is on, the OCR word
 /// boxes (empty for every other path). Boxes ride alongside text so an image is
 /// OCR'd once at index time, not again for highlight caching.
-fn extract_text(path: &str, cfg: &ContentConfig) -> Result<(String, Vec<WordBox>), String> {
+fn extract_text(path: &str, cfg: &ContentConfig) -> Result<(String, Vec<OcrWord>), String> {
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -1190,4 +1197,55 @@ fn is_event_path_eligible(path: &Path, cfg: &ContentConfig) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod ocr_tests {
+    use super::*;
+
+    // A Tesseract TSV row at word level (level 5). Columns:
+    // level page block par line word left top width height conf text.
+    fn word_row(block: u32, par: u32, line: u32, left: u32, top: u32, conf: f32, text: &str) -> String {
+        format!("5\t1\t{block}\t{par}\t{line}\t1\t{left}\t{top}\t20\t10\t{conf}\t{text}")
+    }
+
+    #[test]
+    fn keeps_original_case_and_line_ordinals() {
+        let tsv = [
+            word_row(1, 1, 1, 0, 0, 90.0, "London"),
+            word_row(1, 1, 1, 30, 0, 90.0, "Bridge"),
+            word_row(1, 1, 2, 0, 20, 90.0, "Falls"),
+        ]
+        .join("\n");
+        let (text, boxes) = parse_tsv(&tsv, 100, 100);
+        assert_eq!(text, "London Bridge\nFalls");
+        assert_eq!(boxes.len(), 3);
+        // Original case preserved (selection copy must not lowercase).
+        assert_eq!(boxes[0].text, "London");
+        // Line ordinal advances only on a block/par/line change.
+        assert_eq!(boxes[0].line, 0);
+        assert_eq!(boxes[1].line, 0);
+        assert_eq!(boxes[2].line, 1);
+    }
+
+    #[test]
+    fn drops_low_confidence_words() {
+        let tsv = [
+            word_row(1, 1, 1, 0, 0, 95.0, "café"),
+            word_row(1, 1, 1, 30, 0, 10.0, "iy"), // below MIN_WORD_CONFIDENCE
+        ]
+        .join("\n");
+        let (text, boxes) = parse_tsv(&tsv, 100, 100);
+        assert_eq!(text, "café");
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].text, "café");
+    }
+
+    #[test]
+    fn no_dimensions_yields_text_but_no_boxes() {
+        let tsv = word_row(1, 1, 1, 0, 0, 90.0, "naïve");
+        let (text, boxes) = parse_tsv(&tsv, 0, 0);
+        assert_eq!(text, "naïve");
+        assert!(boxes.is_empty());
+    }
 }

@@ -173,6 +173,22 @@ fn content_match_keys(words: Vec<String>) -> Vec<String> {
     words.iter().map(|w| content_match::match_key(w)).collect()
 }
 
+/// Evaluate one calculator expression for the selection popover's math chip.
+/// Scoped (no provider fan-out, no query-id plumbing); `None` when the text
+/// isn't calculable or the calc provider is disabled. Sync is fine: fend
+/// carries a 50 ms interrupt and `passes_gate` rejects prose cheaply.
+#[tauri::command]
+fn calc_eval(expr: String, config: tauri::State<ConfigState>) -> Option<String> {
+    let (calc_cfg, enabled) = {
+        let cfg = util::lock(&config);
+        (cfg.calc.clone(), cfg.providers.calc)
+    };
+    if !enabled {
+        return None;
+    }
+    providers::calc::eval_expression(&expr, &providers::calc::currency::shared(), calc_cfg.currency)
+}
+
 #[derive(serde::Serialize, Clone)]
 struct DepStatus {
     /// Stable identifier the frontend can match against (e.g. "dict").
@@ -1022,6 +1038,7 @@ pub fn run() {
             command_used,
             content_match_page,
             content_match_keys,
+            calc_eval,
             launch_app,
             reveal_file,
             hide_window,
@@ -1039,7 +1056,9 @@ pub fn run() {
             // File preview
             preview::render_pdf_page,
             preview::pdf_match_rects,
+            preview::pdf_text_layer,
             preview::image_match_rects,
+            preview::image_text_layer,
             preview::read_text_preview,
             preview::render_image_preview,
             preview::list_folder,
@@ -1047,6 +1066,8 @@ pub fn run() {
             preview::read_spreadsheet_preview,
             // Clipboard provider
             providers::clipboard::paste_clipboard,
+            providers::clipboard::copy_text,
+            providers::clipboard::clipboard_image_text_layer,
             providers::clipboard::decode_clipboard_entry,
             providers::clipboard::clipboard_list,
             providers::clipboard::index_clipboard_ocr,

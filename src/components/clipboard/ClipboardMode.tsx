@@ -5,6 +5,8 @@ import type { ClipboardEntry, ClipboardCapabilities } from "../../types";
 import ClipboardList from "./ClipboardList";
 import ClipboardEntryPreview from "./ClipboardEntryPreview";
 import { getDecoded, evictDecoded } from "./clipboardCache";
+import { selection } from "../../selection/controller";
+import { isCopyKey } from "../../providers/registry";
 import { ClipboardGlyphIcon } from "./clipIcons";
 
 type Filter = "all" | "text" | "image" | "url" | "color";
@@ -182,6 +184,24 @@ export default function ClipboardMode({ query, capabilities, onExit, onClearQuer
       const st = stateRef.current;
       const list = (st.entries ?? []).filter((x) => filterMatch(x, st.filter, st.query));
       const max = Math.max(list.length - 1, 0);
+
+      // Preview text selection: Ctrl+C copies it, Esc dismisses it, and the
+      // select-mode movement keys stay with the selection controller.
+      if (isCopyKey(e) && selection.hasSelection()) {
+        e.preventDefault();
+        selection.copy();
+        return;
+      }
+      if (e.key === "Escape" && (selection.hasSelection() || selection.isKeyboardMode())) {
+        e.preventDefault();
+        selection.clear();
+        return;
+      }
+      if (selection.isKeyboardMode() && (e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End")) return;
+      if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "s" || e.key === "S")) {
+        const root = document.querySelector<HTMLElement>(".clip-preview [data-selectable]");
+        if (selection.enterKeyboardMode(root)) { e.preventDefault(); return; }
+      }
 
       if (e.key === "ArrowDown") { e.preventDefault(); setSelectedIndex((i) => Math.min(i + 1, max)); }
       else if (e.key === "ArrowUp") { e.preventDefault(); setSelectedIndex((i) => Math.max(i - 1, 0)); }

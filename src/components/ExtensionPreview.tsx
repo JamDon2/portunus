@@ -142,13 +142,13 @@ export default function ExtensionPreview({ result }: PreviewProps) {
       // Same scroll container + renderer as the file previews, so extension
       // markdown looks identical to a previewed .md file.
       return (
-        <div className="text-preview-wrap">
+        <div className="text-preview-wrap" data-selectable>
           <MarkdownView source={content.content} />
         </div>
       );
     case "metadata":
       return (
-        <div className="ext-preview">
+        <div className="ext-preview" data-selectable>
           <table className="ext-preview-metadata">
             <tbody>
               {content.items.map((item, i) => (
@@ -187,7 +187,7 @@ export default function ExtensionPreview({ result }: PreviewProps) {
       );
     case "sections":
       return (
-        <div className="ext-preview">
+        <div className="ext-preview" data-selectable>
           {content.items.map((section, i) => (
             <div key={i} className="ext-preview-section">
               {section.heading && (
@@ -217,7 +217,7 @@ export default function ExtensionPreview({ result }: PreviewProps) {
       );
     case "code":
       return (
-        <div className="ext-preview">
+        <div className="ext-preview" data-selectable>
           <pre className="ext-preview-code">{content.content}</pre>
         </div>
       );

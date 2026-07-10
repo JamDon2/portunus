@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ClipboardEntry } from "../../types";
+import { OcrTextLayer } from "../TextLayer";
 import { EnterIcon, CopyIcon, CheckIcon } from "../../icons";
 import { LinkIcon, ClipboardGlyphIcon, ImageGlyphIcon, TextLinesIcon, JsonIcon } from "./clipIcons";
 import { getDecoded, peekDecoded, classifyFullText, textStats, type Decoded } from "./clipboardCache";
@@ -112,11 +113,41 @@ function ImageView({ entry, decoded, showSkeleton, anim }: {
   // Cached swaps ("none") paint instantly with no animation - the headline
   // zero-blank behaviour when flicking between two images.
   const cls = anim === "reveal" ? "pdf-img-revealed" : anim === "fade" ? "clip-img-in" : undefined;
+
+  // Live Text: the OCR layer is positioned to the <img>'s rendered box within
+  // the stage (object-fit letterboxes it). offset* ignore the reveal
+  // animation's transform - same measurement discipline as ImagePreview.
+  const stageRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [imgBox, setImgBox] = useState<{ url: string; l: number; t: number; w: number; h: number } | null>(null);
+  const measureImg = useCallback(() => {
+    const img = imgRef.current;
+    const url = decoded?.kind === "image" ? decoded.url : null;
+    if (!img || !url) { setImgBox(null); return; }
+    const box = { url, l: img.offsetLeft, t: img.offsetTop, w: img.offsetWidth, h: img.offsetHeight };
+    setImgBox(prev => (prev && prev.url === box.url && prev.l === box.l && prev.t === box.t && prev.w === box.w && prev.h === box.h ? prev : box));
+  }, [decoded]);
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const ro = new ResizeObserver(() => measureImg());
+    ro.observe(stage);
+    return () => ro.disconnect();
+  }, [measureImg]);
+
   return (
-    <div className="clip-img-stage">
+    <div className="clip-img-stage" ref={stageRef}>
       {showSkeleton && <div className="pdf-skeleton" />}
       {decoded?.kind === "image" && (
-        <img key={decoded.url} src={decoded.url} alt="clipboard" className={cls} draggable={false} />
+        <img key={decoded.url} ref={imgRef} src={decoded.url} alt="clipboard" className={cls} draggable={false} onLoad={measureImg} />
+      )}
+      {decoded?.kind === "image" && imgBox && imgBox.url === decoded.url && (
+        <div
+          className="img-text-layer-host"
+          style={{ position: "absolute", left: imgBox.l, top: imgBox.t, width: imgBox.w, height: imgBox.h, pointerEvents: "none", zIndex: 2 }}
+        >
+          <OcrTextLayer clipboardId={entry.id} />
+        </div>
       )}
       {meta && <span className="pdf-page-label">{meta}</span>}
     </div>
@@ -286,8 +317,8 @@ export default function ClipboardEntryPreview({ entry, smartPaste, onPaste, onCo
     body =
       fullType === "color" ? <ColorView value={text.trim()} /> :
       fullType === "url" ? <UrlView url={text.trim()} /> :
-      fullType === "json" ? <div className="clip-text-wrap"><JsonView text={text} /></div> :
-      <div className="clip-text-wrap"><TextView text={text} /></div>;
+      fullType === "json" ? <div className="clip-text-wrap" data-selectable><JsonView text={text} /></div> :
+      <div className="clip-text-wrap" data-selectable><TextView text={text} /></div>;
   } else {
     body = <div className="clipboard-preview-empty">Loading…</div>;
   }

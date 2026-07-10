@@ -6,6 +6,8 @@ import { formatBytes, formatDate, fileKind, textPreviewLang, isImagePreviewable,
 import { ColoredIconsContext } from "../coloredIcons";
 import { cellMatches, tokenize, keyOf, ensureKeys, loadQueryKeys } from "../highlight";
 import MarkdownView from "./MarkdownView";
+import { selection } from "../selection/controller";
+import { PdfTextLayer, OcrTextLayer } from "./TextLayer";
 import { useTermHighlight } from "../hooks/useTermHighlight";
 
 /** Splits text into nodes with matched words wrapped in `<mark class="preview-hl">`.
@@ -454,6 +456,8 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || !document.hasFocus()) return;
+      // In keyboard select mode Ctrl+←/→ means word-move, not page-flip.
+      if (selection.isKeyboardMode()) return;
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         // While a Quicklook PDF is open, the background side preview ignores page-nav.
         if (!quicklook && pdfQuicklookMounted > 0) return;
@@ -509,10 +513,14 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
   const panCleanupRef = useRef<(() => void) | null>(null);
   useEffect(() => () => panCleanupRef.current?.(), []);
 
-  // Drag-to-pan the page. Left button only, and only when scrollable so a plain click
-  // still falls through. Listeners live on window for the drag's duration.
+  // Drag-to-pan the page. Left-drag on page whitespace (drags starting on the
+  // text layer select instead), or middle-drag anywhere. Only when scrollable
+  // so a plain click still falls through. Listeners live on window for the
+  // drag's duration.
   const onPanStart = (e: ReactMouseEvent) => {
-    if (e.button !== 0 || !isScrollable) return;
+    if (!isScrollable) return;
+    const overText = (e.target as HTMLElement).closest(".pdf-text-layer") != null;
+    if (e.button === 0 ? overText : e.button !== 1) return;
     e.preventDefault();
     const startX = e.clientX, startY = e.clientY;
     const start = viewRef.current;
@@ -566,6 +574,7 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
                   }
                 }}
               />
+              <PdfTextLayer path={path} page={cur} scale={view.z} />
               <PdfHighlightLayer rects={rects} />
             </span>
           )}
@@ -613,6 +622,7 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
               }
             }}
           />
+          <PdfTextLayer path={path} page={cur} />
           <PdfHighlightLayer rects={rects} />
         </span>
       )}
@@ -799,6 +809,14 @@ function ImagePreview({ path, quicklook = false, terms = [], highlight = true }:
         />
       )}
       {src && imgBox && imgBox.src === src && (
+        <div
+          className="img-text-layer-host"
+          style={{ position: "absolute", left: imgBox.l, top: imgBox.t, width: imgBox.w, height: imgBox.h, pointerEvents: "none" }}
+        >
+          <OcrTextLayer path={path} />
+        </div>
+      )}
+      {src && imgBox && imgBox.src === src && (
         <PdfHighlightLayer
           rects={rects}
           style={{ left: imgBox.l, top: imgBox.t, width: imgBox.w, height: imgBox.h, right: "auto", bottom: "auto" }}
@@ -936,7 +954,7 @@ function DataTable({ rows, terms }: { rows: string[][]; terms: string[] }) {
 
   const [header, ...body] = rows;
   return (
-    <div className="text-preview-wrap">
+    <div className="text-preview-wrap" data-selectable>
       <table className="csv-preview">
         <thead>
           <tr>
@@ -994,7 +1012,7 @@ function OfficeTextPreview({ path, terms }: { path: string; terms: string[] }) {
 
   const baseDir = path.slice(0, path.lastIndexOf("/")) || "/";
   return (
-    <div className="text-preview-wrap">
+    <div className="text-preview-wrap" data-selectable>
       <MarkdownView source={source} baseDir={baseDir} terms={terms} />
     </div>
   );
@@ -1160,7 +1178,7 @@ function MarkdownPreview({ path, terms }: { path: string; terms: string[] }) {
   if (source === null) return <div className="text-preview-wrap" />;
 
   return (
-    <div className="text-preview-wrap">
+    <div className="text-preview-wrap" data-selectable>
       <MarkdownView source={source} baseDir={baseDir} terms={terms} />
     </div>
   );
@@ -1220,7 +1238,7 @@ function TextPreview({ path, lang, terms }: { path: string; lang: string; terms:
   if (html === null) return <div className="text-preview-wrap" />;
 
   return (
-    <div className="text-preview-wrap">
+    <div className="text-preview-wrap" data-selectable>
       <pre
         ref={ref}
         className="text-preview-code hljs"

@@ -1,7 +1,8 @@
-import { ReactNode } from "react";
+import { ReactNode, useSyncExternalStore } from "react";
 import { SearchResult } from "../types";
 import { EnterIcon, DeleteIcon } from "../icons";
 import { isPreviewable } from "../utils";
+import { selection } from "../selection/controller";
 
 interface Props {
   selected: SearchResult | null;
@@ -37,12 +38,27 @@ function hints(
   clipboardIdle: boolean,
   pdfHighlight: boolean,
   actionPickerOpen: boolean,
+  hasSelection: boolean,
+  selectMode: boolean,
 ): ReactNode {
   const k = selected?.kind;
 
   if (actionPickerOpen) return <>
     <span className="hint"><kbd><EnterIcon /></kbd> run</span>
     <span className="hint"><kbd>Esc</kbd> back</span>
+  </>;
+
+  // An active preview text selection retargets the copy/search chords.
+  if (selectMode) return <>
+    <span className="hint"><kbd>←→↑↓</kbd> move</span>
+    <span className="hint"><kbd>shift</kbd> extend</span>
+    <span className="hint"><kbd>ctrl</kbd><kbd>C</kbd> copy</span>
+    <span className="hint"><kbd>Esc</kbd> done</span>
+  </>;
+  if (hasSelection) return <>
+    <span className="hint"><kbd>ctrl</kbd><kbd>C</kbd> copy</span>
+    <span className="hint"><kbd>ctrl</kbd><kbd>F</kbd> search</span>
+    <span className="hint"><kbd>Esc</kbd> dismiss</span>
   </>;
   const isPdf = selected?.title.toLowerCase().endsWith(".pdf") ?? false;
   const Highlight = () => (
@@ -113,5 +129,8 @@ function hints(
 }
 
 export default function FooterHints({ selected, quicklookOpen = false, clipboardMode = false, contentMode = false, smartPaste = false, clipboardIdle = false, pdfHighlight = true, actionPickerOpen = false }: Props) {
-  return <div className="hints">{hints(selected, quicklookOpen, clipboardMode, contentMode, smartPaste, clipboardIdle, pdfHighlight, actionPickerOpen)}</div>;
+  // Subscribed here (not prop-drilled): the selection is orthogonal to what
+  // App knows about, and the bar must react in clipboard mode too.
+  const sel = useSyncExternalStore(selection.subscribe, selection.getSnapshot);
+  return <div className="hints">{hints(selected, quicklookOpen, clipboardMode, contentMode, smartPaste, clipboardIdle, pdfHighlight, actionPickerOpen, sel.range != null, sel.keyboard)}</div>;
 }

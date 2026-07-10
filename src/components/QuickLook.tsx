@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { getPreview } from '../providers/registry';
+import { selection } from '../selection/controller';
 import type { SearchResult } from '../types';
 
 interface Props {
@@ -32,6 +33,9 @@ export default function QuickLook({ result, onLaunch, onClose, terms, highlight 
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Keyboard select mode owns the movement keys (registered-later capture
+      // listener; this handler would otherwise fire first and scroll instead).
+      if (selection.isKeyboardMode()) return;
       // Don't hijack Ctrl/Meta/Alt combos - those drive PDF page-flip & zoom.
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const vp = innerRef.current?.querySelector<HTMLElement>(VIEWPORT_SELECTOR);

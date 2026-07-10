@@ -8,6 +8,34 @@ use tauri::Manager;
 type RenderReply = tokio::sync::oneshot::Sender<Result<(Vec<u8>, u32), String>>;
 /// Reply for a rects job: normalized [x, y, w, h] boxes (top-left origin, 0..1).
 type RectsReply = tokio::sync::oneshot::Sender<Result<Vec<[f32; 4]>, String>>;
+/// Reply for a text-layer job: the page's selectable text geometry.
+type TextLayerReply = tokio::sync::oneshot::Sender<Result<PdfTextLayer, String>>;
+
+/// One selectable word of a PDF page, `rect` normalized 0..1 top-left (same
+/// space as the highlight boxes, so the frontend overlays it at any zoom).
+#[derive(serde::Serialize)]
+pub struct PdfTextWord {
+    pub text: String,
+    pub rect: [f32; 4],
+}
+
+/// One line of a PDF page text layer: its bounding `rect` plus its words.
+#[derive(serde::Serialize)]
+pub struct PdfTextLine {
+    pub rect: [f32; 4],
+    pub words: Vec<PdfTextWord>,
+}
+
+/// A PDF page's text layer, for the frontend's invisible selectable overlay.
+/// `page_w`/`page_h` are PDF points (aspect/font sizing); rects are normalized.
+/// `truncated` marks a page whose extraction hit the char/word caps.
+#[derive(serde::Serialize)]
+pub struct PdfTextLayer {
+    pub page_w: f32,
+    pub page_h: f32,
+    pub truncated: bool,
+    pub lines: Vec<PdfTextLine>,
+}
 
 /// Work for the single pdfium-bound worker thread. pdfium is not `Send` and is
 /// bound once per thread, so both rasterizing and text-layer queries share this
@@ -17,6 +45,8 @@ enum PdfJob {
     Render(String, u32, u32, RenderReply),
     /// (path, 0-based page index, search terms, reply).
     Rects(String, u32, Vec<String>, RectsReply),
+    /// (path, 0-based page index, reply) — full selectable text layer.
+    TextLayer(String, u32, TextLayerReply),
 }
 
 pub struct PdfWorkerHandle {
@@ -169,6 +199,13 @@ fn start_pdf_worker(shared: SharedConfig) -> PdfWorkerHandle {
                     };
                     let _ = reply.send(result);
                 }
+                PdfJob::TextLayer(path, page_idx, reply) => {
+                    let result = match &pdfium {
+                        Err(msg) => Err(msg.clone()),
+                        Ok(pdfium) => page_text_layer(pdfium, &path, page_idx, log),
+                    };
+                    let _ = reply.send(result);
+                }
             }
         }
     });
@@ -180,66 +217,129 @@ pub fn setup(app: &tauri::AppHandle, shared: SharedConfig) {
     app.manage(start_image_ocr_worker());
 }
 
-// ── image OCR highlight worker ──────────────────────────────────────────────────
+// ── image OCR worker ──────────────────────────────────────────────────────────
 
-type ImageRectsReply = tokio::sync::oneshot::Sender<Result<Vec<[f32; 4]>, String>>;
+use crate::content_index::OcrWord;
 
-struct ImageOcrJob {
-    path: String,
-    needles: Vec<String>,
-    lang: String,
-    /// Request generation; the worker skips a job superseded by a newer one.
-    generation: u64,
-    reply: ImageRectsReply,
+/// What an OCR job should produce. One serialized worker/queue/generation
+/// counter serves highlight boxes (search), file text layers, and clipboard
+/// text layers (Live Text), so they never OCR concurrently.
+enum ImageOcrOp {
+    /// Match `needles` against the image's OCR words → highlight rects.
+    MatchRects { path: String, needles: Vec<String> },
+    /// Full selectable text layer of an image file.
+    TextLayerFile { path: String },
+    /// Full selectable text layer of decoded image bytes (clipboard entry).
+    TextLayerBytes { bytes: Vec<u8> },
 }
 
-/// Single-thread OCR worker for on-demand image highlight boxes. Tesseract is far
-/// heavier than the PDF text-layer path, so it gets its own thread (off tokio's
-/// blocking pool and off the indexer) and coalesces requests: only the newest
-/// pending generation actually OCRs, so arrow-keying through image results doesn't
-/// queue an OCR per selection (paired with the frontend's debounce).
+enum ImageOcrOut {
+    Rects(Vec<[f32; 4]>),
+    Words(Vec<OcrWord>),
+}
+
+impl ImageOcrOp {
+    /// Coalescing lane: highlight boxes and Live Text are distinct consumers
+    /// that may fire for the SAME image at once, so they must not supersede each
+    /// other. Each lane has its own generation counter.
+    fn lane(&self) -> usize {
+        match self {
+            ImageOcrOp::MatchRects { .. } => 0,
+            ImageOcrOp::TextLayerFile { .. } | ImageOcrOp::TextLayerBytes { .. } => 1,
+        }
+    }
+}
+
+struct ImageOcrJob {
+    op: ImageOcrOp,
+    lang: String,
+    /// Coalescing lane (see `ImageOcrOp::lane`) and this request's generation
+    /// within it; the worker skips a job superseded by a newer one in its lane.
+    lane: usize,
+    generation: u64,
+    reply: tokio::sync::oneshot::Sender<Result<ImageOcrOut, String>>,
+}
+
+/// Single-thread OCR worker for on-demand image OCR. Tesseract is far heavier
+/// than the PDF text-layer path, so it gets its own thread (off tokio's blocking
+/// pool and off the indexer) and coalesces requests per lane: only the newest
+/// pending generation in a lane actually OCRs, so arrow-keying through image
+/// results doesn't queue an OCR per selection (paired with the frontend's
+/// debounce). Highlight and Live Text use separate lanes so a preview needing
+/// both doesn't cancel one with the other.
 pub struct ImageOcrHandle {
     tx: std::sync::mpsc::SyncSender<ImageOcrJob>,
-    generation: Arc<AtomicU64>,
+    generations: [Arc<AtomicU64>; 2],
 }
 
 fn start_image_ocr_worker() -> ImageOcrHandle {
     let (tx, rx) = std::sync::mpsc::sync_channel::<ImageOcrJob>(8);
-    let generation = Arc::new(AtomicU64::new(0));
-    let worker_gen = Arc::clone(&generation);
+    let generations = [Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0))];
+    let worker_gens = generations.clone();
     std::thread::spawn(move || {
         while let Ok(job) = rx.recv() {
-            // Superseded by a newer request: reply empty (the awaiting frontend has
-            // already moved on / cancelled) without paying for the OCR.
-            if job.generation < worker_gen.load(Ordering::Acquire) {
-                let _ = job.reply.send(Ok(Vec::new()));
+            // Superseded by a newer request in the same lane: reply empty (the
+            // awaiting frontend has already moved on) without paying for the OCR.
+            if job.generation < worker_gens[job.lane].load(Ordering::Acquire) {
+                let empty = match job.op {
+                    ImageOcrOp::MatchRects { .. } => ImageOcrOut::Rects(Vec::new()),
+                    _ => ImageOcrOut::Words(Vec::new()),
+                };
+                let _ = job.reply.send(Ok(empty));
                 continue;
             }
-            let result = crate::content_index::ocr_image_boxes(&job.path, &job.lang)
-                .map(|words| match_word_boxes(&words, &job.needles));
+            let result = match job.op {
+                ImageOcrOp::MatchRects { path, needles } => {
+                    crate::content_index::ocr_file_text_and_boxes(&path, &job.lang)
+                        .map(|(_, words)| ImageOcrOut::Rects(match_word_boxes(&words, &needles)))
+                }
+                ImageOcrOp::TextLayerFile { path } => {
+                    crate::content_index::ocr_file_text_and_boxes(&path, &job.lang)
+                        .map(|(_, words)| ImageOcrOut::Words(words))
+                }
+                ImageOcrOp::TextLayerBytes { bytes } => {
+                    crate::content_index::ocr_bytes_text_and_boxes(&bytes, &job.lang)
+                        .map(|(_, words)| ImageOcrOut::Words(words))
+                }
+            };
             let _ = job.reply.send(result);
         }
     });
-    ImageOcrHandle { tx, generation }
+    ImageOcrHandle { tx, generations }
+}
+
+/// Enqueue an OCR job and await its reply, bumping the op's lane generation so
+/// any still-queued older job in that lane is skipped. Highlight and Live Text
+/// jobs use separate lanes, so they coalesce independently.
+async fn run_ocr_job(ocr: &ImageOcrHandle, op: ImageOcrOp, lang: String) -> Result<ImageOcrOut, String> {
+    let lane = op.lane();
+    let generation = ocr.generations[lane].fetch_add(1, Ordering::AcqRel) + 1;
+    let (reply, reply_rx) = tokio::sync::oneshot::channel::<Result<ImageOcrOut, String>>();
+    let tx = ocr.tx.clone();
+    let job = ImageOcrJob { op, lang, lane, generation, reply };
+    tauri::async_runtime::spawn_blocking(move || tx.send(job).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    reply_rx.await.map_err(|e| e.to_string())?
 }
 
 /// Boxes of words whose content key matches a query key — the same
 /// `porter unicode61` keying the index used (see `content_match`). Shared by the
 /// cached and on-demand paths so they highlight identically. `keys` are query keys
 /// from `normalize_terms`.
-fn match_word_boxes(words: &[crate::content_index::WordBox], keys: &[String]) -> Vec<[f32; 4]> {
+fn match_word_boxes(words: &[OcrWord], keys: &[String]) -> Vec<[f32; 4]> {
     // Stored OCR words are verbatim Tesseract tokens and can carry attached
     // punctuation ("report.", "(note)"), which would never stem - so tokenize each
     // and match any contained token. Set membership avoids an O(words*keys) scan.
     let set: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
     words
         .iter()
-        .filter(|(w, _)| {
-            crate::content_match::tokenize(w)
+        .filter(|w| {
+            crate::content_match::tokenize(&w.text)
                 .iter()
                 .any(|(_, t)| set.contains(crate::content_match::match_key(t).as_str()))
         })
-        .map(|(_, rect)| *rect)
+        .map(|w| w.rect)
         .collect()
 }
 
@@ -294,14 +394,80 @@ pub async fn image_match_rects(
     }
 
     // On-demand OCR via the serialized worker (cache off, or a cache miss).
-    let generation = ocr.generation.fetch_add(1, Ordering::AcqRel) + 1;
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<Vec<[f32; 4]>, String>>();
-    let tx = ocr.tx.clone();
-    let job = ImageOcrJob { path, needles, lang, generation, reply: reply_tx };
-    tauri::async_runtime::spawn_blocking(move || tx.send(job).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())??;
-    reply_rx.await.map_err(|e| e.to_string())?
+    match run_ocr_job(&ocr, ImageOcrOp::MatchRects { path, needles }, lang).await? {
+        ImageOcrOut::Rects(rects) => Ok(rects),
+        ImageOcrOut::Words(_) => Ok(Vec::new()),
+    }
+}
+
+/// Largest image (megapixels) OCR'd for a Live Text layer. Tesseract time and
+/// memory scale with pixel count; a huge scan would stall the single OCR worker.
+const MAX_OCR_MEGAPIXELS: u64 = 40;
+
+/// Selectable OCR text layer (Live Text) for an image preview: original-case
+/// words with normalized boxes and line ordinals, from the DB cache when the
+/// image is indexed with `ocr_highlight_cache` on, else on-demand OCR via the
+/// serialized worker. Empty (not an error) when Tesseract finds no text; `Err`
+/// only when OCR itself is unavailable.
+#[tauri::command]
+pub async fn image_text_layer(
+    path: String,
+    config: tauri::State<'_, crate::ConfigState>,
+    content: tauri::State<'_, crate::ContentState>,
+    ocr: tauri::State<'_, ImageOcrHandle>,
+) -> Result<Vec<OcrWord>, String> {
+    let (cache, lang) = {
+        let cfg = crate::util::lock(&config);
+        (cfg.content.ocr_highlight_cache, cfg.content.ocr_language.clone())
+    };
+
+    // Cached fast path: boxes captured at index time carry case + line ordinals
+    // (schema v3), so they serve Live Text directly with no per-preview OCR.
+    if cache {
+        let idx = content
+            .lock()
+            .map_err(|e| e.to_string())?
+            .as_ref()
+            .map(Arc::clone);
+        if let Some(idx) = idx {
+            let p = path.clone();
+            let cached =
+                tauri::async_runtime::spawn_blocking(move || idx.cached_word_boxes(&p))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if let Some(words) = cached {
+                return Ok(words);
+            }
+        }
+    }
+
+    // Reject oversized scans before handing the worker a job that would stall it.
+    let p = path.clone();
+    if let Ok(Some((w, h))) =
+        tauri::async_runtime::spawn_blocking(move || image::image_dimensions(&p).ok()).await
+    {
+        if (w as u64) * (h as u64) > MAX_OCR_MEGAPIXELS * 1_000_000 {
+            return Err("image too large to OCR".into());
+        }
+    }
+
+    match run_ocr_job(&ocr, ImageOcrOp::TextLayerFile { path }, lang).await? {
+        ImageOcrOut::Words(words) => Ok(words),
+        ImageOcrOut::Rects(_) => Ok(Vec::new()),
+    }
+}
+
+/// Run OCR over already-decoded image bytes (a clipboard entry) for its Live
+/// Text layer, via the same serialized worker. Callers cap the byte size.
+pub async fn ocr_bytes_text_layer(
+    ocr: &ImageOcrHandle,
+    bytes: Vec<u8>,
+    lang: String,
+) -> Result<Vec<OcrWord>, String> {
+    match run_ocr_job(ocr, ImageOcrOp::TextLayerBytes { bytes }, lang).await? {
+        ImageOcrOut::Words(words) => Ok(words),
+        ImageOcrOut::Rects(_) => Ok(Vec::new()),
+    }
 }
 
 #[tauri::command]
@@ -355,6 +521,27 @@ pub async fn pdf_match_rects(
     // worker queue is momentarily full; wait for a slot. Reply awaited via the oneshot.
     tauri::async_runtime::spawn_blocking(move || {
         tx.send(PdfJob::Rects(path, page, terms, reply_tx))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    reply_rx.await.map_err(|e| e.to_string())?
+}
+
+/// Selectable text layer for one PDF page: word-grouped lines with normalized
+/// boxes, for the frontend's invisible selection overlay. A page without a text
+/// layer yields an empty layer (frontend renders nothing); a load error is `Err`.
+#[tauri::command]
+pub async fn pdf_text_layer(
+    path: String,
+    page: u32,
+    worker: tauri::State<'_, PdfWorkerHandle>,
+) -> Result<PdfTextLayer, String> {
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<PdfTextLayer, String>>();
+    let tx = worker.tx.clone();
+    // Blocking `send` for the same reason as render_pdf_page; reply awaited via oneshot.
+    tauri::async_runtime::spawn_blocking(move || {
+        tx.send(PdfJob::TextLayer(path, page, reply_tx))
             .map_err(|e| e.to_string())
     })
     .await
@@ -524,12 +711,222 @@ fn union_rect(
         top = top.max(r.top().value);
         bottom = bottom.min(r.bottom().value);
     }
+    union_rect_points(left, right, top, bottom, page_w, page_h)
+}
+
+/// Normalize a point-space box (bottom-left origin, `top` > `bottom`) to a
+/// top-left-origin `[x, y, w, h]` in 0..1. The pure core shared by `union_rect`
+/// and the text-layer grouper (which has no pdfium types, so it can be tested).
+fn union_rect_points(left: f32, right: f32, top: f32, bottom: f32, page_w: f32, page_h: f32) -> [f32; 4] {
     [
         (left / page_w).clamp(0.0, 1.0),
         ((page_h - top) / page_h).clamp(0.0, 1.0),
         ((right - left) / page_w).clamp(0.0, 1.0),
         ((top - bottom) / page_h).clamp(0.0, 1.0),
     ]
+}
+
+/// A single glyph's box in PDF point space (bottom-left origin, so `top` >
+/// `bottom`). The pdfium-free intermediate the text-layer grouper works on.
+struct CharBox {
+    ch: char,
+    left: f32,
+    right: f32,
+    top: f32,
+    bottom: f32,
+}
+
+/// Scan caps so a pathological page can't blow up the payload / grouping cost.
+const MAX_TEXT_LAYER_CHARS: usize = 20_000;
+const MAX_TEXT_LAYER_WORDS: usize = 4_000;
+
+/// Groups a page's glyph boxes into word-grouped lines for the selectable text
+/// layer. Pure (no pdfium types) so it is unit-tested directly. A new line
+/// starts on a synthesized CR/LF or when a glyph's vertical center departs the
+/// current line's center by more than ~0.6× the line height (so super/subscripts
+/// and mixed font sizes stay on their line, but the next row breaks); within a
+/// line, words break on whitespace or a horizontal gap wider than 0.25× the line
+/// height. Split diacritics (pdfium emits `caf´e` as `...´, e`) stay attached.
+fn group_text_layer(chars: &[CharBox], page_w: f32, page_h: f32, mut truncated: bool) -> PdfTextLayer {
+    let mut lines: Vec<PdfTextLine> = Vec::new();
+    let mut word_count = 0usize;
+
+    // Accumulators for the current word and line.
+    let mut cur_word: Vec<&CharBox> = Vec::new();
+    let mut cur_line_words: Vec<PdfTextWord> = Vec::new();
+    // Vertical center of the current line's first glyph — a stable reference the
+    // line is measured against (updating it per glyph would let a line drift).
+    let mut line_center: Option<f32> = None;
+    let mut prev_right: Option<f32> = None; // right edge of the previous glyph
+    let mut prev_line_height = 0.0f32;
+
+    let flush_word = |cur_word: &mut Vec<&CharBox>,
+                      cur_line_words: &mut Vec<PdfTextWord>,
+                      word_count: &mut usize,
+                      truncated: &mut bool| {
+        if cur_word.is_empty() {
+            return;
+        }
+        if *word_count >= MAX_TEXT_LAYER_WORDS {
+            *truncated = true;
+            cur_word.clear();
+            return;
+        }
+        let text: String = cur_word.iter().map(|c| c.ch).collect();
+        let mut left = f32::MAX;
+        let mut right = f32::MIN;
+        let mut top = f32::MIN;
+        let mut bottom = f32::MAX;
+        for c in cur_word.iter() {
+            left = left.min(c.left);
+            right = right.max(c.right);
+            top = top.max(c.top);
+            bottom = bottom.min(c.bottom);
+        }
+        cur_word.clear();
+        if right <= left || top <= bottom {
+            return;
+        }
+        cur_line_words.push(PdfTextWord {
+            text,
+            rect: union_rect_points(left, right, top, bottom, page_w, page_h),
+        });
+        *word_count += 1;
+    };
+
+    let flush_line = |cur_line_words: &mut Vec<PdfTextLine>, words: &mut Vec<PdfTextWord>| {
+        if words.is_empty() {
+            return;
+        }
+        let taken = std::mem::take(words);
+        let mut left = f32::MAX;
+        let mut top = f32::MAX;
+        let mut right = f32::MIN;
+        let mut bottom = f32::MIN;
+        for w in &taken {
+            left = left.min(w.rect[0]);
+            top = top.min(w.rect[1]);
+            right = right.max(w.rect[0] + w.rect[2]);
+            bottom = bottom.max(w.rect[1] + w.rect[3]);
+        }
+        cur_line_words.push(PdfTextLine {
+            rect: [left, top, right - left, bottom - top],
+            words: taken,
+        });
+    };
+
+    for c in chars {
+        // Synthesized line breaks (pdfium emits CR/LF at line ends): end the line.
+        if c.ch == '\n' || c.ch == '\r' {
+            flush_word(&mut cur_word, &mut cur_line_words, &mut word_count, &mut truncated);
+            flush_line(&mut lines, &mut cur_line_words);
+            line_center = None;
+            prev_right = None;
+            continue;
+        }
+        let char_height = (c.top - c.bottom).max(0.0);
+        let center = (c.top + c.bottom) * 0.5;
+        // A vertical center departing the line's reference center by more than
+        // ~0.6× the line height starts a new line. The threshold is a fraction of
+        // the line height (not a fixed 2pt) so a superscript/subscript or a
+        // larger inline glyph stays on its line while the next row still breaks.
+        if let Some(ref_center) = line_center {
+            let line_h = if prev_line_height > 0.0 { prev_line_height } else { char_height.max(1.0) };
+            if (center - ref_center).abs() > 0.6 * line_h {
+                flush_word(&mut cur_word, &mut cur_line_words, &mut word_count, &mut truncated);
+                flush_line(&mut lines, &mut cur_line_words);
+                line_center = None;
+                prev_right = None;
+            }
+        }
+
+        if c.ch.is_whitespace() {
+            flush_word(&mut cur_word, &mut cur_line_words, &mut word_count, &mut truncated);
+            prev_right = Some(c.right);
+            continue;
+        }
+
+        // Horizontal gap without a space char also splits a word, unless this is
+        // a combining diacritic continuing the previous glyph.
+        let is_diacritic = crate::content_match::is_diacritic(c.ch);
+        if !is_diacritic {
+            if let Some(pr) = prev_right {
+                let line_h = if prev_line_height > 0.0 { prev_line_height } else { char_height };
+                if c.left - pr > 0.25 * line_h {
+                    flush_word(&mut cur_word, &mut cur_line_words, &mut word_count, &mut truncated);
+                }
+            }
+        }
+
+        cur_word.push(c);
+        if line_center.is_none() {
+            line_center = Some(center);
+        }
+        prev_right = Some(c.right);
+        if char_height > 0.0 {
+            prev_line_height = char_height;
+        }
+    }
+    flush_word(&mut cur_word, &mut cur_line_words, &mut word_count, &mut truncated);
+    flush_line(&mut lines, &mut cur_line_words);
+
+    PdfTextLayer { page_w, page_h, truncated, lines }
+}
+
+/// Extracts a page's selectable text layer. Runs on the pdfium worker thread;
+/// `pdfium` is that thread's bound instance.
+fn page_text_layer(
+    pdfium: &pdfium_render::prelude::Pdfium,
+    path: &str,
+    page_idx: u32,
+    log: bool,
+) -> Result<PdfTextLayer, String> {
+    let doc = pdfium.load_pdf_from_file(path, None).map_err(|e| {
+        let msg = e.to_string();
+        if log {
+            eprintln!("[pdf] text-layer: load failed: {msg}");
+        }
+        msg
+    })?;
+    let page_count = doc.pages().len();
+    let idx = page_idx.min(page_count.saturating_sub(1) as u32) as u16;
+    let page = doc.pages().get(idx).map_err(|e| e.to_string())?;
+    let page_w = page.width().value;
+    let page_h = page.height().value;
+    if page_w <= 0.0 || page_h <= 0.0 {
+        return Ok(PdfTextLayer { page_w: 0.0, page_h: 0.0, truncated: false, lines: Vec::new() });
+    }
+
+    // No text layer (scanned page) → empty layer, not an error: the frontend
+    // simply renders no selection overlay (Live Text handles scanned pages).
+    let text = match page.text() {
+        Ok(t) => t,
+        Err(_) => return Ok(PdfTextLayer { page_w, page_h, truncated: false, lines: Vec::new() }),
+    };
+
+    let mut chars: Vec<CharBox> = Vec::new();
+    let mut truncated = false;
+    for ch in text.chars().iter() {
+        if chars.len() >= MAX_TEXT_LAYER_CHARS {
+            truncated = true;
+            break;
+        }
+        let (Some(c), Ok(b)) = (ch.unicode_char(), ch.loose_bounds()) else {
+            continue;
+        };
+        chars.push(CharBox {
+            ch: c,
+            left: b.left().value,
+            right: b.right().value,
+            top: b.top().value,
+            bottom: b.bottom().value,
+        });
+    }
+    let layer = group_text_layer(&chars, page_w, page_h, truncated);
+    if log {
+        eprintln!("[pdf] text-layer: {} line(s) on page {idx}", layer.lines.len());
+    }
+    Ok(layer)
 }
 
 #[tauri::command]
@@ -751,4 +1148,104 @@ pub fn list_folder(path: String) -> Vec<FolderEntry> {
             .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     entries
+}
+
+#[cfg(test)]
+mod text_layer_tests {
+    use super::*;
+
+    // One glyph at [left,right] on a text baseline of height 10 (top-left in
+    // point space is top>bottom). Page is 100×100 points for easy normalizing.
+    fn ch(c: char, left: f32, right: f32, top: f32) -> CharBox {
+        CharBox { ch: c, left, right, top, bottom: top - 10.0 }
+    }
+
+    fn text_of(layer: &PdfTextLayer) -> Vec<Vec<String>> {
+        layer
+            .lines
+            .iter()
+            .map(|l| l.words.iter().map(|w| w.text.clone()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn splits_words_on_space_char() {
+        let chars = vec![
+            ch('h', 0.0, 10.0, 90.0),
+            ch('i', 10.0, 20.0, 90.0),
+            ch(' ', 20.0, 25.0, 90.0),
+            ch('y', 25.0, 35.0, 90.0),
+            ch('o', 35.0, 45.0, 90.0),
+        ];
+        let layer = group_text_layer(&chars, 100.0, 100.0, false);
+        assert_eq!(text_of(&layer), vec![vec!["hi".to_string(), "yo".to_string()]]);
+    }
+
+    #[test]
+    fn splits_words_on_horizontal_gap_without_space() {
+        // No space glyph, but a wide gap (> 0.25 * line height=10 => 2.5pt).
+        let chars = vec![
+            ch('a', 0.0, 10.0, 90.0),
+            ch('b', 10.0, 20.0, 90.0),
+            ch('c', 60.0, 70.0, 90.0), // 40pt gap
+        ];
+        let layer = group_text_layer(&chars, 100.0, 100.0, false);
+        assert_eq!(text_of(&layer), vec![vec!["ab".to_string(), "c".to_string()]]);
+    }
+
+    #[test]
+    fn splits_lines_on_vertical_jump() {
+        let chars = vec![
+            ch('a', 0.0, 10.0, 90.0),
+            ch('b', 0.0, 10.0, 50.0), // dropped a line (> LINE_BREAK_POINTS)
+        ];
+        let layer = group_text_layer(&chars, 100.0, 100.0, false);
+        assert_eq!(text_of(&layer), vec![vec!["a".to_string()], vec!["b".to_string()]]);
+    }
+
+    #[test]
+    fn splits_lines_on_synthesized_newline() {
+        let chars = vec![
+            ch('a', 0.0, 10.0, 90.0),
+            ch('\n', 10.0, 10.0, 90.0),
+            ch('b', 0.0, 10.0, 90.0),
+        ];
+        let layer = group_text_layer(&chars, 100.0, 100.0, false);
+        assert_eq!(text_of(&layer), vec![vec!["a".to_string()], vec!["b".to_string()]]);
+    }
+
+    #[test]
+    fn diacritic_continues_word() {
+        // pdfium emits "café" as c a f <combining acute> e; the accent must not
+        // split the word even though it may sit at a small horizontal gap.
+        let chars = vec![
+            ch('c', 0.0, 10.0, 90.0),
+            ch('a', 10.0, 20.0, 90.0),
+            ch('f', 20.0, 30.0, 90.0),
+            ch('\u{0301}', 30.0, 30.0, 90.0),
+            ch('e', 30.0, 40.0, 90.0),
+        ];
+        let layer = group_text_layer(&chars, 100.0, 100.0, false);
+        assert_eq!(text_of(&layer), vec![vec!["caf\u{0301}e".to_string()]]);
+    }
+
+    #[test]
+    fn empty_input_yields_empty_layer() {
+        let layer = group_text_layer(&[], 100.0, 100.0, false);
+        assert!(layer.lines.is_empty());
+        assert!(!layer.truncated);
+    }
+
+    #[test]
+    fn word_cap_marks_truncated() {
+        let mut chars = Vec::new();
+        for i in 0..(MAX_TEXT_LAYER_WORDS + 50) {
+            let x = (i % 10) as f32 * 5.0;
+            let top = 90.0 - (i / 10) as f32 * 20.0;
+            chars.push(ch('w', x, x + 3.0, top));
+            chars.push(ch(' ', x + 3.0, x + 5.0, top));
+        }
+        let layer = group_text_layer(&chars, 1000.0, 10000.0, false);
+        assert!(layer.truncated);
+    }
 }

@@ -16,7 +16,9 @@ import FooterHints from "./components/FooterHints";
 import { pdfView } from "./components/FilePreview";
 import { isPreviewable } from "./utils";
 import { ColoredIconsContext } from "./coloredIcons";
-import { dispatchLaunch, dispatchKeyDown, type LaunchContext } from "./providers/registry";
+import { dispatchLaunch, dispatchKeyDown, isCopyKey, type LaunchContext } from "./providers/registry";
+import SelectionLayer from "./selection/SelectionLayer";
+import { selection } from "./selection/controller";
 import { useTauriListener } from "./hooks/useTauriListener";
 import { useIconAccents } from "./hooks/useIconAccents";
 import OnboardingWizard from "./components/onboarding/OnboardingWizard";
@@ -200,6 +202,24 @@ export default function App() {
     inputRef.current?.focus();
   };
 
+  // Selection actions shared by Ctrl+F and the selection popover: throw the
+  // selected text into the search bar / the dict scope as a fresh lookup.
+  const searchFromSelection = (raw: string) => {
+    const text = raw.replace(/\s+/g, " ").trim();
+    selection.clear();
+    if (!text) return;
+    setQuickResult(null);
+    setQuery(text);
+    inputRef.current?.focus();
+  };
+
+  const defineFromSelection = (word: string) => {
+    selection.clear();
+    setQuickResult(null);
+    const cmd = commandById("cmd:dict");
+    if (cmd) enterMode(cmd, { seed: word.toLowerCase() });
+  };
+
   // Invokes a command entry (Enter on a `kind: "command"` row).
   const runCommand = (command: CommandDescriptor) => {
     // Frecency: frequently-used commands float up in root search.
@@ -335,6 +355,7 @@ export default function App() {
   useTauriListener("window-show", () => {
     focusedRef.current = true;
     delete document.documentElement.dataset.altHeld;
+    selection.clear();
     // A plain `--show` always opens the clean launcher, never a stale clipboard
     // session. (`--clipboard` uses window-show-query, which re-enters the mode.)
     setMode(null);
@@ -354,7 +375,10 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     win.onFocusChanged(({ payload: focused }) => {
       focusedRef.current = focused;
-      if (!focused) delete document.documentElement.dataset.altHeld;
+      if (!focused) {
+        delete document.documentElement.dataset.altHeld;
+        selection.clear();
+      }
       // Don't steal focus back into the input while Quicklook is open (modal).
       if (focused && !quicklookRef.current) inputRef.current?.focus();
     }).then(fn => { unlisten = fn; });
@@ -804,6 +828,37 @@ export default function App() {
       )) {
         return;
       }
+      // Preview text selection wins Ctrl+C; without one the chord falls
+      // through to the provider handlers (copy path / calc result / …).
+      if (isCopyKey(e) && selection.hasSelection()) {
+        e.preventDefault();
+        selection.copy();
+        return;
+      }
+      // Ctrl+F throws the selected text back into the search bar as a fresh
+      // query - select a word in a preview, instantly search it.
+      if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "f" || e.key === "F")
+          && selection.hasSelection()) {
+        e.preventDefault();
+        searchFromSelection(selection.getText());
+        return;
+      }
+      // Keyboard select mode owns the movement keys (its capture listener
+      // consumes them; this guard is belt-and-braces for result navigation).
+      if (selection.isKeyboardMode()
+          && (e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End")) {
+        return;
+      }
+      // Ctrl+S enters keyboard select mode in the visible preview.
+      if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "s" || e.key === "S")) {
+        const root = document.querySelector<HTMLElement>(
+          quickResult ? ".quicklook-overlay [data-selectable]" : ".card [data-selectable]",
+        );
+        if (selection.enterKeyboardMode(root)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
         userMovedRef.current = true;
@@ -851,6 +906,11 @@ export default function App() {
         exitMode();
       } else if (e.key === "Escape") {
         e.preventDefault();
+        // Esc dismisses a preview text selection before anything else.
+        if (selection.hasSelection() || selection.isKeyboardMode()) {
+          selection.clear();
+          return;
+        }
         // Esc closes the Quicklook overlay first.
         if (quickResult) { setQuickResult(null); return; }
         // In a mode, Esc backs out one level: clear the query, else drop the
@@ -891,6 +951,15 @@ export default function App() {
   }, [displayResults, selectedIndex, quickResult, actionResult, extForm]);
 
   const selected = displayResults[selectedIndex] ?? null;
+
+  // Selecting a different result or switching modes swaps the previewed content
+  // out from under a text selection - drop it. Query edits are NOT a dependency:
+  // the input keeps focus during a selection, so a stray keystroke must not wipe
+  // it before Ctrl+C; when a query change actually re-renders the preview, the
+  // controller's MutationObserver clears the now-disconnected selection anyway.
+  useEffect(() => {
+    selection.clear();
+  }, [mode, selected?.id, quickResult?.id]);
 
   // Dominant icon colour per result (accent bleed). The selected result's colour
   // is hoisted to a card-level var so the preview panel re-hues with the selection.
@@ -976,10 +1045,14 @@ export default function App() {
         className="card"
         style={{ '--bleed': bleed } as CSSProperties}
         onMouseDown={e => {
+          // Keep focus (and all keybinds) on the search input: no mousedown may
+          // move focus or start a native selection. Text selection in previews
+          // is re-implemented by the virtual selection engine (src/selection/).
           const t = e.target as HTMLElement;
-          if (t !== inputRef.current && !t.closest('pre, code')) e.preventDefault();
+          if (t !== inputRef.current) e.preventDefault();
         }}
       >
+        <SelectionLayer actions={{ onSearch: searchFromSelection, onDefine: defineFromSelection }} />
         <div className="card-clip">
         <div className="search-bar">
           {indexingProgress && (

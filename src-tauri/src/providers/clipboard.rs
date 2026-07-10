@@ -118,6 +118,72 @@ pub fn paste_clipboard(
     }
 }
 
+/// Copy plain text to the clipboard via wl-copy. Used by preview text
+/// selection: wl-copy forks a serving process that outlives the launcher
+/// hiding, unlike webview-owned Wayland clipboard content.
+#[tauri::command]
+pub fn copy_text(text: String) -> Result<(), String> {
+    const MAX_COPY_BYTES: usize = 1024 * 1024;
+    if text.len() > MAX_COPY_BYTES {
+        return Err("selection too large to copy".into());
+    }
+    crate::extensions::hostfns::write_clipboard_text(&text)
+}
+
+/// Largest clipboard image OCR'd on demand for a Live Text layer.
+const MAX_CLIPBOARD_OCR_BYTES: usize = 20 * 1024 * 1024;
+
+/// Selectable OCR text layer (Live Text) for a clipboard image entry. Served
+/// from the clipboard OCR cache (populated by the background pass in one OCR
+/// pass with the text) when present, else OCR'd on demand from the decoded
+/// bytes and cached back. Empty when the image has no detectable text.
+#[tauri::command]
+pub async fn clipboard_image_text_layer(
+    id: String,
+    config: tauri::State<'_, ConfigState>,
+    ocr_store: tauri::State<'_, ClipboardOcrState>,
+    ocr: tauri::State<'_, crate::preview::ImageOcrHandle>,
+) -> Result<Vec<crate::content_index::OcrWord>, String> {
+    let store = match ocr_store.inner().clone() {
+        Some(s) => s,
+        None => return Ok(Vec::new()),
+    };
+
+    // Cache hit: the background pass already OCR'd this entry (text + boxes).
+    if let Some((_, _, boxes_json)) = store.get_with_boxes(&id) {
+        return Ok(serde_json::from_str(&boxes_json).unwrap_or_default());
+    }
+
+    // Miss (the pass hasn't reached this entry yet): decode + OCR on demand via
+    // the serialized worker; bytes never cross IPC. Respect the user's OCR-off
+    // setting - don't force Tesseract + a subprocess for a disabled feature.
+    let (enabled, lang) = config
+        .lock()
+        .map(|c| (c.clipboard.ocr_images, c.content.ocr_language.clone()))
+        .unwrap_or((false, "eng".to_string()));
+    if !enabled {
+        return Ok(Vec::new());
+    }
+    let decode_id = id.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new("cliphist")
+            .args(["decode", &decode_id])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| o.stdout)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "decode failed".to_string())?;
+    if bytes.len() > MAX_CLIPBOARD_OCR_BYTES {
+        return Err("image too large to OCR".into());
+    }
+
+    let words = crate::preview::ocr_bytes_text_layer(&ocr, bytes, lang).await?;
+    Ok(words)
+}
+
 #[tauri::command]
 pub fn decode_clipboard_entry(id: String) -> Result<tauri::ipc::Response, String> {
     let out = std::process::Command::new("cliphist")
@@ -447,10 +513,14 @@ pub fn index_clipboard_ocr(
                 Ok(o) if o.status.success() => o.stdout,
                 _ => continue,
             };
-            match crate::content_index::ocr_bytes(&bytes, &lang) {
+            match crate::content_index::ocr_bytes_text_and_boxes(&bytes, &lang) {
                 // Store even empty text as a negative-cache tombstone so a
-                // text-free image isn't re-OCR'd on every pass.
-                Ok(text) => store.upsert(&id, byte_size.unwrap_or(0), text.trim()),
+                // text-free image isn't re-OCR'd on every pass. Boxes ride along
+                // (single OCR pass) for the Live Text layer.
+                Ok((text, boxes)) => {
+                    let boxes_json = serde_json::to_string(&boxes).unwrap_or_else(|_| "[]".into());
+                    store.upsert(&id, byte_size.unwrap_or(0), text.trim(), &boxes_json);
+                }
                 Err(e) => eprintln!("[clipboard] ocr failed for {id}: {e}"),
             }
             let _ = app.emit(

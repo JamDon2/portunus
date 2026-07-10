@@ -40,6 +40,22 @@ fn passes_gate(q: &str) -> bool {
         .is_some_and(|w| GATE_KEYWORDS.contains(&w.to_ascii_lowercase().as_str()))
 }
 
+/// Evaluate one expression the way `CalcProvider::search` titles it, returning
+/// just the result string. Backs the `calc_eval` command (selection popover
+/// math chip); shares the gate/probe/eval path so the two can't drift.
+pub fn eval_expression(query: &str, rates: &Arc<RatesCache>, currency_enabled: bool) -> Option<String> {
+    let q = query.trim();
+    if q.is_empty() || q.len() > 256 || !passes_gate(q) {
+        return None;
+    }
+    if datetime::probe(q) {
+        if let Some(dt) = datetime::try_eval(q) {
+            return Some(dt.title);
+        }
+    }
+    engine::eval(q, rates, currency_enabled)
+}
+
 fn make_result(title: String, subtitle: String) -> SearchResult {
     SearchResult {
         id: "calc:result".to_string(),
@@ -104,6 +120,22 @@ mod tests {
         for q in ["firefox", "settings", "code", "files"] {
             assert!(!passes_gate(q), "should reject: {q}");
         }
+    }
+
+    #[test]
+    fn eval_expression_agrees_with_search() {
+        let rates: Arc<RatesCache> =
+            Arc::new(RatesCache::with_rates([("USD".into(), 1.0), ("EUR".into(), 0.5)].into(), 0));
+        let provider = CalcProvider::new(&CalcConfig::default(), Arc::clone(&rates));
+        for q in ["2+2", "time in tokyo", "5km to mi", "100 usd to eur"] {
+            assert_eq!(
+                eval_expression(q, &rates, true).as_deref(),
+                Some(provider.search(q)[0].title.as_str()),
+                "drifted for: {q}"
+            );
+        }
+        assert_eq!(eval_expression("hello world", &rates, true), None);
+        assert_eq!(eval_expression("", &rates, true), None);
     }
 
     #[test]
