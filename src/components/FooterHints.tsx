@@ -18,8 +18,8 @@ interface Props {
   clipboardIdle?: boolean;
   /** Whether PDF term-highlighting is on (Ctrl+H); drives the Contents-mode hint. */
   pdfHighlight?: boolean;
-  /** The extension action picker is open; it owns the keys. */
-  actionPickerOpen?: boolean;
+  /** The action panel is open; it owns the keys. */
+  actionPanelOpen?: boolean;
 }
 
 // Reusable hint atoms. The bar shows only the selected result's actions -
@@ -28,6 +28,7 @@ interface Props {
 const Open = () => <span className="hint"><kbd><EnterIcon /></kbd> open</span>;
 const PdfPageNav = () => <span className="hint"><kbd>ctrl</kbd><kbd>←→</kbd> page</span>;
 const Peek = () => <span className="hint"><kbd>shift</kbd><kbd><EnterIcon /></kbd> peek</span>;
+const Actions = () => <span className="hint"><kbd>alt</kbd><kbd><EnterIcon /></kbd> actions</span>;
 
 function hints(
   selected: SearchResult | null,
@@ -37,15 +38,15 @@ function hints(
   smartPaste: boolean,
   clipboardIdle: boolean,
   pdfHighlight: boolean,
-  actionPickerOpen: boolean,
+  actionPanelOpen: boolean,
   hasSelection: boolean,
   selectMode: boolean,
 ): ReactNode {
   const k = selected?.kind;
 
-  if (actionPickerOpen) return <>
+  if (actionPanelOpen) return <>
     <span className="hint"><kbd><EnterIcon /></kbd> run</span>
-    <span className="hint"><kbd>Esc</kbd> back</span>
+    <span className="hint"><kbd>Esc</kbd> close</span>
   </>;
 
   // An active preview text selection retargets the copy/search chords.
@@ -113,24 +114,32 @@ function hints(
   }
   if (k === "app") return <span className="hint"><kbd><EnterIcon /></kbd> launch</span>;
 
-  // Extension result: show its real default-action label, and advertise the
-  // picker only when there's more than one action to pick from.
+  // Extension result: show its real default-action label. The Actions hint is
+  // appended by the caller (every result has a panel now).
   if (selected?.ext) {
     const actions = selected.ext.actions ?? [];
     const defaultLabel = actions[0]?.label?.toLowerCase() ?? "open";
-    return <>
-      <span className="hint"><kbd><EnterIcon /></kbd> {defaultLabel}</span>
-      {actions.length > 1 && <span className="hint"><kbd>alt</kbd><kbd><EnterIcon /></kbd> actions</span>}
-    </>;
+    return <span className="hint"><kbd><EnterIcon /></kbd> {defaultLabel}</span>;
   }
 
   // Default: generic result row
   return <Open />;
 }
 
-export default function FooterHints({ selected, quicklookOpen = false, clipboardMode = false, contentMode = false, smartPaste = false, clipboardIdle = false, pdfHighlight = true, actionPickerOpen = false }: Props) {
+export default function FooterHints({ selected, quicklookOpen = false, clipboardMode = false, contentMode = false, smartPaste = false, clipboardIdle = false, pdfHighlight = true, actionPanelOpen = false }: Props) {
   // Subscribed here (not prop-drilled): the selection is orthogonal to what
   // App knows about, and the bar must react in clipboard mode too.
   const sel = useSyncExternalStore(selection.subscribe, selection.getSnapshot);
-  return <div className="hints">{hints(selected, quicklookOpen, clipboardMode, contentMode, smartPaste, clipboardIdle, pdfHighlight, actionPickerOpen, sel.range != null, sel.keyboard)}</div>;
+  const hasSelection = sel.range != null;
+  const selectMode = sel.keyboard;
+  // The action panel is reachable from any normal result state, so advertise
+  // it on the bar - except where the keys mean something else (clipboard
+  // takeover, an active preview selection) or the panel is already open.
+  const showActions = !clipboardMode && !actionPanelOpen && !selectMode && !hasSelection;
+  return (
+    <div className="hints">
+      {hints(selected, quicklookOpen, clipboardMode, contentMode, smartPaste, clipboardIdle, pdfHighlight, actionPanelOpen, hasSelection, selectMode)}
+      {showActions && <Actions />}
+    </div>
+  );
 }

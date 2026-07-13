@@ -1,5 +1,7 @@
 import type { ComponentType } from 'react';
 import type { CommandDescriptor, Config, ExtensionResult, SearchResult } from '../types';
+import type { ActionDescriptor } from '../actions/types';
+import { matchesShortcut } from '../actions/shortcut';
 
 export interface LaunchContext {
   setQuery: (q: string) => void;
@@ -37,7 +39,10 @@ export interface ProviderPlugin {
   kinds: string[];
   Preview: ComponentType<PreviewProps> | null;
   handleLaunch?: (result: SearchResult, ctx: LaunchContext) => boolean;
-  handleKeyDown?: (e: KeyboardEvent, result: SearchResult | null, ctx: LaunchContext) => boolean;
+  /** Executable actions for this result (kind-guarded inside - every plugin
+   *  sees every result). A descriptor's `shortcut` drives both the chord
+   *  dispatch (dispatchShortcut) and the action panel's kbd badge. */
+  actions?: (result: SearchResult, ctx: LaunchContext) => ActionDescriptor[];
 }
 
 /** The copy chord shared by calc/dict/file providers: Ctrl+C (not Ctrl+Alt+C). */
@@ -65,13 +70,33 @@ export function dispatchLaunch(result: SearchResult, ctx: LaunchContext): boolea
   return false;
 }
 
-export function dispatchKeyDown(
+/** All provider-declared actions for a result, in registration order. */
+export function collectResultActions(
+  result: SearchResult | null,
+  ctx: LaunchContext,
+): ActionDescriptor[] {
+  if (!result) return [];
+  const out: ActionDescriptor[] = [];
+  for (const p of plugins) {
+    if (p.actions) out.push(...p.actions(result, ctx));
+  }
+  return out;
+}
+
+/** Runs the first provider action whose shortcut matches the chord.
+ *  `displayOnly` descriptors are skipped - their keys are handled by bespoke
+ *  App.tsx branches and the shortcut exists only for the panel badge. */
+export function dispatchShortcut(
   e: KeyboardEvent,
   result: SearchResult | null,
   ctx: LaunchContext,
 ): boolean {
-  for (const p of plugins) {
-    if (p.handleKeyDown && p.handleKeyDown(e, result, ctx)) return true;
+  for (const a of collectResultActions(result, ctx)) {
+    if (a.shortcut && !a.displayOnly && matchesShortcut(e, a.shortcut)) {
+      e.preventDefault();
+      a.run(ctx);
+      return true;
+    }
   }
   return false;
 }

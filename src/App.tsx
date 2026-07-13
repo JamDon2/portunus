@@ -2,21 +2,22 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperti
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Config, SearchResult, SearchResponse, StreamPayload, ClipboardCapabilities, ExtAction, CommandDescriptor, ActivateResponse, ExtensionResult, FormDto, ToastLevel } from "./types";
+import { Config, SearchResult, SearchResponse, StreamPayload, ClipboardCapabilities, CommandDescriptor, ActivateResponse, ExtensionResult, FormDto, ToastLevel } from "./types";
 import { commandById } from "./commands/store";
 import ClipboardMode from "./components/clipboard/ClipboardMode";
 import { applyTheme, injectMatugenTheme } from "./theme";
 import ResultsList from "./components/ResultsList";
 import PreviewPanel from "./components/PreviewPanel";
 import QuickLook from "./components/QuickLook";
-import ActionPicker from "./components/ActionPicker";
+import ActionPanel from "./components/ActionPanel";
 import ExtensionFormModal from "./components/ExtensionFormModal";
 import { deriveContentTerms } from "./highlight";
 import FooterHints from "./components/FooterHints";
 import { pdfView } from "./components/FilePreview";
 import { isPreviewable } from "./utils";
 import { ColoredIconsContext } from "./coloredIcons";
-import { dispatchLaunch, dispatchKeyDown, isCopyKey, type LaunchContext } from "./providers/registry";
+import { dispatchLaunch, dispatchShortcut, collectResultActions, isCopyKey, type LaunchContext } from "./providers/registry";
+import type { ActionDescriptor } from "./actions/types";
 import SelectionLayer from "./selection/SelectionLayer";
 import { selection } from "./selection/controller";
 import { useTauriListener } from "./hooks/useTauriListener";
@@ -127,10 +128,11 @@ export default function App() {
   const focusedRef = useRef(true);
   // Mirror of "Quicklook open" for use inside event-listener closures.
   const quicklookRef = useRef(false);
-  // The extension result pinned by the action picker (null = closed). Pins the
-  // result like Quicklook so background reorders can't retarget the actions.
-  const [actionResult, setActionResult] = useState<SearchResult | null>(null);
-  const actionResultRef = useRef(false);
+  // The action panel (Alt+Enter / Ctrl+K; null = closed). Pins the result it
+  // was opened for - like Quicklook - so background reorders can't retarget
+  // the actions. `result` is null when opened with nothing selected, which
+  // shows only the global section.
+  const [actionPanel, setActionPanel] = useState<{ result: SearchResult | null } | null>(null);
   // Toast queue fed by extension activate responses (newest at the bottom,
   // capped at 3). Errors linger longer and are click-dismissable like the rest.
   const [toasts, setToasts] = useState<ActiveToast[]>([]);
@@ -144,7 +146,6 @@ export default function App() {
   // (no optimistic hide) - drives the "Working…" pill so the launcher
   // doesn't look frozen during the extension's network I/O.
   const [activatePending, setActivatePending] = useState(false);
-  const extFormRef = useRef(false);
 
   // Single active-mode scalar: the Scope command the user is inside, or null
   // for root search. UI-takeover scopes (clipboard) swap in their own
@@ -233,10 +234,11 @@ export default function App() {
     // e.g. open_settings_window hides "main" backend-side).
     if (command.route.type === "invoke") {
       const tauriCmd = command.route.command;
+      const args = command.route.args ?? {};
       setMode(null);
       setQuery("");
       setResults([]);
-      invoke(tauriCmd).catch(e => console.error(`[command] invoke ${tauriCmd} failed:`, e));
+      invoke(tauriCmd, args).catch(e => console.error(`[command] invoke ${tauriCmd} failed:`, e));
       return;
     }
     // Action command: one-shot - run the extension's activate with the
@@ -359,7 +361,7 @@ export default function App() {
     // A plain `--show` always opens the clean launcher, never a stale clipboard
     // session. (`--clipboard` uses window-show-query, which re-enters the mode.)
     setMode(null);
-    setActionResult(null);
+    setActionPanel(null);
     setExtForm(null);
     setQuery("");
     setResults([]);
@@ -807,6 +809,13 @@ export default function App() {
       .catch(e => console.error("[launch] launch_app failed:", e));
   };
 
+  // Quicklook toggle shared by the Shift+Enter branch and the panel's
+  // "Quick Look" row, so the chord and the menu can't drift apart.
+  const toggleQuickLook = (sel: SearchResult | null) => {
+    if (quickResult) { setQuickResult(null); return; }
+    if (sel && isPreviewable(sel)) setQuickResult(sel);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // While the onboarding wizard is open it owns all input.
@@ -816,10 +825,10 @@ export default function App() {
       // Ignore keys when the window isn't focused - an always-on-top launcher can
       // otherwise still receive (and act on) keystrokes meant for another window.
       if (!focusedRef.current) return;
-      // The action picker and extension form are modal and handle their own
+      // The action panel and extension form are modal and handle their own
       // keys via capture-phase listeners; this bubble-phase handler must stay
       // inert while either is open.
-      if (actionResult || extForm) return;
+      if (actionPanel || extForm) return;
       // Quicklook is modal: result navigation must not run underneath it. Arrow
       // keys scroll the open preview (handled in QuickLook); jump keys are inert.
       if (quickResult && (
@@ -879,14 +888,12 @@ export default function App() {
         // Quicklook: pin & expand the selected file/folder preview to fill the card.
         // Placed before the plain-Enter launch so Enter alone still opens.
         e.preventDefault();
-        if (quickResult) { setQuickResult(null); return; }
-        const sel = displayResults[selectedIndex];
-        if (sel && isPreviewable(sel)) setQuickResult(sel);
+        toggleQuickLook(displayResults[selectedIndex] ?? null);
       } else if ((e.altKey && e.key === "Enter") || (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "k" || e.key === "K"))) {
-        // Action picker for extension results with at least one action.
+        // Action panel: available for every result kind (and with nothing
+        // selected, where it shows just the global section).
         e.preventDefault();
-        const sel = quickResult ?? displayResults[selectedIndex];
-        if (sel?.ext?.actions?.length) setActionResult(sel);
+        setActionPanel({ result: quickResult ?? displayResults[selectedIndex] ?? null });
       } else if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= "1" && e.key <= "9") {
         e.preventDefault();
         const target = launchableResults[parseInt(e.key) - 1];
@@ -938,7 +945,7 @@ export default function App() {
         // While Quicklook is open, key actions target the pinned result, not
         // whatever the (hidden) selection drifted to.
         const target = quickResult ?? selected;
-        if (!dispatchKeyDown(e, target, ctx)) {
+        if (!dispatchShortcut(e, target, ctx)) {
           if (e.key === "Enter") {
             launch(target ?? undefined);
             if (quickResult) setQuickResult(null);
@@ -948,7 +955,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [displayResults, selectedIndex, quickResult, actionResult, extForm]);
+  }, [displayResults, selectedIndex, quickResult, actionPanel, extForm]);
 
   const selected = displayResults[selectedIndex] ?? null;
 
@@ -998,33 +1005,82 @@ export default function App() {
     else inputRef.current?.focus();
   }, [quickResult]);
 
-  // Action picker and extension form are modal like Quicklook: launcher input
+  // Action panel and extension form are modal like Quicklook: launcher input
   // blurs while either is open.
   useEffect(() => {
-    actionResultRef.current = actionResult != null;
-    extFormRef.current = extForm != null;
-    if (actionResult || extForm) inputRef.current?.blur();
+    if (actionPanel || extForm) inputRef.current?.blur();
     else inputRef.current?.focus();
-  }, [actionResult, extForm]);
+  }, [actionPanel, extForm]);
 
-  // A reload swaps extension instances - a pinned picker or form would target
+  // A reload swaps extension instances - a pinned panel or form would target
   // a stale provider, so drop them.
   useTauriListener("extensions-reloaded", () => {
-    setActionResult(null);
+    setActionPanel(null);
     setExtForm(null);
   });
 
-  const runExtensionAction = (result: SearchResult, action: ExtAction) => {
-    setActionResult(null);
-    if (!result.ext) return;
-    activateExtension({
-      id: result.id,
-      ext: result.ext,
-      action: action.id,
-      command: result.ext_command ?? null,
-      opensForm: action.opens_form === true,
-    });
+  // Titles for the generic default-action row, by result kind. Kinds without
+  // a meaningful plain-Enter (calc, dict, errors) get no row.
+  const OPEN_TITLES: Record<string, string> = {
+    app: "Launch",
+    file: "Open",
+    folder: "Open",
+    command: "Run",
+    "content-hint": "Search Contents",
+    "content-disabled": "Open Settings",
+    "ext-error": "Open Logs",
   };
+
+  // Everything the action panel shows for the pinned result: the generic
+  // default row, badge-only rows mirroring the bespoke chords (Quick Look,
+  // match highlight), provider-declared actions, then the global command
+  // catalog. Descriptors are the single source for both rows and badges.
+  const panelActions = useMemo<ActionDescriptor[]>(() => {
+    if (!actionPanel) return [];
+    const result = actionPanel.result;
+    const acts: ActionDescriptor[] = [];
+    if (result) {
+      const isExt = result.id.startsWith("ext:") && !!result.ext;
+      if (isExt) {
+        // Extension actions lead with their own default (Enter-badged) action.
+        acts.push(...collectResultActions(result, makeCtx()));
+      } else {
+        const openTitle = OPEN_TITLES[result.kind];
+        if (openTitle) {
+          acts.push({
+            id: "app:open",
+            title: openTitle,
+            section: "result",
+            shortcut: { key: "enter" },
+            displayOnly: true,
+            run: () => { launch(result); if (quickResult) setQuickResult(null); },
+          });
+        }
+        if (isPreviewable(result)) {
+          acts.push({
+            id: "app:quicklook",
+            title: quickResult ? "Close Quick Look" : "Quick Look",
+            section: "result",
+            shortcut: { shift: true, key: "enter" },
+            displayOnly: true,
+            run: () => toggleQuickLook(result),
+          });
+        }
+        if (inContents && result.title.toLowerCase().endsWith(".pdf")) {
+          acts.push({
+            id: "app:highlight",
+            title: highlight ? "Hide Match Highlights" : "Show Match Highlights",
+            section: "result",
+            shortcut: { ctrl: true, key: "h", code: "KeyH" },
+            displayOnly: true,
+            run: () => setHighlight(h => !h),
+          });
+        }
+        acts.push(...collectResultActions(result, makeCtx()));
+      }
+    }
+    return acts;
+  }, [actionPanel, quickResult, highlight, inContents]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const calcResult = results.find(r => r.kind === "calc");
   // Whether there's an actual term to search (drives the empty state). Content
@@ -1056,10 +1112,7 @@ export default function App() {
           config={onboardConfig}
           onComplete={() => {
             setShowOnboarding(false);
-            invoke<Config>("get_config").then(cfg => {
-              setContentEnabled(cfg.content.enabled);
-              applyTheme(cfg.appearance); // keep whatever theme the wizard saved
-            });
+            invoke<Config>("get_config").then(cfg => setContentEnabled(cfg.content.enabled));
             inputRef.current?.focus();
           }}
         />
@@ -1197,14 +1250,6 @@ export default function App() {
           />
         )}
 
-        {actionResult && !inClipboard && (
-          <ActionPicker
-            result={actionResult}
-            onRun={action => runExtensionAction(actionResult, action)}
-            onClose={() => setActionResult(null)}
-          />
-        )}
-
         {extForm && !inClipboard && (
           <ExtensionFormModal
             form={extForm.form}
@@ -1242,7 +1287,14 @@ export default function App() {
         )}
 
         <div className="footer">
-          <FooterHints selected={selected} quicklookOpen={quickResult != null} clipboardMode={inClipboard} contentMode={inContents} smartPaste={clipCaps.smart_paste} clipboardIdle={inClipboard && query.trim() === ""} pdfHighlight={highlight} actionPickerOpen={actionResult != null} />
+          {actionPanel && !inClipboard && (
+            <ActionPanel
+              actions={panelActions}
+              onRun={a => { setActionPanel(null); a.run(makeCtx()); }}
+              onClose={() => setActionPanel(null)}
+            />
+          )}
+          <FooterHints selected={selected} quicklookOpen={quickResult != null} clipboardMode={inClipboard} contentMode={inContents} smartPaste={clipCaps.smart_paste} clipboardIdle={inClipboard && query.trim() === ""} pdfHighlight={highlight} actionPanelOpen={actionPanel != null} />
           <div className="footer-right">
             <button
               className="footer-settings-btn"

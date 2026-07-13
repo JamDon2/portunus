@@ -26,6 +26,13 @@ export const GearIcon = () => (
   </svg>
 );
 
+export const RefreshIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <polyline points="21 3 21 9 15 9" />
+  </svg>
+);
+
 export const EnterIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="12" height="12">
     <polyline points="9 10 4 15 9 20" />

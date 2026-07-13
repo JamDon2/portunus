@@ -1,4 +1,4 @@
-import { registerProvider, isCopyKey } from './registry';
+import { registerProvider } from './registry';
 import DictPreview, { dictCache } from '../components/DictPreview';
 
 registerProvider({
@@ -6,17 +6,21 @@ registerProvider({
   Preview: DictPreview,
   handleLaunch: () => false,
 
-  handleKeyDown: (e, result, ctx) => {
-    if (isCopyKey(e) && result?.kind === 'dict') {
-      e.preventDefault();
-      const copyDefinition = ctx.config?.dict.copy_definition ?? true;
-      const cached = dictCache.get(result.title);
-      const text = copyDefinition
-        ? cached?.definitions[0]?.text ?? result.title
-        : result.title;
-      navigator.clipboard.writeText(text);
-      return true;
-    }
-    return false;
+  actions: (result, ctx) => {
+    if (result.kind !== 'dict') return [];
+    const copyDefinition = ctx.config?.dict.copy_definition ?? true;
+    return [{
+      id: 'dict:copy',
+      title: copyDefinition ? 'Copy Definition' : 'Copy Word',
+      section: 'result',
+      shortcut: { ctrl: true, key: 'c' },
+      run: () => {
+        const cached = dictCache.get(result.title);
+        const text = copyDefinition
+          ? cached?.definitions[0]?.text ?? result.title
+          : result.title;
+        navigator.clipboard.writeText(text);
+      },
+    }];
   },
 });

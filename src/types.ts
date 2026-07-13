@@ -268,8 +268,9 @@ export type CommandRoute =
   | { type: "extension"; name: string; command: string }
   /** Frontend swaps in a dedicated component; the backend is not searched. */
   | { type: "ui_takeover" }
-  /** Built-in action: activation invokes the named Tauri command. */
-  | { type: "invoke"; command: string };
+  /** Built-in action: activation invokes the named Tauri command with the
+   *  optional `args` payload. */
+  | { type: "invoke"; command: string; args?: Record<string, unknown> };
 
 /** A searchable launcher command ("Define Word", "Search Issues"). */
 export interface CommandDescriptor {
@@ -380,6 +381,16 @@ export interface DepStatus {
   feature: string;
   available: boolean;
   install_hint: string;
+}
+
+/** Detected desktop environment (de_setup.rs). */
+export type DesktopEnv = "hyprland" | "gnome" | "kde" | "sway" | "niri" | "river" | "other";
+
+/** Raw facts for the onboarding DE-setup step; snippets are composed frontend-side. */
+export interface DeSetupInfo {
+  de: DesktopEnv;
+  /** Absolute binary path (or bare "portunus") for snippets and autostart Exec=. */
+  exec_path: string;
 }
 
 /** Normalized [x, y, w, h], 0..1, top-left origin (same space as the PDF/OCR

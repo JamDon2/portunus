@@ -1,6 +1,6 @@
 import { useState, useContext, type ReactElement } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { BookIcon, CategoryGlyph, ClipboardIcon, FileGlyphIcon, GearIcon, SearchIcon } from "../icons";
+import { BookIcon, CategoryGlyph, ClipboardIcon, FileGlyphIcon, GearIcon, RefreshIcon, SearchIcon } from "../icons";
 import { fileCategory } from "../utils";
 import { ColoredIconsContext } from "../coloredIcons";
 
@@ -18,6 +18,7 @@ const COMMAND_GLYPHS: Record<string, () => ReactElement> = {
   clipboard: ClipboardIcon,
   search: SearchIcon,
   settings: GearIcon,
+  refresh: RefreshIcon,
 };
 
 export default function ResultIcon({ icon_path, iconDataUri, glyph, title, kind }: Props) {

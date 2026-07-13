@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { Config, ContentDirEntry, DepStatus } from "../../types";
-import { applyTheme } from "../../theme";
-import ThemeGrid from "../settings/ThemeGrid";
+import { Config, ContentDirEntry, DepStatus, DeSetupInfo, DesktopEnv } from "../../types";
 import Toggle from "../settings/Toggle";
 import "./onboarding.css";
 
@@ -12,48 +10,120 @@ interface Props {
   onComplete: () => void;
 }
 
-const STEPS = ["Welcome", "Theme", "Providers", "Content"] as const;
+const STEPS = ["Welcome", "Desktop", "Content"] as const;
 
-// ── provider tour data ──────────────────────────────────────────────────────
-
-type ProviderKey = "apps" | "files" | "calc";
-
-interface ProviderCard {
-  id: string;
-  name: string;
-  desc: string;
-  example?: string;
-  icon: ReactElement;
-  /** Config flag this card toggles, if any. */
-  toggle?: ProviderKey;
-  /** Optional external binary this provider needs to function. */
-  dep?: string;
-  /** Shown instead of a toggle (e.g. "set up next"). */
-  note?: string;
-}
+// ── feature tour data ────────────────────────────────────────────────────────
 
 const I = (paths: ReactElement) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths}</svg>
 );
 
-const PROVIDERS: ProviderCard[] = [
-  { id: "apps", name: "Applications", desc: "Launch any installed app", example: "firefox", toggle: "apps",
+interface Feature {
+  id: string;
+  name: string;
+  desc: string;
+  example?: string;
+  icon: ReactElement;
+}
+
+const FEATURES: Feature[] = [
+  { id: "apps", name: "Applications", desc: "Launch any installed app", example: "firefox",
     icon: I(<><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></>) },
-  { id: "files", name: "Files", desc: "Find files by name, fuzzy-matched", example: "report.pdf", toggle: "files",
+  { id: "files", name: "Files", desc: "Find files by name, fuzzy-matched", example: "report.pdf",
     icon: I(<><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></>) },
-  { id: "calc", name: "Calculator", desc: "Math, units, currency, dates", example: "5km to mi", toggle: "calc",
+  { id: "calc", name: "Calculator", desc: "Math, units, currency, dates", example: "5km to mi",
     icon: I(<><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="11" x2="8" y2="11"/><line x1="12" y1="11" x2="12" y2="11"/><line x1="16" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="8" y2="15"/><line x1="12" y1="15" x2="12" y2="15"/><line x1="16" y1="15" x2="16" y2="18"/></>) },
-  { id: "dict", name: "Dictionary", desc: "Word definitions", example: "define lucid", dep: "dict",
+  { id: "dict", name: "Dictionary", desc: "Word definitions", example: "define lucid",
     icon: I(<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>) },
-  { id: "clipboard", name: "Clipboard", desc: "Search your clipboard history", example: "clipboard api", dep: "cliphist",
+  { id: "clipboard", name: "Clipboard", desc: "Search your clipboard history", example: "portunus --clipboard",
     icon: I(<><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></>) },
-  { id: "content", name: "Content search", desc: "Full-text search inside files", example: "Tab ⇢ invoice", note: "Set up next →",
+  { id: "content", name: "Contents", desc: "Full-text search inside documents", example: "Tab ⇢ invoice",
     icon: I(<><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/><path d="M11 8v6"/></>) },
+  { id: "extensions", name: "Extensions", desc: "Add new sources with sandboxed extensions", example: "emoji shrug",
+    icon: I(<><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></>) },
 ];
+
+// ── per-DE setup guides ──────────────────────────────────────────────────────
+// The backend reports raw facts (detected DE + resolved exec path); everything
+// below is presentation. Hotkeys are never registered by us - the user pastes.
+
+interface HotkeyGuide {
+  /** Where the snippet goes: a config file path or a GUI location. */
+  where: string;
+  text: string;
+  /** Extra caution rendered under the snippet (e.g. gsettings list overwrite). */
+  caveat?: string;
+}
+
+interface DeGuide {
+  label: string;
+  hotkey: (exec: string) => HotkeyGuide;
+  /** Whether this desktop honors ~/.config/autostart (XDG autostart). */
+  xdgAutostart: boolean;
+  /** Compositor exec line shown instead of the toggle when XDG autostart is ignored. */
+  autostart?: (exec: string) => HotkeyGuide;
+}
+
+const DE_GUIDES: Record<DesktopEnv, DeGuide> = {
+  hyprland: {
+    label: "Hyprland",
+    hotkey: exec => ({ where: "~/.config/hypr/hyprland.conf", text: `bind = SUPER, SPACE, exec, ${exec} --show` }),
+    xdgAutostart: false,
+    autostart: exec => ({ where: "~/.config/hypr/hyprland.conf", text: `exec-once = ${exec}` }),
+  },
+  sway: {
+    label: "sway",
+    hotkey: exec => ({ where: "~/.config/sway/config", text: `bindsym $mod+space exec ${exec} --show` }),
+    xdgAutostart: false,
+    autostart: exec => ({ where: "~/.config/sway/config", text: `exec ${exec}` }),
+  },
+  niri: {
+    label: "niri",
+    hotkey: exec => ({ where: "~/.config/niri/config.kdl", text: `Mod+Space { spawn "${exec}" "--show"; }` }),
+    xdgAutostart: false,
+    autostart: exec => ({ where: "~/.config/niri/config.kdl", text: `spawn-at-startup "${exec}"` }),
+  },
+  river: {
+    label: "river",
+    hotkey: exec => ({ where: "~/.config/river/init", text: `riverctl map normal Super Space spawn '${exec} --show'` }),
+    xdgAutostart: false,
+    autostart: exec => ({ where: "~/.config/river/init", text: `${exec} &` }),
+  },
+  gnome: {
+    label: "GNOME",
+    hotkey: exec => ({
+      where: "Settings → Keyboard → Custom Shortcuts, or a terminal:",
+      text: [
+        `gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/portunus/']"`,
+        `gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/portunus/ name 'Portunus'`,
+        `gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/portunus/ command '${exec} --show'`,
+        `gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/portunus/ binding '<Super>space'`,
+      ].join("\n"),
+      caveat: "The first line replaces any custom shortcuts you already have - prefer the Settings GUI if you use them.",
+    }),
+    xdgAutostart: true,
+  },
+  kde: {
+    label: "KDE Plasma",
+    hotkey: exec => ({
+      where: "System Settings → Shortcuts → Add New → Command or Script:",
+      text: `${exec} --show`,
+    }),
+    xdgAutostart: true,
+  },
+  other: {
+    label: "your desktop",
+    hotkey: exec => ({
+      where: "Bind a key in your desktop's keyboard settings to:",
+      text: `${exec} --show`,
+    }),
+    xdgAutostart: true,
+  },
+};
 
 // ── content presets ──────────────────────────────────────────────────────────
 
-type PresetId = "minimal" | "docs" | "ocr";
+type PresetId = "skip" | "docs" | "ocr";
 
 interface Preset {
   id: PresetId;
@@ -76,7 +146,7 @@ const OCR_DIRS: ContentDirEntry[] = [
 ];
 
 const PRESETS: Preset[] = [
-  { id: "minimal", name: "Just enable it", blurb: "Turn it on with no folders yet; add directories later in Settings.", dirs: [], ocr: false },
+  { id: "skip", name: "Skip for now", blurb: "Leave content search off; enable it anytime in Settings → Content.", dirs: [], ocr: false },
   { id: "docs", name: "Documents", blurb: "Index PDFs & Word docs in Downloads and Documents. Fast, text-only.", dirs: DOCS_DIRS, ocr: false },
   { id: "ocr", name: "Documents + OCR", blurb: "Also reads scanned PDFs and images via OCR. Most thorough.", dirs: OCR_DIRS, ocr: true, requires: "tesseract" },
 ];
@@ -89,75 +159,59 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
   const [dir, setDir] = useState<1 | -1>(1);
   const [version, setVersion] = useState("");
   const [deps, setDeps] = useState<Record<string, boolean> | null>(null);
-  const [preset, setPreset] = useState<PresetId | null>(null);
-  const [screenshotDir, setScreenshotDir] = useState<string | null>(null);
+  const [deInfo, setDeInfo] = useState<DeSetupInfo | null>(null);
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartError, setAutostartError] = useState(false);
+  const [preset, setPreset] = useState<PresetId>("skip");
   const [finishing, setFinishing] = useState(false);
   const [saveError, setSaveError] = useState(false);
-  // True once the user intentionally finishes, so unmount cleanup keeps their theme.
-  const committedRef = useRef(false);
   const primaryRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { getVersion().then(setVersion); }, []);
 
-  // Probe optional system dependencies once so provider/content steps can warn.
+  // Probe optional system dependencies once so the content step can warn.
   useEffect(() => {
     invoke<DepStatus[]>("check_dependencies")
       .then(list => setDeps(Object.fromEntries(list.map(d => [d.id, d.available]))))
       .catch(() => setDeps({}));
   }, []);
 
-  // Live-apply the theme as the user browses, so the whole wizard reskins instantly.
-  useEffect(() => { applyTheme(draft.appearance); }, [draft.appearance]);
-
-  // Restore the user's real saved theme if they bail out without finishing.
-  // On an intentional finish (committedRef) the chosen theme is kept instead.
-  useEffect(() => () => { if (!committedRef.current) applyTheme(config.appearance); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Desktop facts + current autostart state for the Desktop step.
+  useEffect(() => {
+    invoke<DeSetupInfo>("de_setup_info")
+      .then(setDeInfo)
+      .catch(() => setDeInfo({ de: "other", exec_path: "portunus" }));
+    invoke<boolean>("get_autostart")
+      .then(setAutostart)
+      .catch(() => setAutostart(false));
+  }, []);
 
   const depOk = (id?: string) => !id || deps == null || deps[id] === true;
 
-  const setProviders = (patch: Partial<Config["providers"]>) =>
-    setDraft(d => ({ ...d, providers: { ...d.providers, ...patch } }));
+  const toggleAutostart = (on: boolean) => {
+    setAutostart(on); // optimistic
+    setAutostartError(false);
+    invoke("set_autostart", { enabled: on }).catch(e => {
+      console.error("[onboarding] set_autostart failed:", e);
+      setAutostart(!on);
+      setAutostartError(true);
+    });
+  };
 
   const choosePreset = (p: Preset) => {
     if (p.requires && !depOk(p.requires)) return; // blocked: dependency missing
-    if (preset === p.id) return; // already active - re-selecting would wipe an added screenshot folder
     setPreset(p.id);
-    setScreenshotDir(null); // preset rewrites dirs, so drop any added screenshot folder
     setDraft(d => ({
       ...d,
-      content: { ...d.content, enabled: true, dirs: p.dirs, ocr_images: p.ocr, ocr_pdf_fallback: p.ocr },
+      content: {
+        ...d.content,
+        enabled: p.id !== "skip",
+        dirs: p.dirs,
+        ocr_images: p.ocr,
+        ocr_pdf_fallback: p.ocr,
+      },
     }));
-  };
-
-  // OCR makes any text in a screenshot searchable; let the user point us at their folder.
-  const addScreenshotDir = (raw: string) => {
-    const path = raw.trim();
-    if (!path) return;
-    const entry: ContentDirEntry = { path, depth: 2, extensions: ["png", "jpg", "jpeg"] };
-    setDraft(d => ({
-      ...d,
-      content: { ...d.content, dirs: [...d.content.dirs.filter(x => x.path !== path), entry] },
-    }));
-    setScreenshotDir(path);
-  };
-
-  const removeScreenshotDir = () => {
-    setDraft(d => ({
-      ...d,
-      content: { ...d.content, dirs: d.content.dirs.filter(x => x.path !== screenshotDir) },
-    }));
-    setScreenshotDir(null);
-  };
-
-  const toggleContent = (on: boolean) => {
-    if (on) {
-      // Default to the recommended preset when first enabling.
-      choosePreset(PRESETS[1]);
-    } else {
-      setPreset(null);
-      setDraft(d => ({ ...d, content: { ...d.content, enabled: false } }));
-    }
   };
 
   const go = (next: number) => {
@@ -166,14 +220,13 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
     setStep(next);
   };
 
-  // Commit the wizard: persist the draft (theme, providers, content) and keep it
-  // applied. Used by both "Finish" and "Skip setup" - skipping early still keeps
-  // whatever the user already chose rather than throwing it away.
+  // Commit the wizard: persist the draft and mark onboarding done. Used by both
+  // "Finish" and "Skip setup" - skipping early still keeps whatever the user
+  // already chose rather than throwing it away.
   const commit = async () => {
     if (finishing) return;
     setFinishing(true);
     setSaveError(false);
-    committedRef.current = true; // keep the previewed theme on unmount
     const final: Config = { ...draft, general: { ...draft.general, onboarding_completed: true } };
     try {
       await invoke("save_config", { config: final });
@@ -181,20 +234,19 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
       // Don't mark onboarding done or close - let the user retry. Esc still
       // dismisses as an escape hatch if saving keeps failing.
       console.error("[onboarding] save_config failed:", e);
-      committedRef.current = false;
       setSaveError(true);
       setFinishing(false);
       return;
     }
     // Kick off the first content index only when there's something to index.
     if (final.content.enabled && final.content.dirs.length > 0) {
-      invoke("trigger_full_reindex").catch(() => {});
+      invoke("trigger_full_reindex", { full: false }).catch(() => {});
     }
     onComplete();
   };
 
   // Esc / dismiss: close without marking onboarding done, so it returns on the
-  // next launch. committedRef stays false, so unmount restores the saved theme.
+  // next launch.
   const dismiss = () => {
     if (finishing) return;
     onComplete();
@@ -275,26 +327,15 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
           <div key={step} className={`onb-step ${dir === 1 ? "onb-step--fwd" : "onb-step--back"}`}>
             {step === 0 && <WelcomeStep version={version} />}
             {step === 1 && (
-              <ThemeStep
-                value={draft.appearance.theme}
-                onSelect={id => setDraft(d => ({ ...d, appearance: { ...d.appearance, theme: id } }))}
+              <DesktopStep
+                info={deInfo}
+                autostart={autostart}
+                autostartError={autostartError}
+                onAutostart={toggleAutostart}
               />
             )}
             {step === 2 && (
-              <ProvidersStep providers={draft.providers} deps={deps} depOk={depOk} onToggle={setProviders} />
-            )}
-            {step === 3 && (
-              <ContentStep
-                enabled={draft.content.enabled}
-                preset={preset}
-                deps={deps}
-                depOk={depOk}
-                onToggle={toggleContent}
-                onPreset={choosePreset}
-                screenshotDir={screenshotDir}
-                onAddScreenshots={addScreenshotDir}
-                onRemoveScreenshots={removeScreenshotDir}
-              />
+              <ContentStep preset={preset} deps={deps} depOk={depOk} onPreset={choosePreset} />
             )}
           </div>
         </div>
@@ -339,7 +380,7 @@ export default function OnboardingWizard({ config, onComplete }: Props) {
 
 function WelcomeStep({ version }: { version: string }) {
   return (
-    <div className="onb-welcome">
+    <div className="onb-welcome onb-welcome--compact">
       <div className="onb-glyph onb-rise" style={{ animationDelay: "40ms" }}>
         <svg viewBox="0 0 1024 1024" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
           <path d="M 280 824 L 280 360 A 232 232 0 0 1 744 360 L 744 824" strokeWidth="22" opacity="0.45" />
@@ -349,105 +390,135 @@ function WelcomeStep({ version }: { version: string }) {
         </svg>
         <span className="onb-glyph-glow" aria-hidden />
       </div>
-      <h1 className="onb-title onb-rise" style={{ animationDelay: "120ms" }}>
+      <h1 className="onb-title onb-rise" style={{ animationDelay: "100ms" }}>
         Welcome to <span className="onb-brand">Portunus</span>
       </h1>
-      <p className="onb-lede onb-rise" style={{ animationDelay: "200ms" }}>
-        A fast, keyboard-first launcher for apps, files, math, definitions and the
-        contents of your documents, all from one search box.
+      <p className="onb-lede onb-rise" style={{ animationDelay: "160ms" }}>
+        One search box for everything below. Everything is on by default; tune it later in Settings.
       </p>
-      <div className="onb-kbd-row onb-rise" style={{ animationDelay: "280ms" }}>
-        Type to search · <kbd>↑</kbd><kbd>↓</kbd> to move · <kbd>↵</kbd> to launch · <kbd>Esc</kbd> to dismiss
-      </div>
-      {version && <div className="onb-version onb-rise" style={{ animationDelay: "340ms" }}>v{version}</div>}
-    </div>
-  );
-}
-
-function ThemeStep({ value, onSelect }: { value: string; onSelect: (id: string) => void }) {
-  return (
-    <div className="onb-section">
-      <h2 className="onb-h2">Pick a theme</h2>
-      <p className="onb-sub">Click any theme to preview it live. You can fine-tune this later in Settings → Appearance.</p>
-      <div className="onb-rise" style={{ animationDelay: "80ms" }}>
-        <ThemeGrid value={value} onSelect={onSelect} />
-      </div>
-    </div>
-  );
-}
-
-function ProvidersStep({
-  providers, deps, depOk, onToggle,
-}: {
-  providers: Config["providers"];
-  deps: Record<string, boolean> | null;
-  depOk: (id?: string) => boolean;
-  onToggle: (patch: Partial<Config["providers"]>) => void;
-}) {
-  return (
-    <div className="onb-section">
-      <h2 className="onb-h2">What Portunus can search</h2>
-      <p className="onb-sub">Toggle providers on or off. Some need an extra tool installed, shown with a tag.</p>
-      <div className="onb-prov-grid">
-        {PROVIDERS.map((p, i) => {
-          const available = depOk(p.dep);
-          const checked = p.toggle ? providers[p.toggle] : true;
-          return (
-            <div
-              key={p.id}
-              className={`onb-prov onb-rise${!available ? " is-unavailable" : ""}`}
-              style={{ animationDelay: `${60 + i * 45}ms` }}
-            >
-              <span className="onb-prov-icon">{p.icon}</span>
-              <div className="onb-prov-body">
-                <div className="onb-prov-head">
-                  <span className="onb-prov-name">{p.name}</span>
-                  {p.dep && !available && deps != null && (
-                    <span className="onb-chip onb-chip--warn">needs {p.dep}</span>
-                  )}
-                </div>
-                <div className="onb-prov-desc">{p.desc}</div>
-                {p.example && <code className="onb-prov-ex">{p.example}</code>}
+      <div className="onb-prov-grid onb-prov-grid--tour">
+        {FEATURES.map((f, i) => (
+          <div key={f.id} className="onb-prov onb-rise" style={{ animationDelay: `${200 + i * 40}ms` }}>
+            <span className="onb-prov-icon">{f.icon}</span>
+            <div className="onb-prov-body">
+              <div className="onb-prov-head">
+                <span className="onb-prov-name">{f.name}</span>
               </div>
-              <div className="onb-prov-ctrl">
-                {p.toggle ? (
-                  <Toggle label={p.name} checked={checked} onChange={v => onToggle({ [p.toggle!]: v })} />
-                ) : p.note ? (
-                  <span className="onb-prov-note">{p.note}</span>
-                ) : p.dep && !available ? (
-                  /* head already shows the "needs {dep}" chip - don't double up */
-                  null
-                ) : (
-                  <span className={`onb-chip${available ? " onb-chip--ok" : " onb-chip--warn"}`}>
-                    {available ? "ready" : "optional"}
-                  </span>
-                )}
-              </div>
+              <div className="onb-prov-desc">{f.desc}</div>
+              {f.example && <code className="onb-prov-ex">{f.example}</code>}
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
+      <div className="onb-kbd-row onb-rise" style={{ animationDelay: "520ms" }}>
+        Type to search · <kbd>↑</kbd><kbd>↓</kbd> to move · <kbd>↵</kbd> to launch · <kbd>Esc</kbd> to dismiss
+        {version && <span className="onb-version-inline">v{version}</span>}
+      </div>
+    </div>
+  );
+}
+
+function Snippet({ where, text, caveat }: HotkeyGuide) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    invoke("copy_text", { text }).catch(() =>
+      navigator.clipboard.writeText(text).catch(() => {}),
+    );
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="onb-snippet-block">
+      <div className="onb-snippet-where">{where}</div>
+      <div className="onb-snippet">
+        <pre className="onb-snippet-code">{text}</pre>
+        <button type="button" className="onb-snippet-copy" onClick={copy}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {caveat && <div className="onb-snippet-caveat">{caveat}</div>}
+    </div>
+  );
+}
+
+function DesktopStep({
+  info, autostart, autostartError, onAutostart,
+}: {
+  info: DeSetupInfo | null;
+  autostart: boolean | null;
+  autostartError: boolean;
+  onAutostart: (on: boolean) => void;
+}) {
+  if (!info) return null; // probe resolves in ms; a spinner would only flash
+  const guide = DE_GUIDES[info.de] ?? DE_GUIDES.other;
+  const hotkey = guide.hotkey(info.exec_path);
+  const autostartSnippet = guide.autostart?.(info.exec_path);
+
+  return (
+    <div className="onb-section">
+      <h2 className="onb-h2">Wire it into {guide.label}</h2>
+      <p className="onb-sub">
+        Portunus runs in the background and appears when something runs{" "}
+        <code className="onb-inline">portunus --show</code>. Bind that to a key:
+      </p>
+
+      <div className="onb-rise" style={{ animationDelay: "60ms" }}>
+        {info.de !== "other" && (
+          <span className="onb-chip onb-chip--ok onb-de-chip">detected: {guide.label}</span>
+        )}
+        <Snippet {...hotkey} />
+      </div>
+
+      <div className="onb-rise" style={{ animationDelay: "140ms" }}>
+        {guide.xdgAutostart ? (
+          <>
+            <div className="onb-content-toggle">
+              <div>
+                <div className="onb-ct-name">Start at login</div>
+                <div className="onb-ct-desc">Adds a desktop entry to <code className="onb-inline">~/.config/autostart</code>.</div>
+              </div>
+              <Toggle
+                label="Start at login"
+                checked={autostart === true}
+                onChange={onAutostart}
+                disabled={autostart === null}
+              />
+            </div>
+            {autostartError && (
+              <div className="onb-warn onb-warn--muted" role="alert">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span>Couldn’t update <code className="onb-inline">~/.config/autostart/portunus.desktop</code> - check permissions.</span>
+              </div>
+            )}
+          </>
+        ) : (
+          autostartSnippet && (
+            <>
+              <div className="onb-snippet-title">Start at login</div>
+              <Snippet {...autostartSnippet} />
+            </>
+          )
+        )}
+      </div>
+
+      <p className="onb-footnote onb-rise" style={{ animationDelay: "220ms" }}>
+        Autostart can be changed anytime in Settings → General.
+      </p>
     </div>
   );
 }
 
 function ContentStep({
-  enabled, preset, deps, depOk, onToggle, onPreset,
-  screenshotDir, onAddScreenshots, onRemoveScreenshots,
+  preset, deps, depOk, onPreset,
 }: {
-  enabled: boolean;
-  preset: PresetId | null;
+  preset: PresetId;
   deps: Record<string, boolean> | null;
   depOk: (id?: string) => boolean;
-  onToggle: (on: boolean) => void;
   onPreset: (p: Preset) => void;
-  screenshotDir: string | null;
-  onAddScreenshots: (path: string) => void;
-  onRemoveScreenshots: () => void;
 }) {
-  const popplerMissing = !depOk("poppler");
   const showOcrWarning = preset === "ocr";
-  const [screenshotInput, setScreenshotInput] = useState("~/Pictures/Screenshots");
 
   return (
     <div className="onb-section">
@@ -457,117 +528,57 @@ function ContentStep({
         document. Press <code className="onb-inline">Tab</code> in the launcher to use it.
       </p>
 
-      <div className="onb-content-toggle onb-rise" style={{ animationDelay: "60ms" }}>
-        <div>
-          <div className="onb-ct-name">Enable content search</div>
-          <div className="onb-ct-desc">The index builds in the background, so you can keep using Portunus.</div>
-        </div>
-        <Toggle label="Enable content search" checked={enabled} onChange={onToggle} />
+      <div className="onb-preset-grid">
+        {PRESETS.map((p, i) => {
+          // Disable presets with a hard dependency until the probe resolves,
+          // so a fast click can't apply OCR before we know tesseract is present.
+          const blocked = !!p.requires && (deps == null || !depOk(p.requires));
+          return (
+            <button
+              key={p.id}
+              type="button"
+              className={`onb-preset onb-rise${preset === p.id ? " is-selected" : ""}${blocked ? " is-blocked" : ""}`}
+              style={{ animationDelay: `${80 + i * 60}ms` }}
+              onClick={() => onPreset(p)}
+              disabled={blocked}
+            >
+              <div className="onb-preset-head">
+                <span className="onb-preset-name">{p.name}</span>
+                {blocked && <span className="onb-chip onb-chip--warn">needs {p.requires}</span>}
+                <span className="onb-preset-check" aria-hidden>
+                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
+                    <polyline points="1.5,5 4,7.5 8.5,2.5" stroke="var(--text-on-accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </span>
+              </div>
+              <div className="onb-preset-blurb">{p.blurb}</div>
+            </button>
+          );
+        })}
       </div>
 
-      {enabled && (
-        <>
-          <div className="onb-preset-grid">
-            {PRESETS.map((p, i) => {
-              // Disable presets with a hard dependency until the probe resolves,
-              // so a fast click can't apply OCR before we know tesseract is present.
-              const blocked = !!p.requires && (deps == null || !depOk(p.requires));
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={`onb-preset onb-rise${preset === p.id ? " is-selected" : ""}${blocked ? " is-blocked" : ""}`}
-                  style={{ animationDelay: `${120 + i * 60}ms` }}
-                  onClick={() => onPreset(p)}
-                  disabled={blocked}
-                >
-                  <div className="onb-preset-head">
-                    <span className="onb-preset-name">{p.name}</span>
-                    {blocked && <span className="onb-chip onb-chip--warn">needs {p.requires}</span>}
-                    <span className="onb-preset-check" aria-hidden>
-                      <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
-                        <polyline points="1.5,5 4,7.5 8.5,2.5" stroke="var(--text-on-accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </span>
-                  </div>
-                  <div className="onb-preset-blurb">{p.blurb}</div>
-                </button>
-              );
-            })}
-          </div>
-
-          {showOcrWarning && (
-            <div className="onb-warn onb-rise" style={{ animationDelay: "60ms" }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-              </svg>
-              <span>OCR scans images and scanned PDFs page by page, so the first index may take <strong>several minutes</strong> depending on how many files you have.</span>
-            </div>
-          )}
-
-          {showOcrWarning && (
-            <div className="onb-hint onb-rise" style={{ animationDelay: "120ms" }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 3v3m0 12v3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M3 12h3m12 0h3M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1"/>
-              </svg>
-              <div className="onb-hint-body">
-                <div className="onb-hint-head"><strong>Neat:</strong> index your screenshots folder. OCR makes any text in a screenshot searchable.</div>
-                {screenshotDir ? (
-                  <div className="onb-hint-added">
-                    <span className="onb-hint-path">{screenshotDir}</span>
-                    <button type="button" className="onb-hint-remove" onClick={onRemoveScreenshots}>Remove</button>
-                  </div>
-                ) : (
-                  <div className="onb-hint-row">
-                    <div className="onb-hint-field">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
-                      </svg>
-                      <input
-                        className="onb-hint-input"
-                        type="text"
-                        value={screenshotInput}
-                        placeholder="~/Pictures/Screenshots"
-                        onChange={e => setScreenshotInput(e.target.value)}
-                        onKeyDown={e => { if (e.key === "Enter") onAddScreenshots(screenshotInput); }}
-                        aria-label="Screenshots folder path"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="onb-hint-add"
-                      onClick={() => onAddScreenshots(screenshotInput)}
-                      disabled={!screenshotInput.trim()}
-                    >
-                      Add
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {popplerMissing && deps_note(depOk)}
-
-          <p className="onb-footnote onb-rise" style={{ animationDelay: "240ms" }}>
-            You can change folders, file types, OCR and languages anytime in Settings → Content.
-          </p>
-        </>
+      {showOcrWarning && (
+        <div className="onb-warn onb-rise" style={{ animationDelay: "60ms" }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span>OCR scans images and scanned PDFs page by page, so the first index may take <strong>several minutes</strong> depending on how many files you have.</span>
+        </div>
       )}
-    </div>
-  );
-}
 
-// Small helper kept outside JSX for readability: poppler-missing note.
-function deps_note(depOk: (id?: string) => boolean) {
-  if (depOk("poppler")) return null;
-  return (
-    <div className="onb-warn onb-warn--muted">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-      </svg>
-      <span><strong>poppler</strong> isn’t installed, so PDF text extraction will be skipped until you add it. Other file types still index.</span>
+      {preset !== "skip" && !depOk("poppler") && (
+        <div className="onb-warn onb-warn--muted">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span><strong>poppler</strong> isn’t installed, so PDF text extraction will be skipped until you add it. Other file types still index.</span>
+        </div>
+      )}
+
+      <p className="onb-footnote onb-rise" style={{ animationDelay: "200ms" }}>
+        You can change folders, file types, OCR and languages anytime in Settings → Content.
+      </p>
     </div>
   );
 }

@@ -1,7 +1,6 @@
 /* ─────────────────────────────────────────────────────────────────────────
    First-launch onboarding wizard.
-   Lives as an overlay above the launcher card; every color is a theme token
-   so the panel reskins instantly while the user previews themes in step 2.
+   Lives as an overlay above the launcher card; every color is a theme token.
    ───────────────────────────────────────────────────────────────────────── */
 
 .onb-overlay {
@@ -158,18 +157,6 @@
 }
 .onb-section { display: flex; flex-direction: column; }
 
-/* The shared theme grid is content-sized for the narrow Settings pane; the wizard
-   is far wider, so stretch it to a full-width 3-column grid with airier cards. */
-.onb-section .theme-grid {
-  grid-template-columns: repeat(3, 1fr);
-  justify-content: stretch;
-  gap: 10px;
-  width: 100%;
-}
-.onb-section .theme-card { padding: 14px 14px 13px; }
-.onb-section .theme-card-label { font-size: 12px; margin-bottom: 11px; }
-.onb-section .theme-swatch { width: 16px; height: 16px; }
-
 .onb-inline,
 .onb-prov-ex {
   font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
@@ -253,12 +240,19 @@
   padding: 3px 6px;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
 }
-.onb-version {
-  margin-top: 16px;
+.onb-version-inline {
+  margin-left: 6px;
   font: 500 10px/1 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg-dim);
   letter-spacing: 0.04em;
 }
+
+/* compact hero so the feature tour fits on the same screen */
+.onb-welcome--compact { padding: 8px 4px 4px; }
+.onb-welcome--compact .onb-glyph { width: 52px; height: 52px; margin-bottom: 12px; }
+.onb-welcome--compact .onb-title { font-size: 22px; margin-bottom: 8px; }
+.onb-welcome--compact .onb-lede { margin-bottom: 16px; font-size: 12.5px; }
+.onb-welcome--compact .onb-kbd-row { margin-top: 14px; }
 
 /* ── providers step ──────────────────────────────────────────────────────── */
 
@@ -297,8 +291,12 @@
 .onb-prov-head { display: flex; align-items: center; gap: 6px; }
 .onb-prov-name { font-size: 12.5px; font-weight: 600; color: var(--fg); }
 .onb-prov-desc { font-size: 11px; line-height: 1.4; color: var(--fg-mute); margin: 2px 0 6px; }
-.onb-prov-ctrl { flex-shrink: 0; display: flex; align-items: center; padding-top: 1px; }
-.onb-prov-note { font-size: 10.5px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+
+/* welcome-step feature tour: read-only, tighter than the old toggle cards */
+.onb-prov-grid--tour { width: 100%; text-align: left; }
+.onb-prov-grid--tour .onb-prov { align-items: center; padding: 9px 11px; }
+.onb-prov-grid--tour .onb-prov-desc { margin-bottom: 0; }
+.onb-prov-grid--tour .onb-prov-ex { display: inline-block; margin-top: 5px; }
 
 /* ── chips ───────────────────────────────────────────────────────────────── */
 
@@ -399,87 +397,65 @@
   line-height: 1.5;
 }
 
-/* ── neat screenshot-folder hint (OCR preset) ────────────────────────────── */
-.onb-hint {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 9px;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+/* ── desktop step: snippets + autostart ──────────────────────────────────── */
+
+.onb-de-chip {
+  display: inline-block;
+  margin-bottom: 8px;
 }
-.onb-hint svg { flex-shrink: 0; margin-top: 1px; }
-.onb-hint strong { font-weight: 700; }
-.onb-hint-body { flex: 1; min-width: 0; }
-.onb-hint-head { color: var(--fg); }
-.onb-hint-row { display: flex; gap: 6px; margin-top: 8px; }
-.onb-hint-field {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 9px;
-  background: var(--bg);
-  border: 1px solid var(--fg-dim);
-  border-radius: 7px;
-}
-.onb-hint-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
-.onb-hint-field svg { flex-shrink: 0; color: var(--fg-mute); }
-.onb-hint-input {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 0;
-  font-size: 11.5px;
-  color: var(--fg);
-  background: transparent;
-  border: none;
-  outline: none;
-}
-.onb-hint-input::placeholder { color: var(--fg-mute); }
-.onb-hint-add,
-.onb-hint-remove {
-  flex-shrink: 0;
-  padding: 6px 12px;
-  font-size: 11.5px;
+.onb-snippet-block { margin-top: 8px; }
+.onb-snippet-title {
+  margin-top: 14px;
+  font-size: 12px;
   font-weight: 600;
-  border-radius: 7px;
-  cursor: pointer;
-  border: 1px solid transparent;
+  color: var(--fg);
 }
-.onb-hint-add {
-  color: var(--text-on-accent);
-  background: var(--accent);
+.onb-snippet-where {
+  margin: 6px 0 5px;
+  font-size: 11px;
+  color: var(--fg-dim);
 }
-.onb-hint-add:disabled { opacity: 0.5; cursor: default; }
-.onb-hint-added {
+.onb-snippet {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  align-items: stretch;
+  background: var(--kbd-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
 }
-.onb-hint-path {
+.onb-snippet-code {
   flex: 1;
   min-width: 0;
-  padding: 6px 9px;
-  font-size: 11.5px;
+  margin: 0;
+  padding: 9px 11px;
+  font: 500 11px/1.6 "JetBrains Mono", "Fira Code", monospace;
   color: var(--fg);
-  background: var(--bg);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: 7px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
-.onb-hint-remove {
+.onb-snippet-copy {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin: 6px 6px 6px 0;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-mute);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.14s, border-color 0.14s;
+}
+.onb-snippet-copy:hover { color: var(--fg); border-color: var(--fg-dim); }
+.onb-snippet-caveat {
+  margin-top: 6px;
+  font-size: 10.5px;
+  line-height: 1.5;
   color: var(--fg-dim);
-  background: var(--kbd-bg);
-  border-color: var(--line);
 }
 
 /* ── nav bar ─────────────────────────────────────────────────────────────── */

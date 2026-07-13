@@ -42,8 +42,13 @@ pub enum CommandRoute {
     UiTakeover,
     /// A built-in action that invokes a named Tauri command frontend-side on
     /// activation (e.g. "Open Settings"). Backend-authored only - extension
-    /// commands never carry this route.
-    Invoke { command: String },
+    /// commands never carry this route. `args` (if present) is passed verbatim
+    /// as the invoke payload for commands that need parameters.
+    Invoke {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        args: Option<serde_json::Value>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]

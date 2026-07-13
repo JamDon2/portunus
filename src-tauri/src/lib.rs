@@ -4,6 +4,7 @@ mod clipboard_ocr;
 mod config;
 mod content_index;
 mod content_match;
+mod de_setup;
 mod extensions;
 mod frecency;
 mod ipc;
@@ -1053,6 +1054,9 @@ pub fn run() {
             is_content_index_empty,
             check_dependencies,
             take_config_error,
+            de_setup::de_setup_info,
+            de_setup::get_autostart,
+            de_setup::set_autostart,
             // File preview
             preview::render_pdf_page,
             preview::pdf_match_rects,

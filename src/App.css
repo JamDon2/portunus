@@ -902,6 +902,8 @@ html, body, #root {
 /* ---------- footer ---------- */
 
 .footer {
+  /* Anchor for the action panel (bottom: 100% pins it flush to this bar). */
+  position: relative;
   border-top: 1px solid var(--line-soft);
   background: var(--bg-footer);
   display: flex;
@@ -2422,42 +2424,102 @@ mark.preview-hl {
   display: block;
 }
 
-/* ---------- extension action picker ---------- */
+/* ---------- action panel (Alt+Enter) ---------- */
 
-.action-picker {
+/* Rises from the footer it's anchored to: rows scroll on top, the filter
+   input is pinned at the bottom touching the bar (Raycast anatomy). Rows echo
+   .result-row at a compact scale - same hover/selection tokens, same accent
+   rail - so the panel reads as part of the launcher, not a floating widget. */
+.action-panel {
   position: absolute;
-  right: 14px;
-  bottom: 40px;
+  right: 8px;
+  bottom: 100%;
   z-index: 25;
-  width: 320px;
-  max-height: 300px;
+  width: 360px;
+  max-height: 340px;
   display: flex;
   flex-direction: column;
   background: var(--bg-preview);
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 16px 48px -12px rgba(0, 0, 0, 0.7);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  box-shadow: 0 -12px 40px -12px rgba(0, 0, 0, 0.6);
   overflow: hidden;
-  animation: quicklook-fade 0.12s ease-out forwards;
+  animation: action-panel-up 0.14s ease-out forwards;
+  /* .footer forces a monospace font shorthand; reset to the app sans stack so
+     rows match result rows (kbd badges re-declare their own mono font). */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-.action-picker-header {
+@keyframes action-panel-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.action-panel-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.action-panel-list::-webkit-scrollbar { width: 4px; }
+.action-panel-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+.action-panel-list:hover::-webkit-scrollbar-thumb { background: var(--bg-input); }
+.action-panel-list::-webkit-scrollbar-track { background: transparent; }
+
+.action-panel-row {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px 8px;
-  border-bottom: 1px solid var(--line);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
-.action-picker-title {
-  font-size: 11px;
-  color: var(--fg-mute);
+.action-panel-row:hover { background: var(--bg-row-hov); }
+
+.action-panel-row.selected {
+  background: color-mix(in srgb, var(--bg-row-sel) 72%, var(--bg-card));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.action-panel-title {
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.action-picker-filter {
+.action-panel-hint {
+  color: var(--fg-mute);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.action-panel-keys {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.action-panel-input {
+  border-top: 1px solid var(--line);
+  padding: 9px 12px;
+}
+
+.action-panel-input input {
+  width: 100%;
   background: transparent;
   border: none;
   outline: none;
@@ -2466,59 +2528,9 @@ mark.preview-hl {
   padding: 0;
 }
 
-.action-picker-list {
-  overflow-y: auto;
-  padding: 4px;
-}
+.action-panel-input input::placeholder { color: var(--fg-dim); }
 
-.action-picker-list::-webkit-scrollbar { width: 6px; }
-.action-picker-list::-webkit-scrollbar-thumb {
-  background: var(--bg-input);
-  border-radius: 3px;
-}
-
-.action-picker-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 9px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.action-picker-row.selected {
-  background: var(--accent-soft);
-}
-
-.action-picker-label {
-  color: var(--fg);
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.action-picker-hint {
-  color: var(--fg-mute);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
-}
-
-.action-picker-key {
-  margin-left: auto;
-  font: 500 10px/1 "JetBrains Mono", "Fira Code", monospace;
-  color: var(--fg-mute);
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 2px 5px;
-}
-
-.action-picker-empty {
+.action-panel-empty {
   padding: 12px;
   color: var(--fg-mute);
   font-size: 12px;

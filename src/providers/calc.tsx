@@ -1,15 +1,17 @@
-import { registerProvider, isCopyKey } from './registry';
+import { registerProvider } from './registry';
 
 registerProvider({
   kinds: [],
   Preview: null,
 
-  handleKeyDown: (e, result) => {
-    if (isCopyKey(e) && result?.kind === 'calc') {
-      e.preventDefault();
-      navigator.clipboard.writeText(result.title);
-      return true;
-    }
-    return false;
+  actions: result => {
+    if (result.kind !== 'calc') return [];
+    return [{
+      id: 'calc:copy',
+      title: 'Copy Result',
+      section: 'result',
+      shortcut: { ctrl: true, key: 'c' },
+      run: () => { navigator.clipboard.writeText(result.title); },
+    }];
   },
 });
