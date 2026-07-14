@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperties } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -21,7 +21,6 @@ import type { ActionDescriptor } from "./actions/types";
 import SelectionLayer from "./selection/SelectionLayer";
 import { selection } from "./selection/controller";
 import { useTauriListener } from "./hooks/useTauriListener";
-import { useIconAccents } from "./hooks/useIconAccents";
 import OnboardingWizard from "./components/onboarding/OnboardingWizard";
 import "./providers";
 import "./App.css";
@@ -991,11 +990,6 @@ export default function App() {
     return () => cancelAnimationFrame(raf);
   }, [quickResult?.id]);
 
-  // Dominant icon colour per result (accent bleed). The selected result's colour
-  // is hoisted to a card-level var so the preview panel re-hues with the selection.
-  const accents = useIconAccents(displayResults);
-  const bleed = (selected ? accents.get(selected.id) : undefined) ?? undefined;
-
   // Quicklook is modal: blur the search input while it's open so stray typing
   // can't mutate the query/results hidden behind the overlay; refocus on close.
   // The pinned result stays put regardless of what happens to the list behind it.
@@ -1119,7 +1113,6 @@ export default function App() {
       )}
       <div
         className="card"
-        style={{ '--bleed': bleed } as CSSProperties}
         onMouseDown={e => {
           // Keep focus (and all keybinds) on the search input: no mousedown may
           // move focus or start a native selection. Text selection in previews
@@ -1223,7 +1216,6 @@ export default function App() {
             }}
             onLaunch={launch}
             launchableResults={launchableResults}
-            accents={accents}
             emptyLabel={inContents ? "No file contents match" : undefined}
             emptyReady={resolvedEmpty}
             pending={inContents ? [] : [...pendingExts]}

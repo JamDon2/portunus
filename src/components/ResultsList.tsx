@@ -12,8 +12,6 @@ interface Props {
   onSelect: (index: number) => void;
   onLaunch: (result?: SearchResult) => void;
   launchableResults: SearchResult[];
-  /** Per-result dominant icon colour for the accent-bleed effect. */
-  accents: Map<string, string>;
   /** Empty-state text when a search resolves with no results. */
   emptyLabel?: string;
   /** Gate for showing the empty state — held false until the empty verdict has
@@ -24,7 +22,7 @@ interface Props {
   pending?: string[];
 }
 
-export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults, accents, emptyLabel = "No results", emptyReady = true, pending = [] }: Props) {
+export default function ResultsList({ results, selectedIndex, active, searching, onSelect, onLaunch, launchableResults, emptyLabel = "No results", emptyReady = true, pending = [] }: Props) {
   const selectedRef = useRef<HTMLDivElement>(null);
   const selectedLabelRef = useRef<HTMLDivElement>(null);
   const colRef = useRef<HTMLDivElement>(null);
@@ -104,19 +102,15 @@ export default function ResultsList({ results, selectedIndex, active, searching,
     setIndicator({ top: el.offsetTop, height: el.offsetHeight, snap: scrolled });
   }, [selectedIndex, results]);
 
-  const selectedResult = results[selectedIndex];
-  const selectedAccent = selectedResult ? accents.get(selectedResult.id) : undefined;
-
   return (
     <div className="results-col" ref={colRef} role="listbox">
       {indicator && results.length > 0 && (
         <div
-          className={`selection-bg${selectedAccent ? " has-accent" : ""}`}
+          className="selection-bg"
           aria-hidden="true"
           style={{
             transform: `translateY(${indicator.top}px)`,
             height: indicator.height,
-            '--row-accent': selectedAccent,
             transition: indicator.snap ? 'none' : undefined,
           } as CSSProperties}
         />
@@ -148,9 +142,9 @@ export default function ResultsList({ results, selectedIndex, active, searching,
                 flipRef(`r:${result.id}`)(el);
                 if (i === selectedIndex) selectedRef.current = el;
               }}
-              className={`result-row${i === selectedIndex ? " selected" : ""}${accents.has(result.id) ? " has-accent" : ""}`}
+              className={`result-row${i === selectedIndex ? " selected" : ""}`}
               data-kind={result.kind}
-              style={{ '--row-i': i, '--row-accent': accents.get(result.id) } as CSSProperties}
+              style={{ '--row-i': i } as CSSProperties}
               role="option"
               aria-selected={i === selectedIndex}
               onClick={() => {

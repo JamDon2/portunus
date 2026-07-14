@@ -28,7 +28,7 @@ export default function AppearanceSection({ config, onChange }: Props) {
   const set = (patch: Partial<Config["appearance"]>) =>
     onChange({ ...config, appearance: { ...config.appearance, ...patch } });
 
-  const { theme, font_size, animate_results, show_metadata, accent_bleed, slide_selection, grain } = config.appearance;
+  const { theme, font_size, animate_results, show_metadata, slide_selection, grain } = config.appearance;
 
   return (
     <div className="settings-section">
@@ -67,10 +67,6 @@ export default function AppearanceSection({ config, onChange }: Props) {
 
         <SettingsField name="File metadata" desc="Show the modified/created row in file previews.">
           <Toggle label="File metadata" checked={show_metadata ?? true} onChange={v => set({ show_metadata: v })} />
-        </SettingsField>
-
-        <SettingsField name="Accent bleed" desc="Tint the selection and preview with the app's icon color.">
-          <Toggle label="Accent bleed" checked={accent_bleed ?? true} onChange={v => set({ accent_bleed: v })} />
         </SettingsField>
 
         <SettingsField name="Sliding selection" desc="Glide the highlight between rows as you navigate.">

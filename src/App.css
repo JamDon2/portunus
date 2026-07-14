@@ -108,8 +108,8 @@ html, body, #root {
   overflow: hidden;
 }
 
-/* Inner clip layer. clip-path reliably clips composited descendants (e.g. the
-   app-preview icon's drop-shadow filter) to the rounded corners, which plain
+/* Inner clip layer. clip-path reliably clips composited descendants (filters,
+   FLIP transforms, translateZ layers) to the rounded corners, which plain
    overflow:hidden + border-radius does NOT in WebKit2GTK - that bug squared off
    the card's right corners on app previews. Kept as an inner layer so the card's
    own border + inset bevel render on the outer .card box. */
@@ -520,31 +520,6 @@ html, body, #root {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-/* ---------- accent bleed ----------
-   Each row carries its icon's dominant colour in --row-accent. With the effect
-   on, the selected row's rail + a soft horizontal wash adopt that hue, the icon
-   tile picks it up, and (below) the whole preview panel re-hues to match. The
-   color-mix fallbacks to --accent keep glyph-only / un-sampled rows graceful. */
-/* Only rows with a sampled icon colour get .has-accent (apps), so the bleed
-   stays apps-only; every other selected row keeps the plain toned highlight. */
-:root[data-accent-bleed="true"] .result-row.selected.has-accent {
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--row-accent) 20%, var(--sel-bg)) 0%,
-    color-mix(in srgb, var(--row-accent) 6%, var(--sel-bg)) 100%
-  );
-  box-shadow: inset 2px 0 0 var(--row-accent);
-}
-
-:root[data-accent-bleed="true"] .result-row.selected.has-accent .result-icon {
-  background: color-mix(in srgb, var(--row-accent) 24%, var(--icon-bg-sel));
-  color: var(--row-accent);
-}
-
-:root[data-accent-bleed="true"] .result-row.selected.has-accent .result-icon-img {
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--row-accent) 55%, transparent));
-}
-
 /* ---------- sliding selection ----------
    A single highlight layer behind the rows that glides + resizes to the selected
    row. Off by default styling (display:none); App.tsx flips data-slide-selection.
@@ -568,47 +543,18 @@ html, body, #root {
 
 :root[data-slide-selection="true"] .selection-bg { display: block; }
 
-/* App-tinted gradient on the sliding layer — only when accent bleed is on. */
-:root[data-accent-bleed="true"] .selection-bg.has-accent {
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--row-accent) 20%, var(--sel-bg)) 0%,
-    color-mix(in srgb, var(--row-accent) 6%, var(--sel-bg)) 100%
-  );
-  box-shadow: inset 2px 0 0 var(--row-accent);
-}
-
 /* With the layer active, the row content and the group labels float above it
    (so the bar slides *behind* a "FILES"/"APPS" header rather than covering it)
    and the per-row highlight is dropped so only the layer paints background + rail. */
 :root[data-slide-selection="true"] .result-row { position: relative; z-index: 1; }
 :root[data-slide-selection="true"] .result-group-label { position: relative; z-index: 1; }
-:root[data-slide-selection="true"] .result-row.selected,
-:root[data-slide-selection="true"][data-accent-bleed="true"] .result-row.selected.has-accent {
+:root[data-slide-selection="true"] .result-row.selected {
   background: transparent;
   box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .selection-bg { transition: none; }
-}
-
-/* Mirror the theme accent into an un-shadowed var so the preview override below
-   can fall back to it without a self-referential cycle. --bleed (set on .card by
-   App.tsx) wins when a selection supplies a colour; otherwise the theme accent
-   shows through. */
-.card {
-  --accent-theme: var(--accent);
-}
-
-/* Re-hue the entire preview panel to the selected result's colour. Scoping the
-   accent vars to .preview-col means every preview component (icon halo, buttons,
-   metadata accents, highlight bars) shifts automatically — derived soft/border
-   tints track whichever accent is effective. */
-:root[data-accent-bleed="true"] .preview-col {
-  --accent: var(--bleed, var(--accent-theme));
-  --accent-soft: color-mix(in srgb, var(--bleed, var(--accent-theme)) 13%, transparent);
-  --accent-border: color-mix(in srgb, var(--bleed, var(--accent-theme)) 50%, transparent);
 }
 
 .result-icon {
@@ -790,40 +736,11 @@ html, body, #root {
   justify-content: center;
 }
 
-.app-preview-icon-stage::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 180px;
-  height: 180px;
-  transform: translate(-50%, -50%);
-  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
-  z-index: -1;
-  pointer-events: none;
-}
-
-/* Accent bleed on: a quiet coloured halo built from the app's own sampled hue.
-   Static and soft - the hue itself carries the effect, not motion or intensity. */
-:root[data-accent-bleed="true"] .app-preview-icon-stage::before {
-  width: 190px;
-  height: 190px;
-  background:
-    radial-gradient(circle, color-mix(in srgb, var(--accent) 36%, transparent) 0%, transparent 45%),
-    radial-gradient(circle, color-mix(in srgb, var(--accent) 16%, transparent) 0%, transparent 72%);
-  filter: blur(6px);
-}
-
-:root[data-accent-bleed="true"] .app-preview-icon {
-  filter: drop-shadow(0 8px 26px color-mix(in srgb, var(--accent) 32%, rgba(0, 0, 0, 0.55)));
-}
-
 .app-preview-icon {
   width: 96px;
   height: 96px;
   object-fit: contain;
   flex-shrink: 0;
-  filter: drop-shadow(0 6px 20px rgba(0,0,0,0.55));
   border-radius: var(--radius);
 }
 
@@ -1605,7 +1522,9 @@ mark.preview-hl {
 
 @media (prefers-reduced-motion: reduce) { .clip-selection-bg { transition: none; } }
 
-:root[data-accent-bleed="true"] .clip-selection-bg.has-accent {
+/* A copied colour value tints the selection with its own hue (--row-accent set
+   inline from the entry's colour). Deterministic — the colour IS the entry. */
+.clip-selection-bg.has-accent {
   background: linear-gradient(
     90deg,
     color-mix(in srgb, var(--row-accent) 20%, var(--sel-bg)) 0%,

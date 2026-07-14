@@ -380,8 +380,6 @@ pub struct AppearanceConfig {
     #[serde(deserialize_with = "de_result_animation")]
     pub animate_results: ResultAnimation,
     pub show_metadata: bool,
-    /// Tint the selected row + preview panel with the app's dominant icon color.
-    pub accent_bleed: bool,
     /// Slide a single highlight layer between rows instead of a static per-row one.
     pub slide_selection: bool,
     /// Film-grain noise overlay opacity (0.0 = off .. 0.25 = strong).
@@ -395,7 +393,6 @@ impl Default for AppearanceConfig {
             font_size: 13,
             animate_results: ResultAnimation::Slide,
             show_metadata: true,
-            accent_bleed: true,
             slide_selection: true,
             grain: 0.07,
         }
