@@ -702,6 +702,37 @@ export default function App() {
     );
   };
 
+  // Pins are a root-search concept: a real typed query, and a result kind
+  // that stays addressable across sessions (no calc/dict/hint/error rows).
+  const canPin = (result: SearchResult): boolean => {
+    if (modeRef.current || !queryRef.current.trim()) return false;
+    if (result.id.startsWith("ext:") && result.ext) return true;
+    return ["app", "file", "folder", "command"].includes(result.kind);
+  };
+
+  // Pin/unpin the result for the current query (Ctrl+P or the action panel).
+  // Unpin removes every pin currently boosting the row for what's typed.
+  const togglePin = (result: SearchResult) => {
+    const q = queryRef.current.trim();
+    const call = result.pinned
+      ? invoke("unpin_result", { query: q, resultId: result.id })
+      : invoke("pin_result", {
+          query: q,
+          result: {
+            id: result.id,
+            kind: result.kind,
+            title: result.title,
+            subtitle: result.subtitle ?? null,
+          },
+        });
+    call
+      .then(() => {
+        pushToast(result.pinned ? "Unpinned" : `Pinned for “${q}”`, "success");
+        requery();
+      })
+      .catch(e => pushToast(String(e), "error"));
+  };
+
   const reshowWindow = () => {
     const win = getCurrentWindow();
     win.show().then(() => win.setFocus()).catch(() => {});
@@ -939,6 +970,14 @@ export default function App() {
         if (modeRef.current?.command.id !== "cmd:contents") return;
         e.preventDefault();
         setHighlight(h => !h);
+      } else if (e.ctrlKey && !e.altKey && !e.metaKey
+                 && (e.code === "KeyP" || e.key === "p" || e.key === "P")) {
+        // Pin/unpin the selected result for the typed query. Gate on the
+        // physical P key like Ctrl+H above; swallow the chord regardless so
+        // WebKitGTK's print shortcut never fires.
+        e.preventDefault();
+        const target = quickResult ?? selected;
+        if (target && canPin(target)) togglePin(target);
       } else {
         const ctx = makeCtx();
         // While Quicklook is open, key actions target the pinned result, not
@@ -1034,10 +1073,23 @@ export default function App() {
     const result = actionPanel.result;
     const acts: ActionDescriptor[] = [];
     if (result) {
+      const pinAction: ActionDescriptor | null = canPin(result)
+        ? {
+            id: "app:pin",
+            title: result.pinned
+              ? `Unpin from “${queryRef.current.trim()}”`
+              : `Pin for “${queryRef.current.trim()}”`,
+            section: "result",
+            shortcut: { ctrl: true, key: "p", code: "KeyP" },
+            displayOnly: true,
+            run: () => togglePin(result),
+          }
+        : null;
       const isExt = result.id.startsWith("ext:") && !!result.ext;
       if (isExt) {
         // Extension actions lead with their own default (Enter-badged) action.
         acts.push(...collectResultActions(result, makeCtx()));
+        if (pinAction) acts.push(pinAction);
       } else {
         const openTitle = OPEN_TITLES[result.kind];
         if (openTitle) {
@@ -1070,6 +1122,7 @@ export default function App() {
             run: () => setHighlight(h => !h),
           });
         }
+        if (pinAction) acts.push(pinAction);
         acts.push(...collectResultActions(result, makeCtx()));
       }
     }

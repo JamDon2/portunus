@@ -39,8 +39,25 @@ max_entries = 250      # max entries loaded into the clipboard browser (clip / p
 ocr_images   = true    # OCR copied images so their visible text is searchable (cached per image; uses content.ocr_language)
 
 [search]
-min_quality    = 0.06  # minimum fuzzy match quality (0.0-1.0); scales with query length
-history_weight = 50    # how strongly launch history boosts results (0-100)
+min_quality = 0.06  # minimum fuzzy match quality (0.0-1.0); scales with query length
+
+# Result ranking. Categories are scored in bands: first in `category_order`
+# ranks highest. Match boosts reward how well a result's *title* matches what
+# you typed and can jump bands (each point = 100k score; one band = 1M).
+[ranking]
+category_order   = ["calc", "app", "command", "extension", "file", "dict"]
+match_vs_history = 50   # 0 = rank purely by match quality, 100 = purely by launch history
+
+[ranking.category_weights]  # 0-100 per category; 50 = neutral, 0 hides it from root search
+# app = 50
+
+[ranking.match_boost]
+exact      = 70  # title equals the query
+prefix     = 25  # title starts with the query
+word_start = 4   # a word in the title starts with the query
+
+[ranking.extension_weights] # 0-100 per extension name; 50 = neutral, 0 hides it from root search
+# emoji = 50
 
 [debug]
 log_scores  = false    # print nucleo score + threshold for every match candidate to stderr

@@ -247,7 +247,17 @@ impl DictProvider {
             .enumerate()
             .map(|(i, rank)| {
                 let w = self.index.word(rank);
-                dict_result(w, "WordNet dictionary", super::SCORE_DICT_FILL - i as f32 * 1e-3)
+                let mut r = dict_result(w, "WordNet dictionary", 0.0);
+                // Fill candidates rank on the dict band; the per-rank decay
+                // keeps the index's best-first order within it.
+                let mut parts = super::ranking::ScoreParts::new(
+                    super::ranking::Category::Dict,
+                    super::ranking::MatchTier::Fuzzy,
+                    0,
+                );
+                parts.intra = -(i as f32) * 1e-3;
+                r.parts = Some(parts);
+                r
             })
             .collect()
     }

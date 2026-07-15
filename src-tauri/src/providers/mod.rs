@@ -6,47 +6,34 @@ pub mod command;
 pub mod content;
 pub mod dict;
 pub mod files;
+pub mod ranking;
 pub mod wasm;
 
 pub use command::CommandDescriptor;
 
 use std::collections::HashMap;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use crate::frecency::FrecencyStore;
 
-// ── Utility provider bases (intent-triggered; not competed against by files/apps) ──
+// ── Fixed scope-only bases ────────────────────────────────────────────────────
+// Root-search categories (calc/app/command/extension/file/dict-fill) are banded
+// from `[ranking] category_order` - see `ranking::RankingWeights`. The
+// constants below belong to scoped tiers that never compete in root search.
+
 pub const SCORE_CONTENT: f32 = 6_000_000.0;
-pub const SCORE_CALC: f32 = 3_000_000.0;
+/// Scoped dict lookups (the user entered the Define Word scope).
 pub const SCORE_DICT: f32 = 3_000_000.0;
-/// Sparse-fill dict rows - kept below files (1M) so they sink to the bottom and
-/// only matter when little else matched.
-pub const SCORE_DICT_FILL: f32 = 500_000.0;
-
-// ── Discoverable provider bases (apps, files, folders, extensions) ──
-pub const SCORE_APP: f32 = 2_000_000.0;
-/// Base for scoped extension results - the user explicitly entered the
-/// extension's scope, so like other intent-triggered rows it outranks calc/dict
-/// (3M) while staying below clipboard (5M) and content (6M).
+/// Scoped extension results - the user explicitly entered the extension's
+/// scope, so results rank on the extension's own relevance, not the root bands.
 pub const SCORE_EXTENSION_TRIGGERED: f32 = 4_000_000.0;
-/// Base for always-mode extension results - above apps (2M), below calc/dict (3M).
-pub const SCORE_EXTENSION: f32 = 2_500_000.0;
-/// Width of the band extension relevance (0-100) maps into, on top of
-/// `SCORE_EXTENSION`. Matches FUZZY_MAX_BONUS so relevance and fuzzy quality
-/// are on the same scale; frecency can bridge a few relevance points per launch.
+/// Width of the band extension relevance (0-100) maps into, on top of the
+/// extension category band. Matches FUZZY_MAX_BONUS so relevance and fuzzy
+/// quality are on the same scale.
 pub const EXTENSION_BAND: f32 = 300_000.0;
-pub const SCORE_FILE: f32 = 1_000_000.0;
-pub const SCORE_FOLDER: f32 = 0.0;
-
-/// Base for command entries ("Define Word", "Search Issues") in root search.
-/// Above the scoped extension band (4M) so a well-matched command name leads,
-/// below clipboard/content utility rows. The quality band on top is
-/// `fuzzy_bonus` (up to FUZZY_MAX_BONUS), so command entries rank on the same
-/// fuzzy scale as apps and files.
-pub const SCORE_COMMAND: f32 = 4_500_000.0;
 
 // ── File-result penalties (down-rank low-value hits within the file band) ─────
 /// Subtracted from a file result that has no preview renderer (archives, video,
@@ -65,11 +52,6 @@ pub const FUZZY_REFERENCE: f32 = 1500.0;
 pub const FUZZY_MAX_BONUS: f32 = 300_000.0;
 /// Frecency score (raw launches after decay) that maps to 100% of history bonus.
 pub const FRECENCY_REFERENCE: f32 = 40.0;
-
-/// Returns the normalised fuzzy bonus for a raw nucleo score.
-pub fn fuzzy_bonus(nucleo_score: u32) -> f32 {
-    (nucleo_score as f32 / FUZZY_REFERENCE).min(1.0) * FUZZY_MAX_BONUS
-}
 
 /// Score threshold (in nucleo score units) that scales with query length.
 /// Two-phase ramp so the jump to full threshold is gradual:
@@ -123,6 +105,16 @@ pub struct SearchResult {
     /// it to enter the command's mode (or run it) on launch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<CommandDescriptor>,
+    /// Raw scoring inputs; the registry composes `score` from these against
+    /// the live ranking weights. None (scoped/content rows) = the provider's
+    /// own `score` stands. Host-internal, never serialized.
+    #[serde(skip)]
+    pub parts: Option<ranking::ScoreParts>,
+    /// True when a pin for the typed query boosted this result to the top.
+    pub pinned: bool,
+    /// Score composition, filled only by `search_explain` for the playground.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub breakdown: Option<ranking::ScoreBreakdown>,
 }
 
 impl Default for SearchResult {
@@ -144,6 +136,9 @@ impl Default for SearchResult {
             ext: None,
             ext_command: None,
             command: None,
+            parts: None,
+            pinned: false,
+            breakdown: None,
         }
     }
 }
@@ -181,19 +176,71 @@ pub fn fuzzy_best(
     best
 }
 
-/// Applies the frecency bonus in place. Shared by the sync keystroke path and
-/// the streamed async-query path so the formula cannot drift between them.
-/// Content results are skipped - they are already ranked by FTS5/BM25 relevance.
-pub fn apply_frecency(results: &mut [SearchResult], store: &FrecencyStore, weight: f32) {
-    let scores = store.all_scores();
+/// Applies the frecency bonus in place on the weights' balance-scaled scale.
+/// Content results are skipped by kind - they are already ranked by FTS5/BM25
+/// relevance (bands are user-configurable, so a score threshold can't gate this).
+pub fn apply_frecency_weights(
+    results: &mut [SearchResult],
+    scores: &HashMap<String, f32>,
+    weights: &ranking::RankingWeights,
+    explain: bool,
+) {
     for r in results.iter_mut() {
-        if r.score >= SCORE_CONTENT {
+        if r.kind == "content" {
             continue;
         }
         if let Some(&fs) = scores.get(&r.id) {
-            let normalized = (fs / FRECENCY_REFERENCE).min(1.0);
-            r.score += normalized * weight;
+            let bonus = weights.frecency_bonus(fs);
+            r.score += bonus;
+            if explain {
+                if let Some(b) = &mut r.breakdown {
+                    b.frecency_bonus = bonus;
+                }
+            }
         }
+    }
+}
+
+/// Boosts results matched by a pin for the typed query to the absolute top.
+/// `pinned_ids` comes from `FrecencyStore::pin_bonus_ids(query)`: pins apply
+/// while the user is still typing toward their query (typed is a prefix).
+pub fn apply_pins(
+    results: &mut [SearchResult],
+    pinned_ids: &std::collections::HashSet<String>,
+    explain: bool,
+) {
+    if pinned_ids.is_empty() {
+        return;
+    }
+    for r in results.iter_mut() {
+        if pinned_ids.contains(&r.id) {
+            r.score += ranking::PIN_SCORE;
+            r.pinned = true;
+            if explain {
+                if let Some(b) = &mut r.breakdown {
+                    b.pin_bonus = ranking::PIN_SCORE;
+                }
+            }
+        }
+    }
+}
+
+/// Scores a streamed async-query batch with the exact same building blocks as
+/// the sync keystroke path (`apply_ranking` → frecency → pins), so the two
+/// paths cannot drift. The sync path inlines the same calls because dict
+/// sparse-fill gating has to run between composition and frecency.
+pub fn finalize_results(
+    results: &mut Vec<SearchResult>,
+    weights: &ranking::RankingWeights,
+    frecency: Option<&FrecencyStore>,
+    query: &str,
+    drop_hidden: bool,
+    explain: bool,
+) {
+    ranking::apply_ranking(results, weights, drop_hidden, explain);
+    if let Some(store) = frecency {
+        apply_frecency_weights(results, &store.all_scores(), weights, explain);
+        apply_pins(results, &store.pin_bonus_ids(query), explain);
     }
 }
 
@@ -221,10 +268,19 @@ pub struct PluginRegistry {
     extensions: HashMap<String, Arc<wasm::WasmProvider>>,
     max_results: usize,
     frecency: Option<Arc<FrecencyStore>>,
-    frecency_weight: f32,
+    /// Live ranking weights, shared with streamed async-query workers so a
+    /// config edit re-scores the very next batch without respawning anything.
+    ranking: Arc<RwLock<ranking::RankingWeights>>,
     /// (fill_threshold, fill_max) for dict sparse-fill gating. None disables
     /// gating (dict rows pass through untouched).
     dict_fill: Option<(usize, usize)>,
+}
+
+/// What `search_inner` skipped, for `search_explain`'s playground note.
+pub struct SearchOutcome {
+    pub results: Vec<SearchResult>,
+    /// Extensions that would have run on this query (gated) but were skipped.
+    pub skipped_extensions: Vec<String>,
 }
 
 impl PluginRegistry {
@@ -234,7 +290,7 @@ impl PluginRegistry {
             extensions: HashMap::new(),
             max_results,
             frecency: None,
-            frecency_weight: 0.0,
+            ranking: Arc::new(RwLock::new(ranking::RankingWeights::default())),
             dict_fill: None,
         }
     }
@@ -287,34 +343,58 @@ impl PluginRegistry {
         }
     }
 
-    pub fn set_frecency(&mut self, store: Arc<FrecencyStore>, weight: f32) {
+    pub fn set_frecency(&mut self, store: Arc<FrecencyStore>) {
         self.frecency = Some(store);
-        self.frecency_weight = weight;
     }
 
-    /// Frecency store + weight, for scoring streamed async-query results with
-    /// the exact same bonus as the sync path.
-    pub fn frecency_params(&self) -> (Option<Arc<FrecencyStore>>, f32) {
-        (self.frecency.clone(), self.frecency_weight)
+    /// Frecency store + live ranking weights, for scoring streamed async-query
+    /// results with the exact same composition as the sync path.
+    pub fn stream_params(
+        &self,
+    ) -> (Option<Arc<FrecencyStore>>, Arc<RwLock<ranking::RankingWeights>>) {
+        (self.frecency.clone(), Arc::clone(&self.ranking))
     }
 
-    pub fn update_settings(&mut self, max_results: usize, frecency_weight: f32) {
+    pub fn update_settings(&mut self, max_results: usize) {
         self.max_results = max_results;
-        self.frecency_weight = frecency_weight;
+    }
+
+    /// Swap in freshly resolved ranking weights (config load/reload).
+    pub fn set_ranking_weights(&self, weights: ranking::RankingWeights) {
+        *self.ranking.write().unwrap() = weights;
+    }
+
+    pub fn ranking_weights(&self) -> ranking::RankingWeights {
+        self.ranking.read().unwrap().clone()
     }
 
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
+        let weights = self.ranking.read().unwrap().clone();
+        self.search_inner(query, &weights, false, false).results
+    }
+
+    /// The full search pipeline. `skip_extensions` (playground) never touches
+    /// wasm and instead reports which extensions would have run; `explain`
+    /// fills per-result score breakdowns.
+    pub fn search_inner(
+        &self,
+        query: &str,
+        weights: &ranking::RankingWeights,
+        skip_extensions: bool,
+        explain: bool,
+    ) -> SearchOutcome {
         // Fan extensions out first so their wall-clock overlaps the built-ins.
         // Threads are detached: a hung extension is abandoned at the deadline
         // (its own watchdog cancels it; repeated failures bench it), so the
         // keystroke path is bounded by one budget regardless of extension count.
+        let mut skipped_extensions: Vec<String> = Vec::new();
         let pending = if self.extensions.is_empty() || query.is_empty() {
             None
         } else {
             let (tx, rx) = mpsc::channel();
             let mut budget_ms = 0;
             let mut spawned = 0;
-            for ext in self.extensions.values() {
+            for (ext_name, ext) in &self.extensions {
                 // Benched extensions would fail instantly anyway - don't pay
                 // a thread spawn per keystroke for them.
                 if ext.is_benched() {
@@ -330,6 +410,12 @@ impl PluginRegistry {
                 let Some(gc) = ext.gate(query) else {
                     continue;
                 };
+                // The playground path never executes wasm - it only reports
+                // which extensions a real search would have run.
+                if skip_extensions {
+                    skipped_extensions.push(ext_name.clone());
+                    continue;
+                }
                 budget_ms = budget_ms.max(ext.search_budget_ms());
                 let ext = ext.clone();
                 let tx = tx.clone();
@@ -364,6 +450,10 @@ impl PluginRegistry {
             }
         }
 
+        // Compose scores + drop hidden categories first: the sparse-fill gate
+        // below must count what the user will actually see.
+        ranking::apply_ranking(&mut results, weights, true, explain);
+
         // Dict sparse-fill gating: dict rows are fill candidates - keep them
         // only when other results are sparse, capped at fill_max. (Explicit
         // lookups happen in the Dict scope, not root search, so there is no
@@ -385,9 +475,10 @@ impl PluginRegistry {
             }
         }
 
-        // Apply frecency bonus before sort so heavily-used items surface correctly.
+        // Frecency + pins before sort so heavily-used and pinned items surface.
         if let Some(store) = &self.frecency {
-            apply_frecency(&mut results, store, self.frecency_weight);
+            apply_frecency_weights(&mut results, &store.all_scores(), weights, explain);
+            apply_pins(&mut results, &store.pin_bonus_ids(query), explain);
         }
 
         results.sort_by(|a, b| {
@@ -414,7 +505,7 @@ impl PluginRegistry {
             }
         });
         results.truncate(self.max_results);
-        results
+        SearchOutcome { results, skipped_extensions }
     }
 
     /// The full command catalog: built-in provider commands plus (once
@@ -458,6 +549,9 @@ impl PluginRegistry {
             // Action route: activated frontend-side, never scope-searched.
             command::CommandRoute::Invoke { .. } => Vec::new(),
         };
+        // Compose parts-bearing rows; scopes never drop hidden categories
+        // (weight 0 hides from root search only).
+        ranking::apply_ranking(&mut results, &self.ranking.read().unwrap(), false, false);
         sort_by_score(&mut results);
         results.truncate(self.max_results);
         results

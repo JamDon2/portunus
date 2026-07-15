@@ -40,18 +40,23 @@ pub fn rebuild_providers(
     file_entries: &SharedFileEntries,
     file_watcher_tx: &FileWatcherTx,
     ext_kv: &Arc<ExtensionKv>,
-    // Kept for parity with sync() callers even though the targeted
-    // per-extension reload below never purges orphan state.
-    _frecency: &FrecencyState,
+    frecency: &FrecencyState,
 ) {
     // Update per-search scalars instantly (no rebuild needed).
     shared.write().unwrap().update_from(new_cfg);
 
-    // Update registry-level settings (max_results, history_max_bonus).
+    // Update registry-level settings (max_results) and resolve the ranking
+    // weights - every `[ranking]` knob applies on the next keystroke.
     {
-        let history_max_bonus = (new_cfg.search.history_weight as f32 / 100.0) * 1_500_000.0;
         let mut reg = registry.write().unwrap();
-        reg.update_settings(new_cfg.general.max_results, history_max_bonus);
+        reg.update_settings(new_cfg.general.max_results);
+        reg.set_ranking_weights(providers::ranking::RankingWeights::from_config(
+            &new_cfg.ranking,
+            new_cfg.frecency.enabled,
+        ));
+    }
+    if let Some(store) = frecency {
+        store.set_recording(new_cfg.frecency.enabled);
     }
 
     // ── Selectively rebuild index-backed providers ────────────────────────────

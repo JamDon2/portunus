@@ -5,7 +5,8 @@
 
 use serde::Serialize;
 
-use super::{fuzzy_best, fuzzy_bonus, fuzzy_setup, quality_threshold, SearchResult, SCORE_COMMAND};
+use super::ranking::{detect_tier, Category, ScoreParts};
+use super::{fuzzy_best, fuzzy_setup, quality_threshold, SearchResult};
 
 /// How a command behaves when invoked.
 // Action is constructed once extensions declare action commands.
@@ -132,9 +133,15 @@ pub fn match_entries(commands: &[CommandDescriptor], query: &str) -> Vec<SearchR
                 title: cmd.title.clone(),
                 subtitle: cmd.subtitle.clone(),
                 kind: "command".to_string(),
-                score: SCORE_COMMAND + fuzzy_bonus(score),
                 icon_data_uri: cmd.icon_data_uri.clone(),
                 command: Some(cmd.clone()),
+                // Tier is detected on the title only - a keyword/subtitle hit
+                // ranks on fuzzy quality alone.
+                parts: Some(ScoreParts::new(
+                    Category::Command,
+                    detect_tier(&cmd.title, q),
+                    score,
+                )),
                 ..Default::default()
             })
         })
@@ -170,7 +177,9 @@ mod tests {
         let hits = match_entries(&cmds, "dict");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "cmd:dict");
-        assert!(hits[0].score >= SCORE_COMMAND);
+        let parts = hits[0].parts.as_ref().expect("command entries carry parts");
+        assert_eq!(parts.category, Category::Command);
+        assert!(parts.nucleo > 0);
     }
 
     #[test]

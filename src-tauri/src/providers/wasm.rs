@@ -20,7 +20,8 @@ use portunus_ext_sdk::{
 };
 
 use super::breaker::FailureBreaker;
-use super::{SearchResult, EXTENSION_BAND, SCORE_EXTENSION, SCORE_EXTENSION_TRIGGERED};
+use super::ranking::{Category, MatchTier, ScoreParts};
+use super::{SearchResult, EXTENSION_BAND, SCORE_EXTENSION_TRIGGERED};
 use crate::extensions::hostfns::{self, ExtensionCtx, PreviewEmitSlot, QueryEmitSlot};
 use crate::extensions::kv::ExtensionKv;
 use crate::extensions::manifest::{CommandSpec, ExtensionManifest, Limits};
@@ -464,9 +465,9 @@ impl WasmProvider {
     }
 
     /// Maps one extension DTO into an internal result: namespaced id, fixed
-    /// kind, host-private score band, clamped fields, no exec. A scoped
-    /// (explicitly entered) command lands in the band above calc/dict;
-    /// always-mode root results compete just above apps.
+    /// kind, host-private scoring, clamped fields, no exec. Root results rank
+    /// on the user-configurable extension band; scoped (explicitly entered)
+    /// commands keep a fixed intent-tier score.
     fn to_search_result(
         &self,
         mut dto: ExtensionResult,
@@ -475,18 +476,30 @@ impl WasmProvider {
     ) -> SearchResult {
         let relevance = if dto.relevance.is_finite() { dto.relevance } else { 0.0 };
         let icon_data_uri = dto.icon.as_ref().and_then(|i| self.icon_data_uri(i));
-        let base = if intent { SCORE_EXTENSION_TRIGGERED } else { SCORE_EXTENSION };
+        let relevance_bonus = relevance.clamp(0.0, 100.0) / 100.0 * EXTENSION_BAND;
+        // Scoped results carry no root-band parts: inside a scope there is
+        // nothing else to compete against, and the scope must keep working
+        // when the extension is weight-0 hidden from root search.
+        let (score, parts) = if intent {
+            (SCORE_EXTENSION_TRIGGERED + relevance_bonus, None)
+        } else {
+            let mut p = ScoreParts::new(Category::Extension, MatchTier::Fuzzy, 0);
+            p.ext_name = Some(self.name.clone());
+            p.intra = relevance_bonus;
+            (0.0, Some(p))
+        };
         dto.badge = dto.badge.take().map(clamp_field);
         SearchResult {
             id: format!("ext:{}:{}", self.name, dto.id),
             title: clamp_field(dto.title.clone()),
             subtitle: dto.subtitle.clone().map(clamp_field),
             kind: self.command_kind(command),
-            score: base + relevance.clamp(0.0, 100.0) / 100.0 * EXTENSION_BAND,
+            score,
             icon_data_uri,
             // Round-tripped back to the extension on activate/preview.
             ext: Some(dto),
             ext_command: Some(command.to_string()),
+            parts,
             ..Default::default()
         }
     }

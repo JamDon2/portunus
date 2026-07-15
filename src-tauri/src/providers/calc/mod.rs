@@ -113,7 +113,13 @@ fn make_result(title: String, subtitle: String) -> SearchResult {
         title,
         subtitle: Some(subtitle),
         kind: "calc".to_string(),
-        score: super::SCORE_CALC,
+        // No fuzzy/tier signal: a gated calc result is the answer to the
+        // typed expression; it ranks purely on the calc band.
+        parts: Some(super::ranking::ScoreParts::new(
+            super::ranking::Category::Calc,
+            super::ranking::MatchTier::Fuzzy,
+            0,
+        )),
         ..Default::default()
     }
 }

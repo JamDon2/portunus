@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use super::{Provider, SearchResult};
+use super::{ranking, Provider, SearchResult};
 use crate::config::SharedConfig;
 
 // ── data types ───────────────────────────────────────────────────────────────
@@ -371,15 +371,29 @@ impl Provider for AppProvider {
                         &[(app.name.as_str(), 1.0)],
                     ),
                 }?;
-                let base = if idx == 0 { super::SCORE_APP } else { super::SCORE_FILE };
+                let parts = if idx == 0 {
+                    ranking::ScoreParts::new(
+                        ranking::Category::App,
+                        ranking::detect_tier(&app.name, q),
+                        score,
+                    )
+                } else {
+                    // Description-only hit: demote to the file band with no
+                    // tier boost, so blurb matches don't outrank name matches.
+                    ranking::ScoreParts::new(
+                        ranking::Category::File,
+                        ranking::MatchTier::Fuzzy,
+                        score,
+                    )
+                };
                 Some((score, SearchResult {
                     id: format!("app:{}", app.name),
                     title: app.name.clone(),
                     subtitle: app.description.clone(),
                     kind: "app".to_string(),
-                    score: base + super::fuzzy_bonus(score),
                     exec: Some(app.exec.clone()),
                     icon_path: app.icon_path.clone(),
+                    parts: Some(parts),
                     ..Default::default()
                 }))
             })

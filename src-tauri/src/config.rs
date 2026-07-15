@@ -14,6 +14,7 @@ pub struct Config {
     pub providers: ProvidersConfig,
     pub files: FilesConfig,
     pub search: SearchConfig,
+    pub ranking: RankingConfig,
     pub frecency: FrecencyConfig,
     pub debug: DebugConfig,
     pub content: ContentConfig,
@@ -31,6 +32,7 @@ impl Default for Config {
             providers: ProvidersConfig::default(),
             files: FilesConfig::default(),
             search: SearchConfig::default(),
+            ranking: RankingConfig::default(),
             frecency: FrecencyConfig::default(),
             debug: DebugConfig::default(),
             content: ContentConfig::default(),
@@ -228,16 +230,73 @@ impl FilesConfig {
 pub struct SearchConfig {
     /// Minimum fuzzy match quality, 0.0-1.0. Applied as a fraction of FUZZY_REFERENCE.
     pub min_quality: f32,
-    /// How strongly launch history boosts results, 0-100. Maps to history_max_bonus.
-    pub history_weight: u8,
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
+        Self { min_quality: 0.06 }
+    }
+}
+
+/// User-tunable ranking: category priority/weights, match-quality boosts,
+/// match-vs-history balance, per-extension weights. Resolved into
+/// `providers::ranking::RankingWeights` on load/reload; every field applies
+/// live with no provider rebuild.
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct RankingConfig {
+    /// Category priority, first = highest band. Known keys: calc, app,
+    /// command, extension, file, dict. Unknown keys are ignored; missing
+    /// categories append in default order.
+    pub category_order: Vec<String>,
+    /// 0 = pure match quality, 100 = pure launch history. 50 keeps both at
+    /// their classic strengths.
+    pub match_vs_history: u8,
+    /// Per-category weight, 0-100, 50 neutral (±half band). 0 hides the
+    /// category from root search (scoped access still works).
+    pub category_weights: std::collections::HashMap<String, u8>,
+    pub match_boost: MatchBoostConfig,
+    /// Per-extension weight by extension name, same semantics as
+    /// category_weights, applied within the extension band.
+    pub extension_weights: std::collections::HashMap<String, u8>,
+}
+
+impl Default for RankingConfig {
+    fn default() -> Self {
         Self {
-            min_quality: 0.06,
-            history_weight: 50,
+            category_order: vec![
+                "calc".into(),
+                "app".into(),
+                "command".into(),
+                "extension".into(),
+                "file".into(),
+                "dict".into(),
+            ],
+            match_vs_history: 50,
+            category_weights: std::collections::HashMap::new(),
+            match_boost: MatchBoostConfig::default(),
+            extension_weights: std::collections::HashMap::new(),
         }
+    }
+}
+
+/// Title match-quality boosts, 0-100 each; every point adds 100k score
+/// (1 band = 1M = 10 points). Defaults are sized so exact (7M) beats any
+/// non-pinned rival even from the lowest band (worst case: top band 6M +
+/// word-start 400k + max fuzzy/frecency ≈ 7.9M < 1M + 7M) and prefix (2.5M)
+/// jumps a couple of bands, while word-start (400k) only breaks ties within
+/// neighboring bands.
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct MatchBoostConfig {
+    pub exact: u8,
+    pub prefix: u8,
+    pub word_start: u8,
+}
+
+impl Default for MatchBoostConfig {
+    fn default() -> Self {
+        Self { exact: 70, prefix: 25, word_start: 4 }
     }
 }
 

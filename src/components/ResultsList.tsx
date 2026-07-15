@@ -1,6 +1,7 @@
 import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { SearchResult } from "../types";
 import { groupLabel, shortenPath } from "../utils";
+import { PinIcon } from "../icons";
 import ResultIcon from "./ResultIcon";
 
 interface Props {
@@ -157,7 +158,12 @@ export default function ResultsList({ results, selectedIndex, active, searching,
                 <div className="result-title">{result.title}</div>
                 {result.subtitle && <div className="result-subtitle">{shortenPath(result.subtitle)}</div>}
               </div>
-              <div className={`result-meta${result.ext?.badge ? " has-badge" : ""}`}>
+              <div className={`result-meta${result.ext?.badge ? " has-badge" : ""}${result.pinned ? " has-pin" : ""}`}>
+                {result.pinned && (
+                  <span className="result-pin" title="Pinned for this search" aria-label="Pinned">
+                    <PinIcon />
+                  </span>
+                )}
                 {result.ext?.badge
                   ? <span className="result-badge">{result.ext.badge}</span>
                   : ""}

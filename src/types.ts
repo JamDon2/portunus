@@ -53,8 +53,8 @@ export interface Config {
   };
   search: {
     min_quality: number;
-    history_weight: number;
   };
+  ranking: RankingConfig;
   debug: {
     log_scores: boolean;
     log_watcher: boolean;
@@ -92,6 +92,50 @@ export interface ExtensionConfigEntry {
   enabled: boolean;
   /** Values for the extension's declared settings schema. */
   settings: Record<string, unknown>;
+}
+
+/** `[ranking]` config - mirrors `RankingConfig` in config.rs. */
+export interface RankingConfig {
+  /** Category priority, first = highest. Keys: calc, app, command, extension, file, dict. */
+  category_order: string[];
+  /** 0 = pure match quality, 100 = pure launch history. */
+  match_vs_history: number;
+  /** Per-category weight 0-100, 50 neutral, 0 hides from root search. */
+  category_weights: Record<string, number>;
+  /** Title match boosts, 0-100 each (1 point = 100k score, 1 band = 1M). */
+  match_boost: { exact: number; prefix: number; word_start: number };
+  /** Per-extension weight by name, same semantics as category_weights. */
+  extension_weights: Record<string, number>;
+}
+
+/** Per-result score composition from `search_explain` (playground only). */
+export interface ScoreBreakdown {
+  base: number;
+  match_bonus: number;
+  frecency_bonus: number;
+  pin_bonus: number;
+  /** Positive magnitude, already subtracted from `score`. */
+  penalty: number;
+}
+
+/** Response of the `search_explain` command. */
+export interface ExplainResponse {
+  results: SearchResult[];
+  /** Extensions that would have run; the playground never executes wasm. */
+  skipped_extensions: string[];
+}
+
+/** One pin, from `list_pins` - `query` is stored normalized. */
+export interface PinEntry {
+  query: string;
+  result_id: string;
+  kind: string;
+  /** Display snapshot taken at pin time (survives result deletion). */
+  title: string;
+  subtitle: string | null;
+  created_ms: number;
+  /** Best-effort: the pinned result no longer resolves. */
+  stale: boolean;
 }
 
 /** One user-facing action on an extension result. */
@@ -318,6 +362,11 @@ export interface SearchResult {
   ext_command?: string;
   /** Descriptor behind a `kind: "command"` entry row. */
   command?: CommandDescriptor;
+  /** True when a pin for the typed query boosted this result to the top.
+   *  Optional: frontend-synthesized hint/error rows omit it. */
+  pinned?: boolean;
+  /** Score composition - present only on `search_explain` results. */
+  breakdown?: ScoreBreakdown;
 }
 
 /** One extension whose async `query` export is running for the current

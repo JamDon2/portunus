@@ -166,3 +166,10 @@ export const WarnIcon = () => (
     <line x1="12" y1="17" x2="12.01" y2="17" />
   </svg>
 );
+
+export const PinIcon = ({ size = 11 }: { size?: number }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width={size} height={size}>
+    <path d="M12 17v5" />
+    <path d="M9 3h6l-1 7 3 3H7l3-3z" />
+  </svg>
+);

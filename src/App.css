@@ -624,6 +624,16 @@ html, body, #root {
    readable on unfocused rows instead of fully hidden. */
 .result-meta.has-badge { opacity: 0.6; }
 
+/* A pin is state the user set - always visible, like a badge. */
+.result-meta.has-pin { opacity: 0.75; }
+.result-pin {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+
 /* Alt+1..9 badges exist only while Alt is held (data-alt-held, set by App.tsx).
    The 16px grid column stays reserved, so nothing shifts when they appear. */
 .result-shortcut {

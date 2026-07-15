@@ -122,6 +122,122 @@ fn command_used(id: String, frecency: tauri::State<'_, FrecencyState>) {
     }
 }
 
+/// Staged config the ranking playground scores against - the Settings window
+/// autosaves on a debounce, so disk config lags the knobs; explain must use
+/// what the user sees, not what has landed.
+#[derive(serde::Deserialize)]
+struct ExplainOverrides {
+    ranking: config::RankingConfig,
+    frecency_enabled: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ExplainResponse {
+    results: Vec<providers::SearchResult>,
+    /// Extensions that would have run on this query; the playground never
+    /// executes wasm, so their results are absent by design.
+    skipped_extensions: Vec<String>,
+}
+
+/// Playground search: full sync pipeline with per-result score breakdowns,
+/// no extension execution, no `search-stream`, no frecency recording.
+#[tauri::command]
+fn search_explain(
+    query: String,
+    overrides: Option<ExplainOverrides>,
+    registry: tauri::State<'_, Registry>,
+) -> ExplainResponse {
+    let reg = registry.read().unwrap_or_else(|e| e.into_inner());
+    let weights = match overrides {
+        Some(o) => providers::ranking::RankingWeights::from_config(&o.ranking, o.frecency_enabled),
+        None => reg.ranking_weights(),
+    };
+    let outcome = reg.search_inner(&query, &weights, true, true);
+    ExplainResponse {
+        results: outcome.results,
+        skipped_extensions: outcome.skipped_extensions,
+    }
+}
+
+/// Result snapshot stored with a pin so the Settings list can render pins
+/// whose result no longer exists.
+#[derive(serde::Deserialize)]
+struct PinSnapshot {
+    id: String,
+    kind: String,
+    title: String,
+    subtitle: Option<String>,
+}
+
+#[tauri::command]
+fn pin_result(
+    query: String,
+    result: PinSnapshot,
+    frecency: tauri::State<'_, FrecencyState>,
+) -> Result<(), String> {
+    let store = frecency.inner().as_ref().ok_or("pins unavailable (frecency DB failed to open)")?;
+    store
+        .pin(&query, &result.id, &result.kind, &result.title, result.subtitle.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// Unpins `result_id`. `exact` (Settings list) removes only the pin stored
+/// for exactly `query`; otherwise (launcher toggle) every pin currently
+/// boosting the result for the typed query is removed.
+#[tauri::command]
+fn unpin_result(
+    query: String,
+    result_id: String,
+    exact: Option<bool>,
+    frecency: tauri::State<'_, FrecencyState>,
+) -> Result<(), String> {
+    let store = frecency.inner().as_ref().ok_or("pins unavailable (frecency DB failed to open)")?;
+    if exact.unwrap_or(false) {
+        store.unpin(&query, &result_id).map_err(|e| e.to_string())
+    } else {
+        store.unpin_matching(&query, &result_id).map_err(|e| e.to_string())
+    }
+}
+
+#[derive(serde::Serialize)]
+struct PinEntry {
+    #[serde(flatten)]
+    row: frecency::PinRow,
+    /// Best-effort: the pinned result no longer resolves (file deleted,
+    /// extension uninstalled, command gone). Apps can't be probed cheaply and
+    /// report false.
+    stale: bool,
+}
+
+#[tauri::command]
+fn list_pins(
+    registry: tauri::State<'_, Registry>,
+    frecency: tauri::State<'_, FrecencyState>,
+) -> Vec<PinEntry> {
+    let Some(store) = frecency.as_ref() else { return Vec::new() };
+    let reg = registry.read().unwrap_or_else(|e| e.into_inner());
+    let commands = reg.commands();
+    store
+        .list_pins()
+        .into_iter()
+        .map(|row| {
+            let stale = if let Some(path) = row.result_id.strip_prefix("file:") {
+                !std::path::Path::new(path).exists()
+            } else if let Some(rest) = row.result_id.strip_prefix("ext:") {
+                match rest.split_once(':') {
+                    Some((name, _)) => reg.extension(name).is_none(),
+                    None => false,
+                }
+            } else if row.result_id.starts_with("cmd:") {
+                !commands.iter().any(|c| c.id == row.result_id)
+            } else {
+                false
+            };
+            PinEntry { row, stale }
+        })
+        .collect()
+}
+
 /// Cancels all in-flight async extension queries (query cleared, window hidden).
 #[tauri::command]
 fn cancel_search() {
@@ -696,25 +812,29 @@ pub fn run() {
     }
     let bg_registry = Arc::clone(&registry);
 
-    let frecency_state: FrecencyState = if frecency_cfg.enabled {
-        match frecency::FrecencyStore::open(frecency_cfg.half_life_days) {
-            Ok(store) => {
-                let arc = Arc::new(store);
-                let history_max_bonus = (cfg.search.history_weight as f32 / 100.0) * 1_500_000.0;
-                registry
-                    .write()
-                    .unwrap()
-                    .set_frecency(Arc::clone(&arc), history_max_bonus);
-                Some(arc)
-            }
-            Err(e) => {
-                eprintln!("[frecency] failed to open DB: {e} - frecency disabled");
-                None
-            }
+    // Opened even when frecency is disabled: pins live in the same DB. The
+    // recording gate and the zeroed bonus in the ranking weights keep a
+    // disabled frecency from tracking or boosting anything.
+    let frecency_state: FrecencyState = match frecency::FrecencyStore::open(frecency_cfg.half_life_days)
+    {
+        Ok(store) => {
+            store.set_recording(frecency_cfg.enabled);
+            let arc = Arc::new(store);
+            registry.write().unwrap().set_frecency(Arc::clone(&arc));
+            Some(arc)
         }
-    } else {
-        None
+        Err(e) => {
+            eprintln!("[frecency] failed to open DB: {e} - frecency + pins disabled");
+            None
+        }
     };
+    registry
+        .write()
+        .unwrap()
+        .set_ranking_weights(providers::ranking::RankingWeights::from_config(
+            &cfg.ranking,
+            frecency_cfg.enabled,
+        ));
 
     tauri::Builder::default()
         .manage(registry)
@@ -1035,6 +1155,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Core
             search,
+            search_explain,
+            pin_result,
+            unpin_result,
+            list_pins,
             list_commands,
             command_used,
             content_match_page,

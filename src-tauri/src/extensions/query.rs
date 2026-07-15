@@ -126,7 +126,7 @@ impl QueryManager {
             return Vec::new();
         }
 
-        let (frecency, weight) = registry.frecency_params();
+        let (frecency, weights) = registry.stream_params();
         let mut pending = Vec::new();
         for name in registry.extension_names() {
             let Some(provider) = registry.extension(&name) else { continue };
@@ -141,7 +141,17 @@ impl QueryManager {
                 name: name.clone(),
                 kind: provider.result_kind().to_string(),
             });
-            self.spawn_worker(query_id, generation, name, provider, gc, intent, frecency.clone(), weight);
+            self.spawn_worker(
+                query_id,
+                generation,
+                name,
+                provider,
+                gc,
+                intent,
+                frecency.clone(),
+                Arc::clone(&weights),
+                raw_query.to_string(),
+            );
         }
         pending
     }
@@ -177,12 +187,24 @@ impl QueryManager {
         }
         let Some(gc) = provider.gate_scoped(command, query) else { return Vec::new() };
 
-        let (frecency, weight) = registry.frecency_params();
+        let (frecency, weights) = registry.stream_params();
         let pending = vec![PendingExt {
             name: ext_name.to_string(),
             kind: provider.result_kind().to_string(),
         }];
-        self.spawn_worker(query_id, generation, ext_name.to_string(), provider, gc, true, frecency, weight);
+        // Scoped batches carry no root-band parts and pins never apply inside
+        // a scope, so the pin query is empty.
+        self.spawn_worker(
+            query_id,
+            generation,
+            ext_name.to_string(),
+            provider,
+            gc,
+            true,
+            frecency,
+            weights,
+            String::new(),
+        );
         pending
     }
 
@@ -198,7 +220,8 @@ impl QueryManager {
         gc: crate::extensions::trigger::GatedCommand,
         intent: bool,
         frecency: Option<Arc<crate::frecency::FrecencyStore>>,
-        weight: f32,
+        weights: Arc<std::sync::RwLock<providers::ranking::RankingWeights>>,
+        pin_query: String,
     ) {
         crate::util::lock(&self.slots).insert(name.clone(), provider.clone());
 
@@ -214,9 +237,18 @@ impl QueryManager {
                     return;
                 }
                 let mut results = results;
-                if let Some(store) = &frecency {
-                    providers::apply_frecency(&mut results, store, weight);
-                }
+                // Same composition as the sync path, read live so a config
+                // edit re-scores the very next batch. Root batches drop
+                // weight-0-hidden extensions here; scoped ones never do.
+                let w = weights.read().unwrap().clone();
+                providers::finalize_results(
+                    &mut results,
+                    &w,
+                    frecency.as_deref(),
+                    &pin_query,
+                    !intent,
+                    false,
+                );
                 let _ = app.emit(
                     "search-stream",
                     StreamPayload { query_id, ext: slots_name.clone(), results, done, error },

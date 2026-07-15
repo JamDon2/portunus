@@ -4,9 +4,13 @@ use std::time::UNIX_EPOCH;
 
 use nucleo_matcher::Utf32Str;
 
-use super::{Provider, SearchResult};
+use super::{ranking, Provider, SearchResult};
 use crate::config::{FilesConfig, SharedConfig};
 use crate::util;
+
+/// Folders sink below files within the file band (they carry less signal than
+/// a name-matched file but still beat the dict-fill band below).
+const FOLDER_OFFSET: f32 = -700_000.0;
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -225,30 +229,34 @@ impl Provider for FileProvider {
                 }
                 let score =
                     pattern.score(Utf32Str::new(&entry.name, &mut char_buf), &mut matcher)?;
-                let base = if entry.is_dir {
-                    super::SCORE_FOLDER
-                } else {
-                    super::SCORE_FILE
-                };
-                let mut penalty = 0.0;
-                // folders always render a listing → no preview penalty for dirs
-                if !entry.is_dir && !is_previewable_ext(&entry.name) {
-                    penalty += super::PENALTY_NO_PREVIEW;
+                let mut intra = 0.0;
+                // Folders sink below files within the band but always render a
+                // listing → no preview penalty for dirs.
+                if entry.is_dir {
+                    intra += FOLDER_OFFSET;
+                } else if !is_previewable_ext(&entry.name) {
+                    intra -= super::PENALTY_NO_PREVIEW;
                 }
                 if has_hidden_component(&entry.path) {
-                    penalty += super::PENALTY_HIDDEN;
+                    intra -= super::PENALTY_HIDDEN;
                 }
+                let mut parts = ranking::ScoreParts::new(
+                    ranking::Category::File,
+                    ranking::detect_tier(&entry.name, q),
+                    score,
+                );
+                parts.intra = intra;
                 let escaped = entry.path.replace('"', "\\\"");
                 Some((score, SearchResult {
                     id: format!("file:{}", entry.path),
                     title: entry.name.clone(),
                     subtitle: Some(entry.parent.clone()),
                     kind: if entry.is_dir { "folder" } else { "file" }.to_string(),
-                    score: base + super::fuzzy_bonus(score) - penalty,
                     exec: Some(format!("xdg-open \"{}\"", escaped)),
                     file_size: entry.file_size,
                     created: entry.created,
                     modified: entry.modified,
+                    parts: Some(parts),
                     ..Default::default()
                 }))
             })
