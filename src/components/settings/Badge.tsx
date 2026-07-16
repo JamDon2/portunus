@@ -1,6 +1,6 @@
 interface Props {
   /** Visual tone; maps to a `settings-badge--<tone>` class. */
-  tone?: "new" | "dev" | "update" | "error" | "success" | "neutral";
+  tone?: "new" | "dev" | "update" | "error" | "success" | "neutral" | "danger";
   children: React.ReactNode;
 }
 

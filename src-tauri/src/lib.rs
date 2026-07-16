@@ -422,14 +422,7 @@ fn launch_app(
         .collect();
 
     if let Some((program, rest)) = args.split_first() {
-        use std::os::unix::process::CommandExt;
-        let _ = std::process::Command::new(program)
-            .args(rest)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .process_group(0)
-            .spawn();
+        let _ = util::spawn_detached(program, rest);
     }
 
     if let Some(window) = app.get_webview_window("main") {
@@ -443,8 +436,6 @@ fn launch_app(
 /// parent directory with `xdg-open` if the D-Bus call cannot be made.
 #[tauri::command]
 fn reveal_file(app: tauri::AppHandle, path: String) {
-    use std::os::unix::process::CommandExt;
-
     let uri = format!("file://{}", encode_path_uri(&path));
 
     let dbus = std::process::Command::new("dbus-send")
@@ -470,13 +461,7 @@ fn reveal_file(app: tauri::AppHandle, path: String) {
             .parent()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| ".".to_string());
-        let _ = std::process::Command::new("xdg-open")
-            .arg(parent)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .process_group(0)
-            .spawn();
+        let _ = util::spawn_detached("xdg-open", &[parent]);
     }
 
     if let Some(window) = app.get_webview_window("main") {

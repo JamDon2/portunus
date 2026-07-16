@@ -36,6 +36,18 @@ search_timeout_ms = 100
 #                                 # can copy text WITHOUT this permission)
 # open_url = true                 # open_url host fn (effects can open urls
 #                                 # WITHOUT this permission)
+# paste = true                    # Paste activate effect (synthetic Ctrl+V)
+#
+# ⚠ DANGER - `spawn` runs real OS programs and BREAKS THE SANDBOX. A spawned
+# process runs with the user's full account access; extensions are normally
+# confined to wasm and cannot touch the system. Only uncomment if it is
+# essential to what your extension does - the user is shown a hard warning and
+# must explicitly confirm before an extension requesting it can be enabled.
+# The list is an allowlist of exact command names/paths; the SpawnProcess
+# activate effect may only launch a command that appears here (argv only, never
+# a shell). NOTE: allowlisting a shell/interpreter (sh, bash, python, env, …)
+# re-grants arbitrary execution because the args are unrestricted.
+# spawn = ["notify-send"]
 
 # Schedule a background `refresh` export (cache warming, off keystroke path):
 # [background]

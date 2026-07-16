@@ -148,17 +148,36 @@ pub fn open_http_url(url: &str) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("only http(s) urls may be opened".to_string());
     }
-    // Same detached-spawn pattern as launch_app.
-    use std::os::unix::process::CommandExt;
-    std::process::Command::new("xdg-open")
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
-        .spawn()
+    crate::util::spawn_detached("xdg-open", &[url])
         .map(|_| ())
         .map_err(|e| format!("xdg-open: {e}"))
+}
+
+/// Launches an OS command detached, argv-only (never a shell). Reached only via
+/// the `SpawnProcess` activate effect, whose command the provider has already
+/// checked against the manifest's `spawn` allowlist - so this is a plain
+/// fire-and-forget spawn (same detached pattern as [`open_http_url`]), not a
+/// permission boundary. **Bypasses the wasm sandbox by design.**
+pub fn spawn_process(command: &str, args: &[String]) -> Result<(), String> {
+    // Guard the argv the same way the URL path guards its input: bounded and
+    // free of embedded control bytes, before it reaches the OS.
+    if command.is_empty() {
+        return Err("spawn: empty command".to_string());
+    }
+    if args.len() > 64 {
+        return Err("spawn: too many arguments (max 64)".to_string());
+    }
+    for a in args {
+        if a.len() > 4096 || a.contains('\0') {
+            return Err("spawn: argument too long or contains NUL".to_string());
+        }
+    }
+    // Bare command names resolve via the inherited $PATH (see the `spawn` note in
+    // EXTENSIONS.md); the allowlist constrains the name, not which file wins the
+    // PATH lookup. Detached, argv-only, fire-and-forget.
+    crate::util::spawn_detached(command, args)
+        .map(|_| ())
+        .map_err(|e| format!("{command}: {e}"))
 }
 
 host_fn!(log_message(ctx: ExtensionCtx; message: String) {

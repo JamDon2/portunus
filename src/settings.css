@@ -1477,6 +1477,9 @@ a:focus-visible,
 .settings-badge--update { background: #d2992222; color: #d29922; }
 .settings-badge--error { background: #e5534b22; color: #e5534b; }
 .settings-badge--success { background: #3fb95022; color: #3fb950; }
+/* Sandbox-breaking capability - deliberately louder than the muted error tone:
+   solid themed fill so it reads as a hazard, not a status. */
+.settings-badge--danger { background: var(--danger-bg); color: var(--danger-fg); font-weight: 600; }
 
 /* ---------- modal ---------- */
 
@@ -1617,6 +1620,61 @@ a:focus-visible,
 .settings-ext-form .settings-field:last-child { padding-bottom: 0; }
 
 .settings-ext-perm-new { outline: 1px solid var(--accent); color: var(--accent) !important; }
+/* Sandbox-breaking permission chip (spawn): filled themed red, impossible to skim past. */
+.settings-ext-perm-danger { background: var(--danger-bg); color: var(--danger-fg) !important; font-weight: 600; }
+
+/* ---------- install/consent danger gate (spawn permission) ---------- */
+
+.settings-ext-danger {
+  margin: 4px 0 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--danger-fg);
+  border-radius: 6px;
+  background: var(--danger-bg-dim);
+  color: var(--fg);
+  font-size: var(--fs-desc);
+  line-height: 1.45;
+}
+
+.settings-ext-danger-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--danger-fg);
+  margin-bottom: 4px;
+}
+
+.settings-ext-danger code {
+  font-family: monospace;
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--kbd-bg);
+}
+
+/* Escalation shown when an allowlisted command is a shell/interpreter - a
+   stronger warning than the generic notice, since it means arbitrary code. */
+.settings-ext-danger-escalate {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--danger-fg);
+  font-weight: 500;
+}
+
+.settings-ext-danger-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 8px;
+  cursor: pointer;
+  font-size: var(--fs-desc);
+}
+
+.settings-ext-danger-ack input {
+  margin-top: 2px;
+  flex: none;
+}
 
 .settings-ext-reconsent { margin-top: 2px; }
 

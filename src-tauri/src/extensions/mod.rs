@@ -323,6 +323,8 @@ pub struct PermissionsInfo {
     clipboard: bool,
     open_url: bool,
     paste: bool,
+    /// Allowlist of OS commands the extension may spawn (sandbox-breaking).
+    spawn: Vec<String>,
     /// Derived: the settings schema declares at least one `type = "secret"`.
     has_secrets: bool,
 }
@@ -422,6 +424,7 @@ pub fn list_extensions(
                     clipboard: m.permissions.clipboard,
                     open_url: m.permissions.open_url,
                     paste: m.permissions.paste,
+                    spawn: m.permissions.spawn.clone(),
                     has_secrets: m.settings_schema.iter().any(|s| s.kind == "secret"),
                 }),
                 enabled,
@@ -689,7 +692,8 @@ pub async fn extension_activate(
 /// Executes the side-effect half of an `activate` response (copy/open/paste,
 /// hidden-window toasts) and folds the UI half into an [`ActivateResponse`].
 /// Effects run only on explicit user activation - the keypress is the consent
-/// - so only `Paste` consults a manifest permission (gated in the provider).
+/// - so only `Paste` and `SpawnProcess` consult a manifest permission (both
+/// gated in the provider; effects reaching here are already authorized).
 /// Visibility precedence: ShowForm > Hide > KeepOpen > default(hide).
 fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateResponse {
     let mut form: Option<FormPayload> = None;
@@ -711,6 +715,25 @@ fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateRespo
             ActivateEffect::Paste { text } => {
                 if let Err(e) = hostfns::paste_text(&text) {
                     eprintln!("[{id}] paste effect: {e}");
+                }
+            }
+            ActivateEffect::SpawnProcess { command, args } => {
+                // Allowlist already enforced by the provider's normalize_effects.
+                if let Err(e) = hostfns::spawn_process(&command, &args) {
+                    let name = id_extension_name(id);
+                    logs::log(
+                        &name,
+                        logs::LogLevel::Error,
+                        &format!("spawn_process effect: {e}"),
+                    );
+                    // The window has already hidden, so a log line the user
+                    // won't see is the only trace otherwise - raise a desktop
+                    // notification so a failed launch isn't silent.
+                    let msg = format!("{name}: couldn't run {command}");
+                    let _ = crate::util::spawn_detached(
+                        "notify-send",
+                        &["--app-name=Portunus", "--expire-time=4000", "Portunus", msg.as_str()],
+                    );
                 }
             }
             ActivateEffect::ShowToast { message, level } => {
@@ -740,15 +763,10 @@ fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateRespo
         // notification. Errors get one even when the window stays open, so
         // they aren't missed while the user's eyes are elsewhere.
         if hide || toast.level == ToastLevel::Error {
-            let _ = std::process::Command::new("notify-send")
-                .arg("--app-name=Portunus")
-                .arg("--expire-time=3000")
-                .arg("Portunus")
-                .arg(&toast.message)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
+            let _ = crate::util::spawn_detached(
+                "notify-send",
+                &["--app-name=Portunus", "--expire-time=3000", "Portunus", toast.message.as_str()],
+            );
         }
     }
     ActivateResponse { hide, form, toasts, refresh_results }

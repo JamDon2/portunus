@@ -176,6 +176,29 @@ const VALID_COMMAND_MODES: [&str; 3] = ["inline", "scope", "action"];
 
 const VALID_SETTING_TYPES: [&str; 5] = ["string", "bool", "number", "select", "secret"];
 
+/// Cap on the `spawn` command allowlist - a sandbox-breaking permission, kept
+/// deliberately small.
+const MAX_SPAWN_COMMANDS: usize = 32;
+
+/// Command basenames that, if allowlisted for `spawn`, re-grant arbitrary
+/// execution (unrestricted args): shells, language runtimes, and generic
+/// "run any command" wrappers. Flagged, not rejected - a denylist can never be
+/// complete, so it is a best-effort signal, not a security boundary (the
+/// consent UI mirrors and escalates this list). Kept as a slice so entries can
+/// be added without hand-counting a fixed length.
+const SPAWN_INTERPRETERS: &[&str] = &[
+    // shells
+    "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "ash", "busybox",
+    // language runtimes
+    "python", "python2", "python3", "perl", "ruby", "node", "deno", "bun", "lua", "php",
+    "tclsh", "expect", "Rscript", "groovy",
+    // generic command-runners / wrappers
+    "env", "xargs", "find", "awk", "gawk", "mawk", "make", "nohup", "setsid", "nice",
+    "timeout", "stdbuf", "watch", "flatpak", "systemd-run",
+    // remote / privilege escalation that trivially exec anything
+    "ssh", "sudo", "doas", "pkexec", "nsenter", "chroot", "socat", "nc", "ncat",
+];
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Permissions {
@@ -188,6 +211,14 @@ pub struct Permissions {
     /// May use the `Paste` activate effect (clipboard write + synthetic
     /// Ctrl+V into the previously focused window).
     pub paste: bool,
+    /// Allowlist of OS commands the extension may launch via the
+    /// `SpawnProcess` activate effect. **This bypasses the wasm sandbox** - a
+    /// spawned process runs with the user's full authority. Empty/absent means
+    /// the capability is off; a non-empty list is both the enable flag and the
+    /// exact set of permitted command names/paths (matched verbatim, argv only,
+    /// never routed through a shell). Off by default; requesting it triggers a
+    /// hard user warning before enabling.
+    pub spawn: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -296,6 +327,35 @@ fn load_impl(dir: &Path, check_dir_name: bool) -> Result<(ExtensionManifest, Pat
             return Err(format!(
                 "network permission \"{host}\": wildcards are not allowed - list exact hosts"
             ));
+        }
+    }
+    // `spawn` grants real OS-process execution - the wasm sandbox does NOT
+    // contain it. The command is matched verbatim against this allowlist at
+    // activate time (argv only, never a shell), so keep the list small and each
+    // entry a plain command name or path.
+    if manifest.permissions.spawn.len() > MAX_SPAWN_COMMANDS {
+        return Err(format!(
+            "spawn permission: at most {MAX_SPAWN_COMMANDS} commands may be listed"
+        ));
+    }
+    for cmd in &manifest.permissions.spawn {
+        if cmd.is_empty() || cmd.len() > 256 || cmd.contains('\0') || cmd.contains('\n') {
+            return Err(format!(
+                "spawn permission \"{cmd}\": each entry must be a non-empty command name or path (<=256 bytes, no NUL/newline)"
+            ));
+        }
+        // Allowlisting a shell/interpreter re-grants arbitrary execution because
+        // the effect's args are unrestricted. Not fatal, but flag it loudly in
+        // the extension's log so the author (and a reviewing user) can see it.
+        let base = Path::new(cmd).file_name().and_then(|n| n.to_str()).unwrap_or(cmd);
+        if SPAWN_INTERPRETERS.contains(&base) {
+            super::logs::log(
+                &manifest.name,
+                super::logs::LogLevel::Error,
+                &format!(
+                    "spawn allowlists interpreter \"{cmd}\": its args are unrestricted, so this effectively grants arbitrary command execution"
+                ),
+            );
         }
     }
     // Kinds drive frontend grouping/icons; without the ext- prefix an

@@ -178,6 +178,9 @@ export interface ExtensionPermissions {
   open_url: boolean;
   /** May inject synthetic paste keystrokes into other applications. */
   paste: boolean;
+  /** Allowlist of OS commands the extension may spawn. Non-empty ⇒ the
+   *  extension can run programs outside the wasm sandbox (sandbox-breaking). */
+  spawn: string[];
   /** Declares at least one `type = "secret"` setting (stored in the keyring). */
   has_secrets: boolean;
 }

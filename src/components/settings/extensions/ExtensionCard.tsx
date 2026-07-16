@@ -9,6 +9,7 @@ import PermissionChips from "./PermissionChips";
 import ExtensionSettingsForm from "./ExtensionSettingsForm";
 import ExtensionLogs from "./ExtensionLogs";
 import InstallExtensionDialog from "./InstallExtensionDialog";
+import SpawnConsentModal from "./SpawnConsentModal";
 
 interface Props {
   info: ExtensionInfo;
@@ -39,6 +40,11 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
   const [updateState, setUpdateState] = useState<"idle" | "checking" | "current">("idle");
   const [updatePreview, setUpdatePreview] = useState<InstallPreview | null>(null);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
+  // Which spawn-consent gate is pending, if any. spawn is sandbox-breaking, so
+  // enabling or re-approving it must clear the same hard checkbox the install
+  // dialog enforces - not just the passive badge/chips.
+  const [spawnConsent, setSpawnConsent] = useState<null | "enable" | "reconsent">(null);
+  const spawnCmds = info.permissions?.spawn ?? [];
 
   // A sweep-provided update opens the dialog directly. The parent owns the
   // staged bytes' lifecycle, so this card doesn't cancel them on close.
@@ -72,10 +78,21 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
     setConfirmUninstall(false);
   };
 
-  const reconsent = () => {
+  const doReconsent = () => {
     invoke("consent_extension_permissions", { name: info.name })
       .then(() => { invoke("rescan_extensions").catch(() => {}); onChanged(); })
       .catch(e => console.error(`[extensions] consent failed: ${e}`));
+  };
+
+  // Enabling or re-approving a spawn extension routes through the blocking
+  // consent modal first; everything else applies immediately.
+  const handleSetEnabled = (v: boolean) => {
+    if (v && spawnCmds.length > 0) { setSpawnConsent("enable"); return; }
+    onSetEnabled(v);
+  };
+  const reconsent = () => {
+    if (spawnCmds.length > 0) { setSpawnConsent("reconsent"); return; }
+    doReconsent();
   };
 
   // No parsed manifest = the extension cannot load; the toggle would be a lie.
@@ -95,6 +112,9 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
             <span className="settings-ext-card-name">{info.name}</span>
             {info.version && <span className="settings-ext-version">v{info.version}</span>}
             {info.dev && <Badge tone="dev">dev</Badge>}
+            {spawnCmds.length > 0 && (
+              <Badge tone="danger">runs programs</Badge>
+            )}
             {isNew && !broken && <Badge tone="new">new — review &amp; enable</Badge>}
             {info.needs_reconsent && <Badge tone="update">permissions changed</Badge>}
             {(info.error || info.benched) && !info.needs_reconsent && <Badge tone="error">error</Badge>}
@@ -105,7 +125,7 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
         </div>
         <span className="settings-ext-card-spacer" />
         <span onClick={e => e.stopPropagation()} title={broken ? "Fix the error below to enable" : undefined}>
-          <Toggle label={info.name} checked={enabled && !broken} disabled={broken} onChange={onSetEnabled} />
+          <Toggle label={info.name} checked={enabled && !broken} disabled={broken} onChange={handleSetEnabled} />
         </span>
       </div>
 
@@ -183,6 +203,21 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
           initialPreview={updatePreview}
           onClose={() => { setUpdatePreview(null); if (fromSweep) onUpdateConsumed?.(); }}
           onInstalled={onChanged}
+        />
+      )}
+
+      {spawnConsent && (
+        <SpawnConsentModal
+          title={spawnConsent === "enable" ? `Enable ${info.name}?` : `Allow new permissions for ${info.name}?`}
+          commands={spawnCmds}
+          confirmLabel={spawnConsent === "enable" ? "Enable" : "Allow"}
+          onCancel={() => setSpawnConsent(null)}
+          onConfirm={() => {
+            const which = spawnConsent;
+            setSpawnConsent(null);
+            if (which === "enable") onSetEnabled(true);
+            else doReconsent();
+          }}
         />
       )}
 

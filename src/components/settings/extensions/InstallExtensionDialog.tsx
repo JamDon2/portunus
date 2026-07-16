@@ -5,6 +5,7 @@ import type { InstallPreview } from "../../../types";
 import Modal from "../Modal";
 import TextInput from "../TextInput";
 import PermissionChips from "./PermissionChips";
+import SpawnDangerNotice from "./SpawnDangerNotice";
 import { useTauriListener } from "../../../hooks/useTauriListener";
 
 interface InstallProgress {
@@ -48,6 +49,12 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
   // Last source probed, so the error phase can offer a Retry.
   const [lastSource, setLastSource] = useState("");
   const [progress, setProgress] = useState<InstallProgress | null>(null);
+  // Sandbox-breaking `spawn` permission needs an explicit acknowledgement
+  // before the confirm button unlocks.
+  const [spawnAck, setSpawnAck] = useState(false);
+
+  const spawnCmds = phase.step === "consent" ? phase.preview.permissions.spawn : [];
+  const blockedOnSpawnAck = spawnCmds.length > 0 && !spawnAck;
 
   useTauriListener<InstallProgress>("ext-install-progress", p => {
     if (phase.step === "probing") setProgress(p);
@@ -57,6 +64,7 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
     if (!src.trim()) return;
     setLastSource(src.trim());
     setProgress(null);
+    setSpawnAck(false);
     setPhase({ step: "probing" });
     invoke<InstallPreview>("preview_extension_install", {
       source: src.trim(),
@@ -107,7 +115,12 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
         ) : phase.step === "consent" ? (
           <>
             <button className="settings-btn-secondary" onClick={close}>Cancel</button>
-            <button className="settings-btn-primary" onClick={() => confirm(phase.preview)}>
+            <button
+              className="settings-btn-primary"
+              onClick={() => confirm(phase.preview)}
+              disabled={blockedOnSpawnAck}
+              title={blockedOnSpawnAck ? "Acknowledge the warning above to continue" : undefined}
+            >
               {phase.preview.replaces ? `Update to v${phase.preview.version}` : "Install & enable"}
             </button>
           </>
@@ -186,6 +199,7 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
             </div>
           )}
           <PermissionChips permissions={phase.preview.permissions} />
+          <SpawnDangerNotice commands={spawnCmds} acked={spawnAck} onAckChange={setSpawnAck} />
           {phase.preview.replaces && (
             <div className="settings-field-desc">
               Replaces installed v{phase.preview.replaces.old_version}

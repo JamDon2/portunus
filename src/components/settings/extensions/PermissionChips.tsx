@@ -20,7 +20,7 @@ function fmtInterval(secs: number): string {
  */
 export default function PermissionChips({ permissions, backgroundIntervalSecs, diffAgainst }: Props) {
   if (!permissions) return null;
-  const chips: { text: string; grew: boolean }[] = [];
+  const chips: { text: string; grew: boolean; danger?: boolean }[] = [];
   const old = diffAgainst;
   for (const host of permissions.network) {
     chips.push({ text: `network: ${host}`, grew: old ? !old.network.includes(host) : false });
@@ -29,6 +29,16 @@ export default function PermissionChips({ permissions, backgroundIntervalSecs, d
   if (permissions.clipboard) chips.push({ text: "clipboard", grew: old ? !old.clipboard : false });
   if (permissions.open_url) chips.push({ text: "open urls", grew: old ? !old.open_url : false });
   if (permissions.paste) chips.push({ text: "paste keystrokes", grew: old ? !old.paste : false });
+  // Sandbox-breaking: flag it as danger and name the exact binaries.
+  const spawn = permissions.spawn ?? [];
+  if (spawn.length > 0) {
+    const oldSpawn = old?.spawn ?? [];
+    chips.push({
+      text: `⚠ runs programs: ${spawn.join(", ")}`,
+      grew: old ? spawn.some(c => !oldSpawn.includes(c)) : false,
+      danger: true,
+    });
+  }
   if (permissions.has_secrets) chips.push({ text: "secrets (keyring)", grew: old ? !old.has_secrets : false });
   if (chips.length === 0) chips.push({ text: "no permissions", grew: false });
   if (backgroundIntervalSecs != null) {
@@ -37,7 +47,10 @@ export default function PermissionChips({ permissions, backgroundIntervalSecs, d
   return (
     <div className="settings-ext-perms">
       {chips.map(c => (
-        <code key={c.text} className={c.grew ? "settings-ext-perm-new" : undefined}>
+        <code
+          key={c.text}
+          className={c.danger ? "settings-ext-perm-danger" : c.grew ? "settings-ext-perm-new" : undefined}
+        >
           {c.grew ? "+ " : ""}{c.text}
         </code>
       ))}

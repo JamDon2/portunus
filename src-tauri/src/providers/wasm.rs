@@ -630,7 +630,29 @@ impl WasmProvider {
                     }
                     out.push(ActivateEffect::Paste { text });
                 }
-                other => out.push(other),
+                ActivateEffect::SpawnProcess { command, args } => {
+                    // The command must be an exact member of the manifest's
+                    // `spawn` allowlist - the sandbox-breaking permission the
+                    // user consented to. This is the authoritative gate;
+                    // `run_activate_effects` trusts what survives here.
+                    if !self.manifest.permissions.spawn.iter().any(|c| c == &command) {
+                        self.note_error(&format!(
+                            "spawn_process effect for \"{command}\" denied - not in the `spawn` permission allowlist"
+                        ));
+                        continue;
+                    }
+                    out.push(ActivateEffect::SpawnProcess { command, args });
+                }
+                // Permission-free effects pass through untouched. Listed
+                // explicitly (no `_ =>` catch-all) so adding a new effect that
+                // needs a permission is a compile error here until it's gated -
+                // the sandbox stays deny-by-default rather than deny-by-omission.
+                effect @ (ActivateEffect::CopyText { .. }
+                | ActivateEffect::OpenUrl { .. }
+                | ActivateEffect::ShowToast { .. }
+                | ActivateEffect::Hide {}
+                | ActivateEffect::KeepOpen {}
+                | ActivateEffect::RefreshResults {}) => out.push(effect),
             }
         }
         out

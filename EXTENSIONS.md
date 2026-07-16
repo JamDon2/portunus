@@ -74,6 +74,7 @@ kv = true                      # per-extension key-value storage
 clipboard = true               # clipboard_write host fn (NOT needed for CopyText effects)
 open_url = true                # open_url host fn (NOT needed for OpenUrl effects)
 paste = true                   # Paste activate effect (synthetic Ctrl+V into other apps)
+spawn = ["notify-send"]        # ⚠ SANDBOX-BREAKING - allowlist of OS commands (see below)
 
 [limits]
 search_timeout_ms = 100        # clamped to [10, 500]
@@ -104,6 +105,52 @@ description = "Your api.example.com token"
 shown to the user before enabling/installing, and an update whose permissions
 *grow* past that snapshot refuses to load until the user re-approves in
 Settings. Declare the minimum you need.
+
+### ⚠ `spawn` — running OS processes (breaks the sandbox)
+
+> **Do not request this permission unless it is essential.** Every other
+> capability keeps the extension inside the wasm sandbox. `spawn` does not: a
+> process you launch runs as a normal program with the **full authority of the
+> user's account** — it can read their files, reach the network unrestricted,
+> and persist. Treat it as the last resort, not a convenience.
+
+`spawn` is an **allowlist of exact command names or paths**, not a boolean. The
+list doubles as the enable switch: omit it (or leave it empty) and the
+capability is off. A process is launched only via the `SpawnProcess` activate
+effect (see the effects table under [`activate`](#activate-required-for-actionable-results))
+— i.e. **only when the user explicitly launches one of your results**; there is
+no host function and nothing
+spawns on a keystroke, from `query`, or in the background. The effect's
+`command` must match an allowlist entry **verbatim**, or the host drops it and
+logs an error. Arguments are passed as **argv — never through a shell**, and
+nothing is captured back (fire-and-forget: no stdout, no exit code).
+
+```rust
+// in activate(), for a result the user launched:
+Ok(ActivateOutput::spawn("notify-send", vec!["Done".into(), "Build finished".into()]))
+```
+
+```toml
+[permissions]
+spawn = ["notify-send", "wmctrl"]
+```
+
+- **Off by default; loud on enable.** Requesting `spawn` triggers a distinct red
+  warning in the install/consent dialog that names the exact commands, plus a
+  required "I understand…" checkbox the user must tick before Install unlocks.
+  Adding a command in an update re-triggers this (it counts as permission
+  growth, so the extension will not load until the user re-approves).
+- **Args are unrestricted, so the allowlist only limits *which binary* runs.**
+  Allowlisting a shell or interpreter (`sh`, `bash`, `python`, `env`, `node`, …)
+  therefore re-grants arbitrary execution and defeats the point — validation
+  logs a warning (and the consent dialog escalates its wording) when you do this.
+  Allowlist the specific tool, not a runner.
+- **A bare name resolves through the user's `$PATH` at launch time.** Allowlisting
+  `notify-send` runs whichever `notify-send` the user's `PATH` finds first — the
+  allowlist pins the *name*, not the file on disk. If that distinction matters
+  for your extension, allowlist an absolute path (`/usr/bin/notify-send`); the
+  `SpawnProcess` effect's `command` must then match that absolute path verbatim.
+- Keep the list short (max 32 commands, each ≤256 bytes).
 
 ## Commands
 
@@ -248,8 +295,9 @@ browser" (see `examples/extensions/gh/manifest.toml`'s `notifications`
 command).
 
 **Effects** run host-side after your call returns, in order. Because they only
-ever run on an explicit keypress, they need **no permissions** (except
-`paste`, which injects keystrokes into *another* application):
+ever run on an explicit keypress, they need **no permissions** (except `paste`,
+which injects keystrokes into *another* application, and `spawn_process`, which
+launches an OS program):
 
 | Effect | Fields | Notes |
 |---|---|---|
@@ -261,6 +309,7 @@ ever run on an explicit keypress, they need **no permissions** (except
 | `keep_open` | — | keep the launcher open (toggle-style actions) |
 | `refresh_results` | — | re-run the current query (after delete/toggle/mark-done actions) |
 | `paste` | `text` | copy + synthetic Ctrl+V into the previously focused window; **requires `paste = true` in `[permissions]`**. Clobbers the clipboard; falls back to a "Copied — press Ctrl+V" notification on compositors without the virtual-keyboard protocol (e.g. GNOME) |
+| `spawn_process` | `command`, `args` | ⚠ **sandbox-breaking** — launch an OS program (argv, never a shell), detached and fire-and-forget. `command` must appear verbatim in the `spawn` allowlist in `[permissions]` or the effect is dropped. See [`spawn`](#-spawn--running-os-processes-breaks-the-sandbox) |
 
 At most 16 effects run per activation; extras are dropped and logged. Window
 visibility resolves as `show_form` > `hide` > `keep_open` > default (hide).

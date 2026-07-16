@@ -48,6 +48,9 @@ pub struct ConsentPermissions {
     pub open_url: bool,
     /// May inject synthetic paste keystrokes into other applications.
     pub paste: bool,
+    /// Allowlist of OS commands the extension may spawn - a sandbox-breaking
+    /// grant. Any command added past this snapshot forces re-consent.
+    pub spawn: Vec<String>,
     /// Derived from the settings schema: any `type = "secret"` setting means
     /// the extension stores secrets in the keyring - consent-relevant,
     /// especially paired with `network`.
@@ -58,12 +61,15 @@ impl ConsentPermissions {
     pub fn from_manifest(m: &manifest::ExtensionManifest) -> Self {
         let mut network = m.permissions.network.clone();
         network.sort();
+        let mut spawn = m.permissions.spawn.clone();
+        spawn.sort();
         Self {
             network,
             kv: m.permissions.kv,
             clipboard: m.permissions.clipboard,
             open_url: m.permissions.open_url,
             paste: m.permissions.paste,
+            spawn,
             has_secrets: m.settings_schema.iter().any(|s| s.kind == "secret"),
         }
     }
@@ -77,6 +83,7 @@ impl ConsentPermissions {
             || (!self.paste && other.paste)
             || (!self.has_secrets && other.has_secrets)
             || other.network.iter().any(|h| !self.network.contains(h))
+            || other.spawn.iter().any(|c| !self.spawn.contains(c))
     }
 }
 
@@ -167,7 +174,15 @@ pub fn check_consent(m: &manifest::ExtensionManifest) -> Result<(), String> {
         }
         Some(rec) => {
             if rec.permissions.grew_to(&current) {
-                if matches!(rec.origin, Origin::Dev) {
+                // Dev owns the code, so benign permission growth auto-refreshes
+                // the snapshot silently - EXCEPT a growing `spawn` allowlist.
+                // That is sandbox-breaking, so it must always be re-confirmed
+                // through the Settings reconsent flow, dev origin or not.
+                let spawn_grew = current
+                    .spawn
+                    .iter()
+                    .any(|c| !rec.permissions.spawn.contains(c));
+                if matches!(rec.origin, Origin::Dev) && !spawn_grew {
                     rec.permissions = current;
                     rec.version = m.version.clone();
                     rec.consented_at = now_unix();
@@ -776,17 +791,24 @@ mod tests {
             clipboard: false,
             open_url: false,
             paste: false,
+            spawn: vec!["notify-send".into()],
             has_secrets: false,
         };
         // Same or narrower: no growth.
         assert!(!base.grew_to(&base));
         assert!(!base.grew_to(&ConsentPermissions { network: vec![], kv: false, ..base.clone() }));
+        assert!(!base.grew_to(&ConsentPermissions { spawn: vec![], ..base.clone() }));
         // Any new grant: growth.
         assert!(base.grew_to(&ConsentPermissions { clipboard: true, ..base.clone() }));
         assert!(base.grew_to(&ConsentPermissions { has_secrets: true, ..base.clone() }));
         assert!(base.grew_to(&ConsentPermissions { paste: true, ..base.clone() }));
         assert!(base.grew_to(&ConsentPermissions {
             network: vec!["a.com".into(), "b.com".into()],
+            ..base.clone()
+        }));
+        // A new spawn command is growth (sandbox-breaking - must re-consent).
+        assert!(base.grew_to(&ConsentPermissions {
+            spawn: vec!["notify-send".into(), "wmctrl".into()],
             ..base.clone()
         }));
     }

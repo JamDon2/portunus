@@ -196,6 +196,16 @@ impl ActivateOutput {
         Self::single(ActivateEffect::ShowToast { message: message.into(), level })
     }
 
+    /// Convenience: spawn an OS command (argv, never a shell).
+    ///
+    /// **DANGER: this bypasses the wasm sandbox.** `command` must be listed in
+    /// the manifest's `spawn` permission allowlist or the host drops the effect;
+    /// the user is shown a hard warning before such an extension is enabled. See
+    /// [`ActivateEffect::SpawnProcess`].
+    pub fn spawn(command: impl Into<String>, args: Vec<String>) -> Self {
+        Self::single(ActivateEffect::SpawnProcess { command: command.into(), args })
+    }
+
     /// Convenience: open a form. The host calls `activate` again with
     /// `action = submit_action` and `form_values` filled when the user submits.
     pub fn form(
@@ -264,6 +274,18 @@ pub enum ActivateEffect {
     /// permissions. Clobbers the clipboard; falls back to a "Copied - press
     /// Ctrl+V" notification when injection is unavailable.
     Paste { text: String },
+    /// Launch an OS command, detached and fire-and-forget (no stdout/exit is
+    /// returned). Arguments are passed as argv - nothing is routed through a
+    /// shell.
+    ///
+    /// **DANGER: this bypasses the wasm sandbox.** The spawned process runs with
+    /// the user's full authority. `command` must appear verbatim in the
+    /// manifest's `spawn` permission allowlist; otherwise the host drops the
+    /// effect and logs an error. Because a spawn allowlist is sandbox-breaking,
+    /// the user is shown an explicit warning (and must confirm) before an
+    /// extension requesting it is enabled. Do not request this unless it is
+    /// essential to what the extension does.
+    SpawnProcess { command: String, args: Vec<String> },
 }
 
 /// Toast severity; controls tint and linger time.

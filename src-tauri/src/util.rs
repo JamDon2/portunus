@@ -46,6 +46,28 @@ pub fn truncate_char_boundary(s: &mut String, max: usize) {
     }
 }
 
+/// Spawns `program` with `args` fully detached: stdio nulled and its own
+/// process group, so the child outlives Portunus and never blocks it. This is
+/// the single home for the detachment contract - shared by app launches,
+/// browser/file opens, desktop notifications, and the extension `spawn` effect
+/// - so the null-stdio + `process_group(0)` incantation can't drift per call
+/// site. Fire-and-forget: nothing is captured back.
+pub fn spawn_detached<P, S>(program: P, args: &[S]) -> std::io::Result<std::process::Child>
+where
+    P: AsRef<std::ffi::OsStr>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+}
+
 /// Returns true if `bin` is found as an executable file on any PATH entry.
 /// Used both to gate providers at startup and to report dependency status
 /// to the Settings UI via `check_dependencies`.
