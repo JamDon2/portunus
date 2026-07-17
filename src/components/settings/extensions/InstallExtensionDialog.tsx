@@ -23,8 +23,6 @@ interface Props {
   onClose: () => void;
   /** Called after a successful install (list refresh rides extensions-reloaded too). */
   onInstalled: () => void;
-  /** Pre-staged preview (update flow) - skips the source input step. */
-  initialPreview?: InstallPreview;
 }
 
 type Phase =
@@ -35,16 +33,14 @@ type Phase =
   | { step: "error"; message: string };
 
 /**
- * Two-phase install flow mirroring the backend: probe a URL or local file
+ * Two-phase sideload flow mirroring the backend: probe a local .portext file
  * (`preview_extension_install` stages + validates the exact bytes), show the
  * consent card (permissions, hash, replaces), then confirm. Cancelling at any
- * point after probing discards the staged bytes.
+ * point after probing discards the staged bytes. URL installs go through the
+ * marketplace instead.
  */
-export default function InstallExtensionDialog({ onClose, onInstalled, initialPreview }: Props) {
-  const [phase, setPhase] = useState<Phase>(
-    initialPreview ? { step: "consent", preview: initialPreview } : { step: "input" },
-  );
-  const [source, setSource] = useState("");
+export default function InstallExtensionDialog({ onClose, onInstalled }: Props) {
+  const [phase, setPhase] = useState<Phase>({ step: "input" });
   const [expectedSha, setExpectedSha] = useState("");
   // Last source probed, so the error phase can offer a Retry.
   const [lastSource, setLastSource] = useState("");
@@ -80,7 +76,6 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
       filters: [{ name: "Portunus extension", extensions: ["portext", "zip"] }],
     });
     if (typeof path === "string") {
-      setSource(path);
       probe(path);
     }
   };
@@ -103,14 +98,14 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
 
   return (
     <Modal
-      title={initialPreview ? `Update ${initialPreview.name}` : "Install extension"}
+      title="Install extension"
       onClose={close}
       width={470}
       footer={
         phase.step === "input" ? (
           <>
             <button className="settings-btn-secondary" onClick={close}>Cancel</button>
-            <button className="settings-btn-primary" onClick={() => probe(source)} disabled={!source.trim()}>Fetch</button>
+            <button className="settings-btn-primary" onClick={chooseFile}>Choose file…</button>
           </>
         ) : phase.step === "consent" ? (
           <>
@@ -127,12 +122,10 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
         ) : phase.step === "error" ? (
           <>
             <button className="settings-btn-secondary" onClick={onClose}>Close</button>
-            {!initialPreview && lastSource && (
+            {lastSource && (
               <button className="settings-btn-secondary" onClick={() => probe(lastSource)}>Retry</button>
             )}
-            {!initialPreview && (
-              <button className="settings-btn-primary" onClick={() => setPhase({ step: "input" })}>Back</button>
-            )}
+            <button className="settings-btn-primary" onClick={() => setPhase({ step: "input" })}>Back</button>
           </>
         ) : undefined
       }
@@ -140,26 +133,16 @@ export default function InstallExtensionDialog({ onClose, onInstalled, initialPr
       {phase.step === "input" && (
         <div className="settings-ext-install-input">
           <div className="settings-field-desc">
-            Paste a <code>.portext</code> URL, or pick a downloaded file. The archive is verified
-            and you review its permissions before anything runs.
+            Pick a downloaded <code>.portext</code> file. The archive is verified and you review
+            its permissions before anything runs.
           </div>
-          <TextInput
-            value={source}
-            onChange={setSource}
-            placeholder="https://example.com/my-extension.portext"
-            mono
-            autoFocus
-            onEnter={() => probe(source)}
-            label="Extension URL or path"
-          />
           <TextInput
             value={expectedSha}
             onChange={setExpectedSha}
-            placeholder="sha256 (optional - verified against the download)"
+            placeholder="sha256 (optional - verified against the file)"
             mono
             label="Expected sha256"
           />
-          <button className="settings-btn-secondary" onClick={chooseFile}>Choose file…</button>
         </div>
       )}
 

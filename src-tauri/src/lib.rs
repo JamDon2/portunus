@@ -734,6 +734,7 @@ pub fn run() {
     let providers_cfg = cfg.providers.clone();
     let dict_cfg = cfg.dict.clone();
     let calc_cfg = cfg.calc.clone();
+    let marketplace_cfg = cfg.marketplace.clone();
     let max_results = cfg.general.max_results;
     let layer_shell_enabled = cfg.general.layer_shell;
     let content_cfg = cfg.content.clone();
@@ -1046,6 +1047,26 @@ pub fn run() {
                     calc_cfg.rate_max_age_hours,
                 );
             }
+
+            // Marketplace: register the scope provider (cheap - searches the
+            // in-memory index cache) and refresh the index off-thread if stale.
+            {
+                let store = Arc::clone(extensions::marketplace::store());
+                store.set_index_url(&marketplace_cfg.index_url);
+                bg_registry
+                    .write()
+                    .unwrap()
+                    .register(providers::marketplace::MarketplaceProvider::new(Arc::clone(&store)));
+                let mp_handle = app.handle().clone();
+                std::thread::spawn(move || match store.refresh(false) {
+                    Ok(true) => {
+                        let _ = mp_handle.emit("search-invalidated", ());
+                        let _ = mp_handle.emit("marketplace-index-updated", ());
+                    }
+                    Ok(false) => {}
+                    Err(e) => eprintln!("[marketplace] index refresh failed: {e}"),
+                });
+            }
             let handle = app.handle().clone();
             let shared_bg = Arc::clone(&shared_config);
             let startup_ci = Arc::clone(&content_state);
@@ -1204,9 +1225,11 @@ pub fn run() {
             extensions::install::preview_extension_install,
             extensions::install::confirm_extension_install,
             extensions::install::cancel_extension_install,
-            extensions::install::check_extension_update,
             extensions::install::uninstall_extension,
             extensions::install::consent_extension_permissions,
+            extensions::marketplace::marketplace_refresh,
+            extensions::marketplace::marketplace_updates,
+            extensions::marketplace::marketplace_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

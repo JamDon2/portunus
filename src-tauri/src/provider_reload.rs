@@ -152,6 +152,18 @@ pub fn rebuild_providers(
         notify_cb();
     }
 
+    if new_cfg.marketplace.index_url != old_cfg.marketplace.index_url {
+        let store = Arc::clone(crate::extensions::marketplace::store());
+        store.set_index_url(&new_cfg.marketplace.index_url);
+        let ncb = Arc::clone(notify_cb);
+        std::thread::spawn(move || match store.refresh(true) {
+            Ok(true) => ncb(),
+            Ok(false) => {}
+            Err(e) => eprintln!("[marketplace] index refresh failed: {e}"),
+        });
+        eprintln!("[config] marketplace index url changed");
+    }
+
     if new_cfg.dict != old_cfg.dict {
         let mut reg = registry.write().unwrap();
         if new_cfg.dict.enabled {

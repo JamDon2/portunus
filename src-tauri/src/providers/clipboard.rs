@@ -586,6 +586,7 @@ impl Provider for ClipboardProvider {
             glyph: Some("clipboard".to_string()),
             icon_data_uri: None,
             opens_form: false,
+            uncapped: false,
             route: CommandRoute::UiTakeover,
         }]
     }

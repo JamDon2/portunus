@@ -306,6 +306,7 @@ impl Provider for DictProvider {
             glyph: Some("book".to_string()),
             icon_data_uri: None,
             opens_form: false,
+            uncapped: false,
             route: CommandRoute::Builtin { provider_id: "dict".to_string() },
         }]
     }

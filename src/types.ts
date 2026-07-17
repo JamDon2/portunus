@@ -86,6 +86,10 @@ export interface Config {
   };
   /** Per-extension state keyed by name. Absent = disabled. */
   extensions: Record<string, ExtensionConfigEntry>;
+  marketplace: {
+    /** Marketplace index URL; non-default values relax https-only for testing. */
+    index_url: string;
+  };
 }
 
 export interface ExtensionConfigEntry {
@@ -268,7 +272,7 @@ export interface ExtensionInfo {
   settings_values: Record<string, unknown>;
   /** Permissions grew past the consented snapshot - blocked until re-approved. */
   needs_reconsent: boolean;
-  /** "url" | "file" | "dev" - install origin, when recorded. */
+  /** "marketplace" | "url" | "file" | "dev" - install origin, when recorded. */
   origin: string | null;
   origin_url: string | null;
   /** Extensions dir entry is a symlink (`portunus ext dev`). */
@@ -292,10 +296,36 @@ export interface InstallPreview {
   staging_token: string;
 }
 
-export interface UpdateCheck {
-  current_version: string;
-  /** Null when already up to date. */
-  preview: InstallPreview | null;
+/** One available update from the marketplace index (`marketplace_updates`). */
+export interface MarketplaceUpdateInfo {
+  name: string;
+  installed_version: string;
+  index_version: string;
+  /** The new version asks for permissions the consented snapshot lacks. */
+  permissions_grew: boolean;
+  /** The new version's full permission set (from the index entry), for
+   *  diffing against the consented snapshot and gating a grown spawn list. */
+  permissions: ExtensionPermissions;
+}
+
+/** Payload of a `kind: "marketplace"` row - the index entry plus install
+ *  state; the preview panel renders it as the consent surface. */
+export interface MarketplaceResult {
+  name: string;
+  version: string;
+  api: number;
+  description: string;
+  author: string;
+  homepage: string;
+  keywords: string[];
+  permissions: ExtensionPermissions;
+  size_bytes: number;
+  state: "not_installed" | "installed" | "update" | "incompatible";
+  installed_version: string | null;
+  /** Update rows: the new version asks for more than the consented snapshot. */
+  permissions_grew: boolean;
+  /** A same-name dev symlink exists; marketplace install is blocked. */
+  dev_conflict: boolean;
 }
 
 export interface ExtensionLogEntry {
@@ -340,6 +370,9 @@ export interface CommandDescriptor {
   icon_data_uri?: string;
   /** Action command opens a form - don't hide the launcher optimistically. */
   opens_form?: boolean;
+  /** Scope results are shown in full, not truncated to max_results (browse
+   *  scopes like the marketplace). */
+  uncapped?: boolean;
   route: CommandRoute;
 }
 
@@ -365,6 +398,8 @@ export interface SearchResult {
   ext_command?: string;
   /** Descriptor behind a `kind: "command"` entry row. */
   command?: CommandDescriptor;
+  /** Payload of a `kind: "marketplace"` row (index entry + install state). */
+  market?: MarketplaceResult;
   /** True when a pin for the typed query boosted this result to the top.
    *  Optional: frontend-synthesized hint/error rows omit it. */
   pinned?: boolean;

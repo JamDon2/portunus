@@ -112,12 +112,19 @@ depth = 3
 # depth      = 4
 # extensions = ["rs", "toml", "md"]   # code only, no PDFs or images
 
+# ── Marketplace ───────────────────────────────────────────────────────────────
+# Official extension index. Override only to test a local or forked index;
+# file:// paths are honored for custom URLs.
+# [marketplace]
+# index_url = "https://szilbalazs.github.io/portunus-extensions/index.json"
+
 # ── WASM extensions ───────────────────────────────────────────────────────────
 # Third-party extensions live in ~/.local/share/portunus/extensions/<name>/.
-# Install from Settings → Extensions (a .portext file or URL), or drop a folder
-# in manually. A newly discovered extension is DISABLED until enabled here or
-# in Settings (review its permissions first). Extension-declared settings live
-# in a per-extension `settings` table.
+# Install from the marketplace (search "marketplace" in the launcher), from a
+# .portext file in Settings → Extensions, or drop a folder in manually. A newly
+# discovered extension is DISABLED until enabled here or in Settings (review
+# its permissions first). Extension-declared settings live in a per-extension
+# `settings` table.
 # [extensions.emoji]
 # enabled = true
 # [extensions.emoji.settings]

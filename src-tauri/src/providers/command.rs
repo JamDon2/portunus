@@ -86,6 +86,12 @@ pub struct CommandDescriptor {
     /// frontend must not hide the launcher optimistically while it runs.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub opens_form: bool,
+    /// Scope results are shown in full rather than truncated to `max_results` -
+    /// for browse-the-whole-catalog scopes (the marketplace) where a hidden
+    /// tail would defeat the point. Off for search-style scopes, where the
+    /// top-N cap is the desired behavior.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub uncapped: bool,
     pub route: CommandRoute,
 }
 
@@ -167,6 +173,7 @@ mod tests {
             glyph: None,
             icon_data_uri: None,
             opens_form: false,
+            uncapped: false,
             route: CommandRoute::Builtin { provider_id: "dict".to_string() },
         }
     }

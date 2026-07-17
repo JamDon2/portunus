@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ExtensionInfo, InstallPreview, UpdateCheck } from "../../../types";
+import type { ExtensionInfo, MarketplaceUpdateInfo } from "../../../types";
 import { WarnIcon } from "../../../icons";
 import Toggle from "../Toggle";
 import Badge from "../Badge";
@@ -8,7 +8,6 @@ import Modal from "../Modal";
 import PermissionChips from "./PermissionChips";
 import ExtensionSettingsForm from "./ExtensionSettingsForm";
 import ExtensionLogs from "./ExtensionLogs";
-import InstallExtensionDialog from "./InstallExtensionDialog";
 import SpawnConsentModal from "./SpawnConsentModal";
 
 interface Props {
@@ -18,12 +17,8 @@ interface Props {
   isNew: boolean;
   /** Whether a Secret Service daemon is reachable (for secret settings). */
   secretsAvailable: boolean;
-  /** Pre-staged update from a "Check all for updates" sweep - opens the
-   *  update dialog directly, skipping this card's own check. */
-  pendingUpdate?: InstallPreview;
-  /** Called when a pendingUpdate dialog closes, so the parent stops tracking
-   *  (and re-cancelling) the staged bytes. */
-  onUpdateConsumed?: () => void;
+  /** Available marketplace update for this extension, if any. */
+  update?: MarketplaceUpdateInfo;
   onSetEnabled: (v: boolean) => void;
   onChanged: () => void;
 }
@@ -34,41 +29,39 @@ interface Props {
  * and hash, the schema-driven settings form, a log viewer, and the
  * update/uninstall actions.
  */
-export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, pendingUpdate, onUpdateConsumed, onSetEnabled, onChanged }: Props) {
+export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, update, onSetEnabled, onChanged }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
-  const [updateState, setUpdateState] = useState<"idle" | "checking" | "current">("idle");
-  const [updatePreview, setUpdatePreview] = useState<InstallPreview | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   // Which spawn-consent gate is pending, if any. spawn is sandbox-breaking, so
-  // enabling or re-approving it must clear the same hard checkbox the install
-  // dialog enforces - not just the passive badge/chips.
-  const [spawnConsent, setSpawnConsent] = useState<null | "enable" | "reconsent">(null);
+  // enabling, re-approving, or updating into it must clear the same hard
+  // checkbox the install dialog enforces - not just the passive badge/chips.
+  const [spawnConsent, setSpawnConsent] = useState<null | "enable" | "reconsent" | "update">(null);
+  // A non-spawn permission-growth update opens a plain permission-diff review.
+  const [permReview, setPermReview] = useState(false);
   const spawnCmds = info.permissions?.spawn ?? [];
 
-  // A sweep-provided update opens the dialog directly. The parent owns the
-  // staged bytes' lifecycle, so this card doesn't cancel them on close.
-  const fromSweep = updatePreview != null && updatePreview === pendingUpdate;
-  useEffect(() => {
-    if (pendingUpdate) setUpdatePreview(pendingUpdate);
-  }, [pendingUpdate]);
+  const doUpdate = () => {
+    setUpdating(true);
+    setUpdateError(null);
+    invoke("marketplace_install", { name: info.name })
+      .then(onChanged)
+      .catch(e => setUpdateError(String(e)))
+      .finally(() => setUpdating(false));
+  };
 
-  const checkUpdate = () => {
-    setUpdateState("checking");
-    invoke<UpdateCheck>("check_extension_update", { name: info.name })
-      .then(res => {
-        if (res.preview) {
-          setUpdatePreview(res.preview);
-          setUpdateState("idle");
-        } else {
-          setUpdateState("current");
-          window.setTimeout(() => setUpdateState("idle"), 2500);
-        }
-      })
-      .catch(e => {
-        console.error(`[extensions] update check failed: ${e}`);
-        setUpdateState("idle");
-      });
+  // A marketplace update re-consents to the new grant set, so growth gets the
+  // same review as a fresh install: a grown spawn allowlist requires the hard
+  // spawn acknowledgement, any other growth a permission diff. An update that
+  // grows nothing installs directly.
+  const runUpdate = () => {
+    if (!update) return doUpdate();
+    const spawnGrew = (update.permissions.spawn ?? []).some(c => !spawnCmds.includes(c));
+    if (spawnGrew) { setSpawnConsent("update"); return; }
+    if (update.permissions_grew) { setPermReview(true); return; }
+    doUpdate();
   };
 
   const uninstall = () => {
@@ -112,6 +105,11 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
             <span className="settings-ext-card-name">{info.name}</span>
             {info.version && <span className="settings-ext-version">v{info.version}</span>}
             {info.dev && <Badge tone="dev">dev</Badge>}
+            {update && !info.dev && (
+              <Badge tone="update">
+                v{update.index_version} available{update.permissions_grew ? " — new permissions" : ""}
+              </Badge>
+            )}
             {spawnCmds.length > 0 && (
               <Badge tone="danger">runs programs</Badge>
             )}
@@ -148,9 +146,11 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
             <div className="settings-ext-origin">
               {info.dev
                 ? <>Linked working directory (<code>portunus ext dev</code>)</>
-                : info.origin === "url"
-                  ? <>Installed from <code className="settings-ext-origin-url">{info.origin_url}</code></>
-                  : <>Installed locally</>}
+                : info.origin === "marketplace"
+                  ? <>Installed from the marketplace</>
+                  : info.origin === "url"
+                    ? <>Installed from <code className="settings-ext-origin-url">{info.origin_url}</code> (legacy URL install — reinstall from the marketplace for updates)</>
+                    : <>Installed locally</>}
               {info.homepage && <> · <a href={info.homepage} target="_blank" rel="noreferrer">{info.homepage}</a></>}
             </div>
           </div>
@@ -184,10 +184,14 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
             {logsOpen && <ExtensionLogs extension={info.name} />}
           </div>
 
+          {updateError && (
+            <div className="settings-dep-inline-warn"><WarnIcon />{updateError}</div>
+          )}
+
           <div className="settings-ext-card-actions">
-            {info.origin === "url" && !info.dev && (
-              <button className="settings-btn-secondary" onClick={checkUpdate} disabled={updateState === "checking"}>
-                {updateState === "checking" ? "Checking…" : updateState === "current" ? "Up to date" : "Check for update"}
+            {update && !info.dev && (
+              <button className="settings-btn-primary" onClick={runUpdate} disabled={updating}>
+                {updating ? "Updating…" : `Update to v${update.index_version}`}
               </button>
             )}
             <span className="settings-ext-card-spacer" />
@@ -198,27 +202,50 @@ export default function ExtensionCard({ info, enabled, isNew, secretsAvailable, 
         </div>
       )}
 
-      {updatePreview && (
-        <InstallExtensionDialog
-          initialPreview={updatePreview}
-          onClose={() => { setUpdatePreview(null); if (fromSweep) onUpdateConsumed?.(); }}
-          onInstalled={onChanged}
-        />
-      )}
-
       {spawnConsent && (
         <SpawnConsentModal
-          title={spawnConsent === "enable" ? `Enable ${info.name}?` : `Allow new permissions for ${info.name}?`}
-          commands={spawnCmds}
-          confirmLabel={spawnConsent === "enable" ? "Enable" : "Allow"}
+          title={
+            spawnConsent === "enable"
+              ? `Enable ${info.name}?`
+              : spawnConsent === "update"
+                ? `Update ${info.name}?`
+                : `Allow new permissions for ${info.name}?`
+          }
+          commands={spawnConsent === "update" ? update?.permissions.spawn ?? [] : spawnCmds}
+          confirmLabel={spawnConsent === "enable" ? "Enable" : spawnConsent === "update" ? "Update" : "Allow"}
           onCancel={() => setSpawnConsent(null)}
           onConfirm={() => {
             const which = spawnConsent;
             setSpawnConsent(null);
             if (which === "enable") onSetEnabled(true);
+            else if (which === "update") doUpdate();
             else doReconsent();
           }}
         />
+      )}
+
+      {permReview && update && (
+        <Modal
+          title={`Update ${info.name} to v${update.index_version}?`}
+          onClose={() => setPermReview(false)}
+          width={470}
+          footer={
+            <>
+              <button className="settings-btn-secondary" onClick={() => setPermReview(false)}>Cancel</button>
+              <button
+                className="settings-btn-primary"
+                onClick={() => { setPermReview(false); doUpdate(); }}
+              >
+                Update to v{update.index_version}
+              </button>
+            </>
+          }
+        >
+          <div className="settings-field-desc">
+            This update requests new permissions. Review them before updating.
+          </div>
+          <PermissionChips permissions={update.permissions} diffAgainst={info.permissions} />
+        </Modal>
       )}
 
       {confirmUninstall && (

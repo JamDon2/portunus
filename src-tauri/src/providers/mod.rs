@@ -6,6 +6,7 @@ pub mod command;
 pub mod content;
 pub mod dict;
 pub mod files;
+pub mod marketplace;
 pub mod ranking;
 pub mod wasm;
 
@@ -25,6 +26,8 @@ use crate::frecency::FrecencyStore;
 // constants below belong to scoped tiers that never compete in root search.
 
 pub const SCORE_CONTENT: f32 = 6_000_000.0;
+/// Marketplace scope rows (browse/search the extension index).
+pub const SCORE_MARKETPLACE: f32 = 5_000_000.0;
 /// Scoped dict lookups (the user entered the Define Word scope).
 pub const SCORE_DICT: f32 = 3_000_000.0;
 /// Scoped extension results - the user explicitly entered the extension's
@@ -105,6 +108,10 @@ pub struct SearchResult {
     /// it to enter the command's mode (or run it) on launch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<CommandDescriptor>,
+    /// Payload of a `kind: "marketplace"` row - the index entry plus install
+    /// state; the preview panel renders it as the consent surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market: Option<marketplace::MarketplaceResult>,
     /// Raw scoring inputs; the registry composes `score` from these against
     /// the live ranking weights. None (scoped/content rows) = the provider's
     /// own `score` stands. Host-internal, never serialized.
@@ -136,6 +143,7 @@ impl Default for SearchResult {
             ext: None,
             ext_command: None,
             command: None,
+            market: None,
             parts: None,
             pinned: false,
             breakdown: None,
@@ -553,7 +561,11 @@ impl PluginRegistry {
         // (weight 0 hides from root search only).
         ranking::apply_ranking(&mut results, &self.ranking.read().unwrap(), false, false);
         sort_by_score(&mut results);
-        results.truncate(self.max_results);
+        // Browse-the-catalog scopes (marketplace) show the full list; a hidden
+        // tail past max_results would make entries unreachable in browse mode.
+        if !cmd.uncapped {
+            results.truncate(self.max_results);
+        }
         results
     }
 }
@@ -581,6 +593,7 @@ fn builtin_commands() -> Vec<CommandDescriptor> {
         glyph: Some("settings".to_string()),
         icon_data_uri: None,
         opens_form: false,
+        uncapped: false,
         route: CommandRoute::Invoke { command: "open_settings_window".to_string(), args: None },
     },
     CommandDescriptor {
@@ -603,6 +616,7 @@ fn builtin_commands() -> Vec<CommandDescriptor> {
         glyph: Some("refresh".to_string()),
         icon_data_uri: None,
         opens_form: false,
+        uncapped: false,
         route: CommandRoute::Invoke {
             command: "trigger_full_reindex".to_string(),
             args: Some(serde_json::json!({ "full": false })),

@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import type { CommandDescriptor, Config, ExtensionResult, SearchResult } from '../types';
+import type { CommandDescriptor, Config, ExtensionResult, SearchResult, ToastLevel } from '../types';
 import type { ActionDescriptor } from '../actions/types';
 import { matchesShortcut } from '../actions/shortcut';
 
@@ -7,6 +7,8 @@ export interface LaunchContext {
   setQuery: (q: string) => void;
   setResults: (r: SearchResult[]) => void;
   requery: () => void;
+  /** Queue a launcher toast (bottom-left stack, auto-dismissing). */
+  pushToast: (message: string, level: ToastLevel) => void;
   /** Invoke a command (enter its scope, seed its alias, or run its action). */
   runCommand: (command: CommandDescriptor) => void;
   /** Route an extension activation through the shared response flow

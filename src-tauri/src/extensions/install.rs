@@ -1,5 +1,6 @@
 //! Extension distribution: `.portext` packaging, two-phase install
-//! (preview → confirm), the consent registry, update checks, and uninstall.
+//! (preview → confirm), the consent registry, and uninstall. Update checks
+//! run against the marketplace index (`marketplace.rs`), not per-URL.
 //!
 //! A `.portext` is a plain zip of an extension directory with `manifest.toml`
 //! at the archive root. Installation is two-phase so the user consents to the
@@ -20,7 +21,7 @@ use crate::config::ExtensionEntry;
 use crate::{ConfigState, FrecencyState, Registry};
 
 /// Download / archive size cap (compressed).
-const MAX_ARCHIVE_BYTES: u64 = 40 * 1024 * 1024;
+pub(crate) const MAX_ARCHIVE_BYTES: u64 = 40 * 1024 * 1024;
 /// Zip-bomb guards: entry count and total decompressed size.
 const MAX_ENTRIES: usize = 1000;
 const MAX_DECOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
@@ -32,6 +33,11 @@ const MAX_DECOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase", tag = "type")]
 pub enum Origin {
+    /// Installed from the official marketplace index; updates come from there.
+    Marketplace,
+    /// Legacy direct-URL install (pre-marketplace). Read-only: kept so old
+    /// consents.toml files still deserialize; nothing writes it anymore and
+    /// these extensions have no update source.
     Url { url: String },
     File,
     Dev,
@@ -438,6 +444,12 @@ pub async fn preview_extension_install(
     source: String,
     expected_sha256: Option<String>,
 ) -> Result<InstallPreview, String> {
+    // The Settings dialog installs local .portext files only; https packages
+    // come exclusively through the marketplace (`marketplace_install`), which
+    // pins their sha256 against the index.
+    if source.starts_with("https://") || source.starts_with("http://") {
+        return Err("URL installs have moved to the marketplace".to_string());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         preview_install_blocking(Some(&app), &source, expected_sha256)
     })
@@ -445,7 +457,7 @@ pub async fn preview_extension_install(
     .map_err(|e| e.to_string())?
 }
 
-fn preview_install_blocking(
+pub(crate) fn preview_install_blocking(
     app: Option<&tauri::AppHandle>,
     source: &str,
     expected_sha256: Option<String>,
@@ -544,8 +556,22 @@ pub fn confirm_extension_install(
     kv_state: tauri::State<'_, super::ExtensionKvState>,
     staging_token: String,
 ) -> Result<String, String> {
-    validate_token(&staging_token)?;
-    let stage = staging_dir(&staging_token);
+    confirm_install_core(app, &registry, &config, &kv_state.0, &staging_token, None)
+}
+
+/// Shared confirm step: the Settings file-install dialog passes no origin
+/// override (derived from the staged source), `marketplace_install` passes
+/// `Origin::Marketplace`.
+pub(crate) fn confirm_install_core(
+    app: tauri::AppHandle,
+    registry: &Registry,
+    config: &ConfigState,
+    kv: &Arc<ExtensionKv>,
+    staging_token: &str,
+    origin_override: Option<Origin>,
+) -> Result<String, String> {
+    validate_token(staging_token)?;
+    let stage = staging_dir(staging_token);
     if !stage.is_dir() {
         return Err("staged install expired - start over".to_string());
     }
@@ -558,7 +584,7 @@ pub fn confirm_extension_install(
     let name = m.name.clone();
 
     // Unload before the swap so no instance holds the old dir open.
-    crate::util::write(&registry).set_extension(&name, None);
+    crate::util::write(registry).set_extension(&name, None);
 
     let final_dir = extensions_dir().join(&name);
     let old_dir = extensions_dir().join(format!(".old-{name}"));
@@ -576,23 +602,19 @@ pub fn confirm_extension_install(
     }
     let _ = std::fs::remove_dir_all(&old_dir);
 
-    let origin = if meta.source.starts_with("https://") {
-        Origin::Url { url: meta.source.clone() }
-    } else {
-        Origin::File
-    };
+    let origin = origin_override.unwrap_or(Origin::File);
     record_consent(&name, &m, meta.sha256, origin)?;
 
     // The install dialog's consent step is the review - land enabled.
     let extensions_cfg = {
-        let mut cfg = crate::util::lock(&config);
+        let mut cfg = crate::util::lock(config);
         cfg.extensions.entry(name.clone()).or_insert_with(ExtensionEntry::default).enabled = true;
         cfg.save()?;
         cfg.extensions.clone()
     };
 
-    let registry = registry.inner().clone();
-    let kv_store = kv_state.0.clone();
+    let registry = registry.clone();
+    let kv_store = kv.clone();
     let load_name = name.clone();
     std::thread::spawn(move || {
         use tauri::Emitter;
@@ -611,49 +633,6 @@ pub fn cancel_extension_install(staging_token: String) -> Result<(), String> {
         std::fs::remove_dir_all(&stage).map_err(|e| e.to_string())?;
     }
     Ok(())
-}
-
-// ── update check ──────────────────────────────────────────────────────────────
-
-#[derive(serde::Serialize)]
-pub struct UpdateCheck {
-    pub current_version: String,
-    /// Full preview of the fetched archive; confirm it to update, cancel to
-    /// discard. None when the fetched version is not newer.
-    pub preview: Option<InstallPreview>,
-}
-
-/// Re-fetches an extension from its recorded origin URL and stages it. This
-/// is a full archive download (there is no version endpoint) - manual-button
-/// territory, capped at 40 MB.
-#[tauri::command]
-pub async fn check_extension_update(name: String) -> Result<UpdateCheck, String> {
-    let consents = load_consents();
-    let rec = consents
-        .get(&name)
-        .ok_or_else(|| "no install record for this extension".to_string())?;
-    let Origin::Url { url } = rec.origin.clone() else {
-        return Err("installed from a local file - no update source".to_string());
-    };
-    let current_version =
-        installed_version(&name).ok_or_else(|| "extension is not installed".to_string())?;
-
-    let preview = tauri::async_runtime::spawn_blocking(move || {
-        preview_install_blocking(None, &url, None)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    if preview.name != name {
-        let _ = cancel_extension_install(preview.staging_token);
-        return Err("update source now serves a different extension".to_string());
-    }
-    if preview.version == current_version {
-        let token = preview.staging_token;
-        let _ = cancel_extension_install(token);
-        return Ok(UpdateCheck { current_version, preview: None });
-    }
-    Ok(UpdateCheck { current_version, preview: Some(preview) })
 }
 
 // ── uninstall ─────────────────────────────────────────────────────────────────

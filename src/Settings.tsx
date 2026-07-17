@@ -301,6 +301,17 @@ export default function Settings() {
     setActiveSection(payload as Section);
   });
 
+  // Marketplace update count for the Extensions nav badge.
+  const [updateCount, setUpdateCount] = useState(0);
+  const fetchUpdateCount = useCallback(() => {
+    invoke<unknown[]>("marketplace_updates")
+      .then(u => setUpdateCount(u.length))
+      .catch(() => {});
+  }, []);
+  useEffect(fetchUpdateCount, [fetchUpdateCount]);
+  useTauriListener("extensions-reloaded", fetchUpdateCount, [fetchUpdateCount]);
+  useTauriListener("marketplace-index-updated", fetchUpdateCount, [fetchUpdateCount]);
+
   // Apply theme immediately on any appearance change.
   // Only broadcast to main window when it's a user-driven change, not the initial disk load.
   useEffect(() => {
@@ -464,6 +475,9 @@ export default function Settings() {
                     >
                       <span className="settings-nav-icon">{item.icon}</span>
                       {item.label}
+                      {item.id === "extensions" && updateCount > 0 && (
+                        <span className="settings-nav-badge">{updateCount}</span>
+                      )}
                     </button>
                   );
                 })}

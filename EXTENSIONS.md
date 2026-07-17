@@ -645,17 +645,52 @@ exports and import the host functions above.
 ## Distribution
 
 A `.portext` is a plain zip of your extension directory with `manifest.toml`
-at the root (`portunus ext pack` builds one). Users install it from Settings →
-Extensions → Install, from either a local file or an https URL, optionally
-verifying a sha256 you publish.
+at the root (`portunus ext pack` builds one). There are two ways to users:
 
-Install is two-phase: the archive is downloaded/staged/validated first
-(hardened extraction - no symlinks, no path escapes, size caps), the user
-reviews name/version/permissions/hash, and only then do the *exact staged
-bytes* land. The install origin is recorded: URL installs get a "Check for
-update" button that re-fetches from the same URL and compares versions - an
-update requesting **new permissions** requires explicit re-approval before it
-loads. Uninstalling from Settings removes the directory, kv data, frecency
+### The marketplace (preferred)
+
+The official marketplace is a GitHub repo (`portunus-extensions`) whose CI
+builds every extension **from source**, packs it, and publishes a static
+`index.json` plus the `.portext` packages to GitHub Pages. In the launcher,
+users open the *Browse Extension Marketplace* scope, see the whole catalog
+(typing filters it), review the permission list in the preview panel, and
+Enter installs in seconds - the extension is searchable immediately.
+
+To submit an extension, open a PR against the marketplace repo containing the
+extension's **source** (`Cargo.toml`, `src/`, `manifest.toml`, assets - the
+same layout `portunus ext new` scaffolds, pinned to a released
+`portunus-ext-sdk`). CI compiles the wasm, runs `portunus ext validate`, packs
+it, and comments the resulting name/version/**permissions** on the PR - the
+reviewer approves the code *and* its declared grants; what is reviewed is what
+runs. On merge, CI regenerates `index.json` and deploys. Package files are
+immutable (`packages/<name>-<version>.portext`): changing content requires a
+version bump.
+
+Each index entry carries the full permission snapshot, the package sha256, and
+size, so the launcher shows the consent surface *before* downloading anything.
+`marketplace_install` then verifies the downloaded package against the index:
+the sha256 is pinned, and a package asking for any permission its index entry
+didn't list is rejected. Extensions declaring `spawn` need a second Enter to
+confirm (sandbox-breaking).
+
+Updates are index-based: the launcher refreshes the index in the background
+(startup + on scope entry when older than an hour) and surfaces newer versions
+as *Update* rows in the marketplace scope plus a badge in Settings →
+Extensions. One keypress updates; an update that requests **new permissions**
+says so in the preview, and a grown `spawn` list re-arms the double-Enter.
+
+For local testing, point `[marketplace] index_url` in `config.toml` at your
+own index - custom URLs may use `file://` for both the index and the
+`download_url`s inside it.
+
+### Sideloading
+
+Users can also install a `.portext` file directly from Settings → Extensions →
+Install, optionally verifying a sha256 you publish. Install is two-phase: the
+archive is staged/validated first (hardened extraction - no symlinks, no path
+escapes, size caps), the user reviews name/version/permissions/hash, and only
+then do the *exact staged bytes* land. Sideloaded extensions have no update
+source. Uninstalling from Settings removes the directory, kv data, frecency
 history and logs.
 
 ## Sandbox, limits, failure behavior

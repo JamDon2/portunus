@@ -250,6 +250,23 @@ a:focus-visible,
   color: var(--accent);
 }
 
+/* Marketplace update count on the Extensions nav item. */
+.settings-nav-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* ---------- content ---------- */
 
 .settings-content {

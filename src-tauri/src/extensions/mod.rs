@@ -10,6 +10,7 @@ pub mod install;
 pub mod kv;
 pub mod logs;
 pub mod manifest;
+pub mod marketplace;
 pub mod query;
 pub mod secrets;
 pub mod trigger;
@@ -453,6 +454,7 @@ pub fn list_extensions(
                     .unwrap_or_default(),
                 needs_reconsent,
                 origin: consent.map(|rec| match rec.origin {
+                    install::Origin::Marketplace => "marketplace".to_string(),
                     install::Origin::Url { .. } => "url".to_string(),
                     install::Origin::File => "file".to_string(),
                     install::Origin::Dev => "dev".to_string(),

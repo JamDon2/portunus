@@ -659,9 +659,19 @@ export default function App() {
 
   const requery = () => {
     const q = queryRef.current;
-    if (!q.trim()) return;
-    const scope = modeRef.current?.command.id ?? null;
-    if (modeRef.current && isTakeover(modeRef.current)) return;
+    const m = modeRef.current;
+    if (m && isTakeover(m)) return;
+    // Browse scopes (min_query_len 0, e.g. marketplace) dispatch on an empty
+    // query; every other context needs a non-empty one. Without this, an
+    // install/uninstall in the marketplace browse scope wouldn't re-run the
+    // scoped search, leaving the row's state (and its preview/actions) stale.
+    // Derive from modeRef, not the closed-over `browsing`: the
+    // search-invalidated listener captures the first-render requery, where
+    // `browsing` is stale-false.
+    const browseScope =
+      !!m && m.command.id !== "cmd:contents" && (m.command.min_query_len ?? 1) === 0;
+    if (!q.trim() && !browseScope) return;
+    const scope = m?.command.id ?? null;
     const queryId = ++queryIdRef.current;
     // Same event-vs-response race as the main search effect: reset done-set
     // at dispatch, filter pending against it. Unlike a keystroke, the query
@@ -692,6 +702,14 @@ export default function App() {
     // immediately when the user toggles content search in Settings.
     invoke<Config>("get_config").then(cfg => { setContentEnabled(cfg.content.enabled); setColoredIcons(cfg.files.colored_icons); configRef.current = cfg; });
   });
+
+  // Entering the marketplace scope refreshes the index if stale (>1h). A
+  // changed index emits search-invalidated, which re-runs the scoped query.
+  useEffect(() => {
+    if (mode?.command.id === "cmd:marketplace") {
+      invoke("marketplace_refresh", { force: false }).catch(() => {});
+    }
+  }, [mode?.command.id]);
 
   const pushToast = (message: string, level: ToastLevel) => {
     const id = ++toastIdRef.current;
@@ -800,6 +818,7 @@ export default function App() {
     setQuery,
     setResults,
     requery,
+    pushToast,
     runCommand,
     activateExtension,
     config: configRef.current,

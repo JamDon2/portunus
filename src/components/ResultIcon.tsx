@@ -13,12 +13,24 @@ interface Props {
   kind: string;
 }
 
+// Storefront glyph for the marketplace command entry and its catalog rows.
+function StoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16">
+      <path d="M4 10v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9" />
+      <path d="M3 5h18l-1 4a2.5 2.5 0 0 1-2.5 2 2.5 2.5 0 0 1-2.5-2 2.5 2.5 0 0 1-2.5 2 2.5 2.5 0 0 1-2.5-2 2.5 2.5 0 0 1-2.5 2A2.5 2.5 0 0 1 4 9L3 5z" />
+      <path d="M9 20v-5h6v5" />
+    </svg>
+  );
+}
+
 const COMMAND_GLYPHS: Record<string, () => ReactElement> = {
   book: BookIcon,
   clipboard: ClipboardIcon,
   search: SearchIcon,
   settings: GearIcon,
   refresh: RefreshIcon,
+  store: StoreIcon,
 };
 
 export default function ResultIcon({ icon_path, iconDataUri, glyph, title, kind }: Props) {
@@ -97,6 +109,11 @@ export default function ResultIcon({ icon_path, iconDataUri, glyph, title, kind 
 
   if (kind === "dict" || kind === "dict-hint") {
     return <div className="result-icon"><BookIcon /></div>;
+  }
+
+  // Marketplace catalog rows without an index-supplied icon.
+  if (kind === "marketplace" || kind === "marketplace-msg") {
+    return <div className="result-icon"><StoreIcon /></div>;
   }
 
   if (kind === "folder") {

@@ -1,26 +1,10 @@
+import { interpretersIn } from "../../../spawn";
+
 interface Props {
   /** The allowlisted commands the extension may launch (permissions.spawn). */
   commands: string[];
   acked: boolean;
   onAckChange: (v: boolean) => void;
-}
-
-// Frontend mirror of the backend SPAWN_INTERPRETERS denylist (manifest.rs).
-// Best-effort only: it lets the consent UI escalate its warning when a spawn
-// command can run arbitrary code. Kept in sync by hand - drift only weakens a
-// hint, it is never a security boundary (the backend gate is the allowlist).
-const INTERPRETERS = new Set([
-  "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "ash", "busybox",
-  "python", "python2", "python3", "perl", "ruby", "node", "deno", "bun", "lua", "php",
-  "tclsh", "expect", "Rscript", "groovy",
-  "env", "xargs", "find", "awk", "gawk", "mawk", "make", "nohup", "setsid", "nice",
-  "timeout", "stdbuf", "watch", "flatpak", "systemd-run",
-  "ssh", "sudo", "doas", "pkexec", "nsenter", "chroot", "socat", "nc", "ncat",
-]);
-
-function basename(cmd: string): string {
-  const parts = cmd.split("/");
-  return parts[parts.length - 1] || cmd;
 }
 
 function CommandList({ commands }: { commands: string[] }) {
@@ -42,7 +26,7 @@ function CommandList({ commands }: { commands: string[] }) {
  */
 export default function SpawnDangerNotice({ commands, acked, onAckChange }: Props) {
   if (commands.length === 0) return null;
-  const interpreters = commands.filter(c => INTERPRETERS.has(basename(c)));
+  const interpreters = interpretersIn(commands);
   return (
     <div className="settings-ext-danger">
       <div className="settings-ext-danger-title">⚠ Runs programs outside the sandbox</div>

@@ -23,6 +23,7 @@ pub struct Config {
     pub clipboard: ClipboardConfig,
     pub extensions: ExtensionsConfig,
     pub calc: CalcConfig,
+    pub marketplace: MarketplaceConfig,
 }
 
 impl Default for Config {
@@ -41,6 +42,24 @@ impl Default for Config {
             clipboard: ClipboardConfig::default(),
             extensions: ExtensionsConfig::default(),
             calc: CalcConfig::default(),
+            marketplace: MarketplaceConfig::default(),
+        }
+    }
+}
+
+/// Extension marketplace settings.
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct MarketplaceConfig {
+    /// URL of the marketplace index. Override only for testing a local or
+    /// forked index; `file://` paths are honored for custom URLs.
+    pub index_url: String,
+}
+
+impl Default for MarketplaceConfig {
+    fn default() -> Self {
+        Self {
+            index_url: crate::extensions::marketplace::DEFAULT_INDEX_URL.to_string(),
         }
     }
 }

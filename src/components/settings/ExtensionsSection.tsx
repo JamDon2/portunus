@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTauriListener } from "../../hooks/useTauriListener";
-import { Config, ExtensionInfo, InstallPreview } from "../../types";
+import { Config, ExtensionInfo, MarketplaceUpdateInfo } from "../../types";
 import SectionHeader from "./SectionHeader";
 import SettingsGroup from "./SettingsGroup";
 import SettingsField from "./SettingsField";
@@ -58,67 +58,42 @@ export default function ExtensionsSection({ config, onChange }: Props) {
 
   const rescan = () => { invoke("rescan_extensions").catch(() => {}); };
 
-  // Pre-staged updates from a "Check all" sweep, keyed by extension name. Each
-  // holds a staging dir that must be cancelled if the user never installs it.
-  const [updates, setUpdates] = useState<Record<string, InstallPreview>>({});
-  const [checkingAll, setCheckingAll] = useState(false);
-  const [checkAllMsg, setCheckAllMsg] = useState<string | null>(null);
-  const updatesRef = useRef<Record<string, InstallPreview>>({});
-  useEffect(() => { updatesRef.current = updates; }, [updates]);
+  // Available updates from the marketplace index (cheap - no downloads).
+  const [updates, setUpdates] = useState<MarketplaceUpdateInfo[]>([]);
+  const [checking, setChecking] = useState(false);
+  const [checkMsg, setCheckMsg] = useState<string | null>(null);
 
-  // Cancel any un-consumed staged bytes when the section unmounts.
-  useEffect(() => () => {
-    for (const p of Object.values(updatesRef.current)) {
-      invoke("cancel_extension_install", { stagingToken: p.staging_token }).catch(() => {});
-    }
+  const fetchUpdates = useCallback(() => {
+    invoke<MarketplaceUpdateInfo[]>("marketplace_updates").then(setUpdates).catch(() => {});
   }, []);
+  useEffect(fetchUpdates, [fetchUpdates]);
+  useTauriListener("extensions-reloaded", fetchUpdates, [fetchUpdates]);
+  useTauriListener("marketplace-index-updated", fetchUpdates, [fetchUpdates]);
 
-  const consumeUpdate = (name: string) => {
-    setUpdates(prev => {
-      const next = { ...prev };
-      delete next[name];
-      return next;
-    });
-  };
-
-  const checkAllUpdates = async () => {
-    if (!exts) return;
-    // Cancel any leftover staged previews from a prior sweep before re-running.
-    for (const p of Object.values(updatesRef.current)) {
-      invoke("cancel_extension_install", { stagingToken: p.staging_token }).catch(() => {});
+  // Force-refreshes the index, then re-reads the update list.
+  const checkForUpdates = async () => {
+    setChecking(true);
+    setCheckMsg(null);
+    try {
+      await invoke("marketplace_refresh", { force: true });
+      const next = await invoke<MarketplaceUpdateInfo[]>("marketplace_updates");
+      setUpdates(next);
+      setCheckMsg(next.length === 0 ? "Up to date" : `${next.length} update${next.length > 1 ? "s" : ""}`);
+    } catch (e) {
+      setCheckMsg(String(e));
     }
-    setUpdates({});
-    setCheckingAll(true);
-    setCheckAllMsg(null);
-    const urlExts = exts.filter(e => e.origin === "url" && !e.dev);
-    const found: Record<string, InstallPreview> = {};
-    let failures = 0;
-    // Sequential: each check re-downloads the full archive (up to 40 MB).
-    for (const e of urlExts) {
-      try {
-        const res = await invoke<{ preview: InstallPreview | null }>("check_extension_update", { name: e.name });
-        if (res.preview) found[e.name] = res.preview;
-      } catch {
-        failures++;
-      }
-    }
-    setUpdates(found);
-    setCheckingAll(false);
-    const n = Object.keys(found).length;
-    setCheckAllMsg(
-      `${n === 0 ? "No updates" : `${n} update${n > 1 ? "s" : ""}`}${failures ? ` — ${failures} check failed` : ""}`,
-    );
+    setChecking(false);
+    window.setTimeout(() => setCheckMsg(null), 4000);
   };
 
   // Dev-linked extensions sort first: they're the ones being actively worked on.
   const sorted = exts ? [...exts].sort((a, b) => Number(b.dev) - Number(a.dev) || a.name.localeCompare(b.name)) : null;
-  const hasUrlExts = !!exts?.some(e => e.origin === "url" && !e.dev);
 
   return (
     <div className="settings-section">
       <SectionHeader
         title="Extensions"
-        desc={<>WASM extensions extend search with new sources and actions. Install from a <code>.portext</code> file or URL, or drop a folder into <code>~/.local/share/portunus/extensions/</code>. Nothing runs until you review its permissions.</>}
+        desc={<>WASM extensions extend search with new sources and actions. Install from the marketplace (search <em>marketplace</em> in the launcher), from a <code>.portext</code> file, or drop a folder into <code>~/.local/share/portunus/extensions/</code>. Nothing runs until you review its permissions.</>}
       />
 
       {storageDegraded && (
@@ -129,8 +104,8 @@ export default function ExtensionsSection({ config, onChange }: Props) {
 
       <SettingsGroup>
         <SettingsField
-          name="Install extension"
-          desc="From a URL or a downloaded .portext file. Shows permissions and the archive hash before anything is installed."
+          name="Install from file"
+          desc="Sideload a downloaded .portext file. Shows permissions and the archive hash before anything is installed."
         >
           <button className="settings-btn-primary" onClick={() => setInstallOpen(true)}>Install…</button>
         </SettingsField>
@@ -151,11 +126,9 @@ export default function ExtensionsSection({ config, onChange }: Props) {
         <div className="settings-group-block">
           <div className="settings-group-title-row">
             <div className="settings-group-title">Installed</div>
-            {hasUrlExts && (
-              <button className="settings-btn-secondary" onClick={checkAllUpdates} disabled={checkingAll}>
-                {checkingAll ? "Checking…" : checkAllMsg ?? "Check all for updates"}
-              </button>
-            )}
+            <button className="settings-btn-secondary" onClick={checkForUpdates} disabled={checking}>
+              {checking ? "Checking…" : checkMsg ?? "Check for updates"}
+            </button>
           </div>
           <div className="settings-ext-cards">
             {sorted.map(info => (
@@ -166,8 +139,7 @@ export default function ExtensionsSection({ config, onChange }: Props) {
                 enabled={config.extensions[info.name]?.enabled ?? false}
                 isNew={!(info.name in config.extensions)}
                 secretsAvailable={secretsAvailable}
-                pendingUpdate={updates[info.name]}
-                onUpdateConsumed={() => consumeUpdate(info.name)}
+                update={updates.find(u => u.name === info.name)}
                 onSetEnabled={v => setEnabled(info.name, v)}
                 onChanged={refresh}
               />

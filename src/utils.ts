@@ -10,6 +10,8 @@ export function groupLabel(kind: string): string | null {
   if (kind === "app") return "Apps";
   if (kind === "file" || kind === "folder") return "Files";
   if (kind === "command") return "Commands";
+  if (kind === "marketplace") return "Marketplace";
+  if (kind === "marketplace-msg") return null;
   if (kind.startsWith("ext-")) {
     // Per-extension label from the meta store; generic until the first
     // list_extensions fetch lands (App re-renders on results anyway).
