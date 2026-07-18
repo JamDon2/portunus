@@ -14,7 +14,7 @@ your clipboard history, or search the text inside your documents. One box, no mo
 [![Wayland](https://img.shields.io/badge/Wayland-native-1793D1?style=flat-square)](#compositor-setup)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%20%2B%20Rust-FFC131?style=flat-square)](https://tauri.app)
 
-[Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Themes](#themes) · [Building](#building-from-source)
+[Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Themes](#themes) · [Extensions](#extensions) · [Building](#building-from-source)
 
 <video src="https://github.com/user-attachments/assets/16089ec3-737b-4b20-96c9-b89aa615c4b2" width="720" controls muted></video>
 
@@ -33,6 +33,7 @@ vanishes again the second you launch something or press Escape.
 - 📋 **Clipboard history** — full-text search back through your `cliphist` entries (Wayland)
 - 📄 **Content search** — hit `Tab` to search the text inside PDFs, office docs, and images. OCR handles scanned PDFs and screenshots too
 - 👁 **Preview panel** — images, PDFs, text files, folder listings, clipboard contents
+- 🧩 **Extensions** — sandboxed wasm modules add new search providers, commands, and previews; install them from the built-in marketplace
 - ⚡ **No spinners** — the Rust backend indexes on a background thread, so results show up as you type
 
 <table>
@@ -128,6 +129,16 @@ post_hook   = "portunus --reload-theme"
 ```
 
 Run `matugen image <wallpaper>` (add `--mode light` for a light scheme), then select **Matugen** in Settings → Appearance. Every subsequent matugen run recolors the launcher live via the `post_hook`. If `~/.config/portunus/matugen.css` is missing, the theme falls back to default colors.
+
+## Extensions
+
+Portunus can be extended with sandboxed WebAssembly **extensions** — they add
+new search providers, launcher commands, previews, and background refreshers.
+Browse and install them from the built-in marketplace (**Settings → Extensions**).
+
+Reference extensions and the marketplace index live in a dedicated repo:
+**[SzilBalazs/portunus-extensions](https://github.com/SzilBalazs/portunus-extensions)**.
+To write your own, see [EXTENSIONS.md](EXTENSIONS.md) and run `portunus ext new`.
 
 ## Building from source
 

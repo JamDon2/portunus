@@ -235,8 +235,10 @@ to `action` commands.
 
 **Multiple commands** share one wasm module; dispatch on the wire's `command`
 field (the `[[commands]]` entry's `name`) in `search`/`activate`/`preview`/
-`query`. See `examples/extensions/gh/manifest.toml` for a three-command
-extension (two `scope` search commands, one `action` command).
+`query`. See the `gh` extension in the
+[`portunus-extensions`](https://github.com/SzilBalazs/portunus-extensions) repo
+for a three-command extension (two `scope` search commands, one `action`
+command).
 
 ## Exports
 
@@ -338,8 +340,9 @@ their launcher entry calls `activate` directly, with `command` set to the
 command's name and a synthetic default result (empty `id`/`title`) standing
 in for the "result exactly as you returned it" — there was nothing to return.
 Use this for one-shot side effects like "open GitHub notifications in the
-browser" (see `examples/extensions/gh/manifest.toml`'s `notifications`
-command).
+browser" (see the `gh` extension's `notifications` command in the
+[`portunus-extensions`](https://github.com/SzilBalazs/portunus-extensions)
+repo).
 
 **Effects** run host-side after your call returns, in order. Because they only
 ever run on an explicit keypress, they need **no permissions** (except `paste`,
@@ -795,13 +798,16 @@ from v1: `actions` became structured objects, `activate` returns effects,
 
 ## Examples
 
-- `examples/extensions/emoji/` - offline: a single scope command with search
+Reference extensions live in the
+[`portunus-extensions`](https://github.com/SzilBalazs/portunus-extensions) repo:
+
+- `emoji` - offline: a single scope command with search
   keywords, structured actions, activate effects (no permissions), settings,
   browse state, preview.
-- `examples/extensions/cheatsh/` - network: an async `query` that streams the
+- `cheatsh` - network: an async `query` that streams the
   live sheet in over `search`'s instant kv cache, background refresh, search
   keywords, open-url/copy effects, HTML preview.
-- `examples/extensions/gh/` - full breadth: three `[[commands]]` (two `scope`
+- `gh` - full breadth: three `[[commands]]` (two `scope`
   search commands plus an `action` command), secret setting (PAT in the
   keyring), dual-endpoint streaming `query` (repos + issues) merged over a kv
   repo cache by id, streaming Metadata→Markdown previews, clone-command copy
