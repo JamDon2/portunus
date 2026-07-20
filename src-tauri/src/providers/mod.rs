@@ -119,6 +119,10 @@ pub struct SearchResult {
     pub parts: Option<ranking::ScoreParts>,
     /// True when a pin for the typed query boosted this result to the top.
     pub pinned: bool,
+    /// When true, this row opts out of frecency (no ranking bonus), set from
+    /// the producing command's `frecency = false`. Host-internal, not serialized.
+    #[serde(skip)]
+    pub frecency_exempt: bool,
     /// Score composition, filled only by `search_explain` for the playground.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breakdown: Option<ranking::ScoreBreakdown>,
@@ -146,6 +150,7 @@ impl Default for SearchResult {
             market: None,
             parts: None,
             pinned: false,
+            frecency_exempt: false,
             breakdown: None,
         }
     }
@@ -194,7 +199,7 @@ pub fn apply_frecency_weights(
     explain: bool,
 ) {
     for r in results.iter_mut() {
-        if r.kind == "content" {
+        if r.kind == "content" || r.frecency_exempt {
             continue;
         }
         if let Some(&fs) = scores.get(&r.id) {
@@ -595,6 +600,7 @@ fn builtin_commands() -> Vec<CommandDescriptor> {
         default_shortcut: None,
         opens_form: false,
         uncapped: false,
+        volatile: false,
         route: CommandRoute::Invoke { command: "open_settings_window".to_string(), args: None },
     },
     CommandDescriptor {
@@ -619,6 +625,7 @@ fn builtin_commands() -> Vec<CommandDescriptor> {
         default_shortcut: None,
         opens_form: false,
         uncapped: false,
+        volatile: false,
         route: CommandRoute::Invoke {
             command: "trigger_full_reindex".to_string(),
             args: Some(serde_json::json!({ "full": false })),

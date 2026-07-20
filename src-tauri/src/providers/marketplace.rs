@@ -135,6 +135,7 @@ impl Provider for MarketplaceProvider {
             opens_form: false,
             // Browse scope: show the whole catalog, never truncated to max_results.
             uncapped: true,
+            volatile: false,
             route: CommandRoute::Builtin { provider_id: "marketplace".to_string() },
         }]
     }

@@ -254,6 +254,8 @@ export interface ActivateResponse {
   toasts: ToastDto[];
   refreshResults: boolean;
   setQuery: string | null;
+  /** Reset the selection highlight to the first result (SelectFirst effect). */
+  selectFirst: boolean;
 }
 
 /** One `[[settings]]` entry from an extension's manifest. */
@@ -405,6 +407,10 @@ export interface CommandDescriptor {
   /** Scope results are shown in full, not truncated to max_results (browse
    *  scopes like the marketplace). */
   uncapped?: boolean;
+  /** The result set changes underneath the launcher (e.g. a live queue) - a
+   *  requery clears this scope's streamed rows first so dropped rows don't
+   *  linger. */
+  volatile?: boolean;
   /** Manifest-declared default chord (extensions); user-overridable. */
   default_shortcut?: string;
   route: CommandRoute;

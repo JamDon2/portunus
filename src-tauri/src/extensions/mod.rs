@@ -649,6 +649,8 @@ pub struct ActivateResponse {
     pub toasts: Vec<ToastPayload>,
     pub refresh_results: bool,
     pub set_query: Option<String>,
+    /// Reset the selection highlight to the first result (SelectFirst effect).
+    pub select_first: bool,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -680,8 +682,13 @@ pub async fn extension_activate(
     // block for seconds, but its outcome - a form, keep-open, toasts - must
     // reach the UI, so this is a request/response call on the blocking pool.
     let provider = provider_for_id(&crate::util::read(&registry), &id)?;
+    let command = command.unwrap_or_default();
+    // Commands with `frecency = false` (e.g. a live queue) neither record nor
+    // rank by history - skip recording so their ids don't accrue a bonus that
+    // would reshuffle an intrinsically-ordered list.
+    let records_frecency = provider.command_records_frecency(&command);
     let effects = tauri::async_runtime::spawn_blocking({
-        let command = command.unwrap_or_default();
+        let provider = provider.clone();
         move || provider.activate(command, ext, action, form_values)
     })
     .await
@@ -689,7 +696,7 @@ pub async fn extension_activate(
     let response = run_activate_effects(&id, effects);
     // A form-opening Enter isn't a completed launch - record frecency only
     // when the activation actually did its work.
-    if response.form.is_none() {
+    if response.form.is_none() && records_frecency {
         if let Some(store) = frecency.as_ref() {
             store.record_launch(&id, "extension");
         }
@@ -708,6 +715,7 @@ fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateRespo
     let mut toasts: Vec<ToastPayload> = Vec::new();
     let mut refresh_results = false;
     let mut set_query: Option<String> = None;
+    let mut select_first = false;
     let (mut explicit_hide, mut keep_open) = (false, false);
     for effect in effects {
         match effect {
@@ -757,6 +765,7 @@ fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateRespo
             ActivateEffect::Hide {} => explicit_hide = true,
             ActivateEffect::KeepOpen {} => keep_open = true,
             ActivateEffect::RefreshResults {} => refresh_results = true,
+            ActivateEffect::SelectFirst {} => select_first = true,
             // Last set_query wins; the frontend forces a re-search after
             // applying it (so an unchanged/empty value still refreshes).
             ActivateEffect::SetQuery { query } => set_query = Some(query),
@@ -781,7 +790,7 @@ fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateRespo
             );
         }
     }
-    ActivateResponse { hide, form, toasts, refresh_results, set_query }
+    ActivateResponse { hide, form, toasts, refresh_results, set_query, select_first }
 }
 
 /// Extension name from an `ext:<name>:<local>` result id (for log routing).

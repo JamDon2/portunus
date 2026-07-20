@@ -545,6 +545,7 @@ impl WasmProvider {
             ext: Some(dto),
             ext_command: Some(command.to_string()),
             parts,
+            frecency_exempt: !self.command_records_frecency(command),
             ..Default::default()
         }
     }
@@ -559,6 +560,13 @@ impl WasmProvider {
 
     fn command_spec(&self, command: &str) -> Option<&CommandSpec> {
         self.manifest.commands.iter().find(|c| c.name == command)
+    }
+
+    /// Whether this command's results take part in frecency - both recording a
+    /// launch on activate and receiving a ranking bonus. False for commands
+    /// with `frecency = false`. Unknown command names default to true.
+    pub fn command_records_frecency(&self, command: &str) -> bool {
+        self.command_spec(command).map(|c| c.frecency).unwrap_or(true)
     }
 
     /// Validates a result icon and builds its `data:` URI, or returns None
@@ -698,6 +706,7 @@ impl WasmProvider {
                 | ActivateEffect::Hide {}
                 | ActivateEffect::KeepOpen {}
                 | ActivateEffect::RefreshResults {}
+                | ActivateEffect::SelectFirst {}
                 | ActivateEffect::SetQuery { .. }) => out.push(effect),
             }
         }
@@ -859,6 +868,7 @@ impl WasmProvider {
         // streamed results pass the exact same clamps/validation as sync ones.
         let mapper = self.clone();
         let map_command = command.clone();
+        let volatile = self.command_spec(&command).map(|c| c.volatile).unwrap_or(false);
         let slot = QueryEmitSlot {
             generation,
             current: current.clone(),
@@ -870,6 +880,7 @@ impl WasmProvider {
                 sink(mapped);
             }),
             emitted: 0,
+            volatile,
         };
 
         let outcome = self.call_with_budget(
@@ -982,6 +993,7 @@ impl WasmProvider {
                 default_shortcut: c.default_shortcut.clone(),
                 opens_form: c.opens_form,
                 uncapped: false,
+                volatile: c.volatile,
                 route: CommandRoute::Extension {
                     name: self.name.clone(),
                     command: c.name.clone(),

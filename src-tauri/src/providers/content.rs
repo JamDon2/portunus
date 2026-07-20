@@ -48,6 +48,7 @@ impl Provider for ContentProvider {
             default_shortcut: None,
             opens_form: false,
             uncapped: false,
+            volatile: false,
             route: CommandRoute::Builtin { provider_id: "content".to_string() },
         }]
     }

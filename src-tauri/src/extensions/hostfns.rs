@@ -16,8 +16,11 @@ use portunus_ext_sdk::{EmitAck, EmitBatch, ExtensionResult, PreviewContent};
 use super::kv::ExtensionKv;
 use super::manifest::Permissions;
 
-/// Raw JSON cap per `emit_results`/`emit_preview` payload.
-const MAX_EMIT_BYTES: usize = 512 * 1024;
+/// Raw JSON cap per `emit_results`/`emit_preview` payload. Sized to hold a full
+/// [`MAX_QUERY_RESULTS`]-row batch where every row carries an embedded album-art
+/// thumbnail (a few KB of base64 each): a volatile scope replaces its whole set
+/// per emit, so it can't "emit smaller batches" to stay under a tighter cap.
+const MAX_EMIT_BYTES: usize = 2 * 1024 * 1024;
 /// Results one `query` call may emit in total, across all batches (mirrors
 /// the sync-tier per-call cap).
 const MAX_QUERY_RESULTS: usize = 200;
@@ -34,6 +37,12 @@ pub struct QueryEmitSlot {
     pub sink: Box<dyn FnMut(Vec<ExtensionResult>) + Send>,
     /// Running result count, for the per-query cap.
     pub emitted: usize,
+    /// Whether the command is `volatile`. A volatile scope emits its FULL set
+    /// per batch and the frontend swaps each batch in wholesale, so batches
+    /// replace rather than accumulate - the result cap then applies per batch,
+    /// not cumulatively (otherwise a two-pass "cached then art" re-emit of the
+    /// same rows would double-count and trip the cap).
+    pub volatile: bool,
 }
 
 /// Streaming sink installed for the duration of one `preview` call. Each emit
@@ -291,6 +300,12 @@ host_fn!(emit_results(ctx: ExtensionCtx; payload: String) -> Json<EmitAck> {
     let batch: EmitBatch = serde_json::from_str(&payload)
         .map_err(|e| extism::Error::msg(format!("emit_results: invalid batch: {e}")))?;
     let mut results = batch.results;
+    // A volatile batch replaces the previous one wholesale, so the cap is
+    // per-batch: reset the running count each emit. A normal (accumulating)
+    // command counts cumulatively across its batches.
+    if slot.volatile {
+        slot.emitted = 0;
+    }
     let room = MAX_QUERY_RESULTS.saturating_sub(slot.emitted);
     if results.len() > room {
         results.truncate(room);

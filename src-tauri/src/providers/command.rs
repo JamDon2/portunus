@@ -97,6 +97,11 @@ pub struct CommandDescriptor {
     /// top-N cap is the desired behavior.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub uncapped: bool,
+    /// The result set changes underneath the launcher (e.g. a live queue) - a
+    /// requery clears this scope's streamed rows first so dropped rows don't
+    /// linger. See `CommandSpec::volatile`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub volatile: bool,
     pub route: CommandRoute,
 }
 
@@ -180,6 +185,7 @@ mod tests {
             default_shortcut: None,
             opens_form: false,
             uncapped: false,
+            volatile: false,
             route: CommandRoute::Builtin { provider_id: "dict".to_string() },
         }
     }

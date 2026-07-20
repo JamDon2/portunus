@@ -488,17 +488,25 @@ export default function App() {
   useTauriListener<StreamPayload>("search-stream", p => {
     if (p.query_id !== queryIdRef.current) return;
     if (p.results.length > 0) {
-      // Merge batches by id. The keystroke path clears `streamed` before
-      // dispatch (see the search effect), so merging into an empty map is
-      // identical to replacing. A requery (same query text, new query_id)
-      // does NOT clear streamed, so merging keeps the extension's rows
-      // visible and updates them in place instead of blanking the list -
-      // which would collapse the row count and jump the selection.
+      // A volatile scope (a live queue) emits its full result set per batch and
+      // its membership changes underneath us, so replace that extension's rows
+      // wholesale: the fresh batch swaps in atomically (no pre-clear, so no
+      // blank frame) and rows that dropped out don't linger. Non-volatile
+      // batches merge by id - the "cached now, fresh later" update-in-place
+      // pattern. The keystroke path clears `streamed` before dispatch (see the
+      // search effect), so merging into an empty map is identical to replacing;
+      // a plain requery does NOT clear, so merging keeps rows visible and
+      // updates in place instead of blanking the list and jumping the selection.
+      const volatileScope = modeRef.current?.command.volatile === true;
       setStreamed(prev => {
         const next = new Map(prev);
-        const byId = new Map((next.get(p.ext) ?? []).map(r => [r.id, r] as const));
-        for (const r of p.results) byId.set(r.id, r);
-        next.set(p.ext, [...byId.values()]);
+        if (volatileScope) {
+          next.set(p.ext, p.results);
+        } else {
+          const byId = new Map((next.get(p.ext) ?? []).map(r => [r.id, r] as const));
+          for (const r of p.results) byId.set(r.id, r);
+          next.set(p.ext, [...byId.values()]);
+        }
         return next;
       });
     }
@@ -659,7 +667,7 @@ export default function App() {
     });
   }, [displayResults]);
 
-  const requery = () => {
+  const requery = (opts?: { clear?: boolean }) => {
     const q = queryRef.current;
     const m = modeRef.current;
     if (m && isTakeover(m)) return;
@@ -681,6 +689,18 @@ export default function App() {
     // overwrites them per extension instead of blanking the list (a content
     // watcher can fire search-invalidated while the user is idle; the
     // selection must not jump).
+    //
+    // `clear` re-renders from scratch for a non-volatile mutation (delete/
+    // toggle) whose result set can shrink: merge-by-id never drops rows, so
+    // stale ones would linger without a clear. A volatile scope does NOT
+    // pre-clear here - it replaces its rows per batch in the stream handler,
+    // which swaps atomically with no blank frame. Clearing a volatile scope
+    // instead would blank the list for the bus round-trip (a visible flash),
+    // since its instant tier is empty and all rows arrive via the stream.
+    if (opts?.clear && !m?.command.volatile) {
+      setStreamed(new Map());
+      setExtErrors(new Map());
+    }
     doneExtsRef.current = new Set();
     invoke<SearchResponse>("search", { query: q, queryId, scope }).then(resp => {
       if (resp.query_id !== queryIdRef.current) return;
@@ -800,7 +820,16 @@ export default function App() {
         setQuery(resp.setQuery);
         requery();
       }
-      if (resp.refreshResults) requery();
+      if (resp.refreshResults) requery({ clear: true });
+      // Drill-in into a new list: force the cursor back to the top. The
+      // [query] reset effect only fires when the query text actually changes,
+      // so a SetQuery("") on an already-empty box wouldn't reset it - clear the
+      // pin and select row 0 explicitly.
+      if (resp.selectFirst) {
+        selectedIdRef.current = null;
+        userMovedRef.current = false;
+        setSelectedIndex(0);
+      }
       if (resp.form) {
         setExtForm({ id: req.id, ext: req.ext, command: req.command, form: resp.form });
         if (hidden) reshowWindow();

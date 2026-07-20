@@ -308,6 +308,7 @@ impl Provider for DictProvider {
             default_shortcut: None,
             opens_form: false,
             uncapped: false,
+            volatile: false,
             route: CommandRoute::Builtin { provider_id: "dict".to_string() },
         }]
     }

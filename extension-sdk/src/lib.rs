@@ -282,6 +282,13 @@ pub enum ActivateEffect {
     /// Re-run the current launcher query after activation - use after
     /// mutating whatever the results reflect (delete, toggle, mark-done).
     RefreshResults {},
+    /// Move the selection highlight back to the first result. The launcher
+    /// otherwise keeps the cursor where it was across a requery, so a drill-in
+    /// that swaps the whole result set (e.g. opening a playlist's tracks) would
+    /// inherit the row index the user was on. Pair with `SetQuery`/`KeepOpen`
+    /// when navigating into a new list so it starts at the top. No permission
+    /// needed.
+    SelectFirst {},
     /// Replace the launcher query text (`""` clears it) and re-run the current
     /// scope's search - even when the text is unchanged, so a drill-down that
     /// resets an already-empty box still refreshes. Implies the window stays

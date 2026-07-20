@@ -111,10 +111,31 @@ pub struct CommandSpec {
     /// Invalid or reserved chords are dropped at load with a log note.
     #[serde(default)]
     pub default_shortcut: Option<String>,
+    /// Whether this command's results take part in frecency (both recording a
+    /// launch and receiving a usage-history ranking bonus). Default true. Set
+    /// `frecency = false` for commands whose result order is intrinsic and must
+    /// not be reshuffled by history - e.g. a live play queue, where position is
+    /// the meaning and a frequently-skipped track floating to the top is wrong.
+    #[serde(default = "default_true")]
+    pub frecency: bool,
+    /// Whether this command's result *set* changes underneath the launcher
+    /// (membership, not just content) - e.g. a live queue that advances on its
+    /// own. Default false. When true the launcher replaces this scope's rows
+    /// with each streamed batch instead of merging by id, so rows that dropped
+    /// out don't linger (a just-finished track stuck showing "now playing").
+    /// A volatile command must therefore emit its FULL result set per batch,
+    /// not incremental partials. Leave false for stable-membership scopes,
+    /// where merge-in-place avoids resetting the selection on an idle requery.
+    #[serde(default)]
+    pub volatile: bool,
 }
 
 fn default_command_mode() -> String {
     "scope".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl CommandSpec {

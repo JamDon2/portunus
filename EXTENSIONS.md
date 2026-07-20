@@ -239,6 +239,27 @@ the launcher — entering a scope, or running an `action` command one-shot).
 Same canonical chord form and host validation as result-action `shortcut`s;
 users override or clear it in Settings → Keybinds (`[keybinds.commands]`).
 
+**`frecency`** on a `[[commands]]` entry (default `true`) controls whether the
+command's results take part in frecency — both recording a launch on activate
+and receiving a usage-history ranking bonus. Set `frecency = false` for
+commands whose result order is intrinsic and must not be reshuffled by history
+— e.g. a live play queue, where position *is* the meaning and a
+frequently-activated row floating to the top would be wrong. Such results also
+keep stable ids across a `refresh_results`, so the list updates in place
+instead of stacking.
+
+**`volatile`** on a `[[commands]]` entry (default `false`) marks a scope whose
+result *set* changes underneath the launcher — membership, not just content
+(again, a live queue: it advances when a track ends, shrinks on skip). Normally
+a requery merges new batches over the visible rows without dropping any, so a
+row that left the set would linger (e.g. a just-finished track stuck showing
+"now playing"). `volatile = true` makes the launcher **replace** this scope's
+rows with each streamed batch instead of merging — the fresh set swaps in
+atomically (no blank frame, no lingering rows). A volatile command must
+therefore emit its **full** result set on every `emit` (not incremental
+partials). Leave it `false` for stable-membership scopes, where merge-in-place
+avoids resetting the selection on an idle requery.
+
 **Multiple commands** share one wasm module; dispatch on the wire's `command`
 field (the `[[commands]]` entry's `name`) in `search`/`activate`/`preview`/
 `query`. See the `gh` extension in the

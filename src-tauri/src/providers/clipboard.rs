@@ -588,6 +588,7 @@ impl Provider for ClipboardProvider {
             default_shortcut: None,
             opens_form: false,
             uncapped: false,
+            volatile: false,
             route: CommandRoute::UiTakeover,
         }]
     }
