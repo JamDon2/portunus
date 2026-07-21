@@ -16,7 +16,7 @@ use std::time::Duration;
 use extism::{CancelHandle, CompiledPlugin, Manifest as WasmManifest, Plugin, PluginBuilder, UserData, Wasm};
 use portunus_ext_sdk::{
     ActivateEffect, ActivateInput, ActivateOutput, ExtensionResult, PreviewContent, PreviewInput,
-    QueryInput, QueryOutput, RefreshInput, SearchInput, SearchOutput,
+    QueryInput, QueryOutput, RefreshInput, ScopeContext, SearchInput, SearchOutput,
 };
 
 use super::breaker::FailureBreaker;
@@ -707,7 +707,9 @@ impl WasmProvider {
                 | ActivateEffect::KeepOpen {}
                 | ActivateEffect::RefreshResults {}
                 | ActivateEffect::SelectFirst {}
-                | ActivateEffect::SetQuery { .. }) => out.push(effect),
+                | ActivateEffect::SetQuery { .. }
+                | ActivateEffect::PushScope { .. }
+                | ActivateEffect::PopScope {}) => out.push(effect),
             }
         }
         out
@@ -850,6 +852,7 @@ impl WasmProvider {
         intent: bool,
         generation: u64,
         current: Arc<AtomicU64>,
+        scope_data: Option<String>,
         mut sink: impl FnMut(Vec<SearchResult>) + Send + 'static,
     ) -> Result<Vec<SearchResult>, String> {
         if self.query_disabled() {
@@ -861,6 +864,12 @@ impl WasmProvider {
             command: command.clone(),
             query: gc.gated.query,
             raw_query: gc.gated.raw_query,
+            // Same frame convention as `search_gated`: `None` in root fan-out
+            // (`!intent`), depth 1 for a data-less frame, 2 when drilled in.
+            scope: intent.then(|| ScopeContext {
+                depth: if scope_data.is_some() { 2 } else { 1 },
+                data: scope_data,
+            }),
         })
         .map_err(|e| e.to_string())?;
 
@@ -1018,12 +1027,27 @@ impl WasmProvider {
     /// Runs the extension's `search` export for a gated command. `intent` is
     /// true when the user explicitly invoked the command (typed prefix or an
     /// entered mode) - always-mode invocations band lower.
-    pub fn search_gated(&self, gc: GatedCommand, intent: bool) -> Vec<SearchResult> {
+    ///
+    /// `scope_data` is the opaque blob of the active scope frame (from a
+    /// `PushScope`); it only reaches the guest on the scope path (`intent`).
+    /// Root fan-out passes `None` and the guest sees `scope: None`.
+    pub fn search_gated(
+        &self,
+        gc: GatedCommand,
+        intent: bool,
+        scope_data: Option<String>,
+    ) -> Vec<SearchResult> {
         let command = gc.command;
         let input = match serde_json::to_string(&SearchInput {
             command: command.clone(),
             query: gc.gated.query,
             raw_query: gc.gated.raw_query,
+            // The host does not track the full stack: a data-less top-level
+            // frame is depth 1, a drilled-in (data-carrying) frame is depth 2.
+            scope: intent.then(|| ScopeContext {
+                depth: if scope_data.is_some() { 2 } else { 1 },
+                data: scope_data,
+            }),
         }) {
             Ok(j) => j,
             Err(_) => return Vec::new(),

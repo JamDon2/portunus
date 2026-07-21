@@ -247,6 +247,17 @@ export interface ToastDto {
   level: ToastLevel;
 }
 
+/** A scope frame to push (PushScope effect). `command` = null drills deeper
+ *  into the current command; a name/id enters another command's scope. `data`
+ *  is the opaque per-frame blob forwarded to the scoped search. */
+export interface PushScopeDto {
+  command: string | null;
+  data: string | null;
+  chip: string | null;
+  placeholder: string | null;
+  query: string | null;
+}
+
 /** Response of the `extension_activate` command; side effects already ran. */
 export interface ActivateResponse {
   hide: boolean;
@@ -256,6 +267,10 @@ export interface ActivateResponse {
   setQuery: string | null;
   /** Reset the selection highlight to the first result (SelectFirst effect). */
   selectFirst: boolean;
+  /** Push a new scope frame onto the launcher's stack (drill-in menuing). */
+  pushScope?: PushScopeDto | null;
+  /** Pop one scope frame off the stack (native "back"). */
+  popScope: boolean;
 }
 
 /** One `[[settings]]` entry from an extension's manifest. */

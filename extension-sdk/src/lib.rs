@@ -11,7 +11,30 @@
 use serde::{Deserialize, Serialize};
 
 /// Wire-contract major version. Bumped only on breaking changes.
-pub const API_VERSION: u32 = 5;
+pub const API_VERSION: u32 = 6;
+
+/// Context describing the scope frame a `search`/`query` call runs under.
+///
+/// `None` on the input means the call is a root-search discovery hit (an
+/// `always = true` command running in root, before the user has entered any
+/// scope). `Some` means the user is inside this command's scope; `data` is the
+/// opaque blob attached to the active scope frame by a
+/// [`ActivateEffect::PushScope`] (e.g. a playlist id to drill into), and
+/// `depth` is the 1-based nesting depth of the scope stack.
+///
+/// This lets an extension serve different views from the same command without
+/// a KV side-channel: dispatch on `scope.is_none()` for root vs entered, and on
+/// `scope.data` for which sub-view (list vs a specific item's children).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScopeContext {
+    /// Opaque per-frame blob set by [`ActivateEffect::PushScope`]. `None` in a
+    /// data-less frame (e.g. the top-level scope entered from the command).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    /// 1-based depth of the active scope frame in the stack.
+    #[serde(default)]
+    pub depth: u32,
+}
 
 /// Input to the extension's exported `search` function.
 ///
@@ -27,6 +50,11 @@ pub struct SearchInput {
     pub query: String,
     #[serde(default)]
     pub raw_query: String,
+    /// Scope frame this call runs under. `None` = root-search discovery (an
+    /// `always` command); `Some` = the user has entered this command's scope.
+    /// See [`ScopeContext`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ScopeContext>,
 }
 
 /// Output of the extension's exported `search` function.
@@ -117,6 +145,10 @@ pub struct QueryInput {
     pub query: String,
     #[serde(default)]
     pub raw_query: String,
+    /// Scope frame this call runs under; see [`SearchInput::scope`] and
+    /// [`ScopeContext`]. `None` = root-search discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ScopeContext>,
 }
 
 /// Output of the optional exported `query` function: the final result batch.
@@ -202,6 +234,24 @@ impl ActivateOutput {
     /// Convenience: replace the launcher query text. Pass "" to clear it.
     pub fn set_query(query: impl Into<String>) -> Self {
         Self::single(ActivateEffect::SetQuery { query: query.into() })
+    }
+
+    /// Convenience: push a new scope frame carrying `data`, staying in the
+    /// current command. Clears the query box. Use for a native drill-in
+    /// (list -> a specific item's children). See [`ActivateEffect::PushScope`].
+    pub fn push_scope(data: impl Into<String>, chip: impl Into<String>) -> Self {
+        Self::single(ActivateEffect::PushScope {
+            command: None,
+            data: Some(data.into()),
+            chip: Some(chip.into()),
+            placeholder: None,
+            query: Some(String::new()),
+        })
+    }
+
+    /// Convenience: pop one scope frame (native "back"). Empty stack -> root.
+    pub fn pop_scope() -> Self {
+        Self::single(ActivateEffect::PopScope {})
     }
 
     /// Convenience: show a toast at the given level.
@@ -294,6 +344,36 @@ pub enum ActivateEffect {
     /// resets an already-empty box still refreshes. Implies the window stays
     /// open; pair with `KeepOpen`. No permission needed.
     SetQuery { query: String },
+    /// Push a new scope frame onto the launcher's scope stack. Use for native
+    /// menuing: entering a list, then drilling into one item's children as a
+    /// nested frame instead of stashing the target in a KV side-channel.
+    ///
+    /// `command` = `None` pushes another frame of the *current* command (a
+    /// drill-in that varies only by `data`); `Some(name)` enters a different
+    /// command's scope. `data` is the opaque blob handed back to `search`/`query`
+    /// as [`ScopeContext::data`] for the new frame. `chip` overrides the
+    /// breadcrumb segment label (defaults to the command's chip); `placeholder`
+    /// overrides the input placeholder; `query` seeds the filter box (defaults
+    /// to clearing it). Implies the window stays open. No permission needed.
+    ///
+    /// Back-navigation is native: Esc / empty-query Backspace pops the frame, or
+    /// emit [`ActivateEffect::PopScope`] explicitly.
+    PushScope {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chip: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+    /// Pop one scope frame off the stack (native "back"). When the stack empties
+    /// the launcher returns to root search. Implies the window stays open. No
+    /// permission needed.
+    PopScope {},
     /// Put `text` on the clipboard and inject a paste chord (Ctrl+V) into the
     /// previously focused window. Requires `paste = true` in the manifest
     /// permissions. Clobbers the clipboard; falls back to a "Copied - press

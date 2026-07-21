@@ -151,6 +151,8 @@ impl QueryManager {
                 frecency.clone(),
                 Arc::clone(&weights),
                 raw_query.to_string(),
+                // Root dispatch has no scope frame; the guest sees `scope: None`.
+                None,
             );
         }
         pending
@@ -159,13 +161,15 @@ impl QueryManager {
     /// Scoped variant for an entered extension command mode: cancels all
     /// workers, then spawns only the target extension with the command forced
     /// (the whole query is the command's input). Same epoch/reorder guards as
-    /// `dispatch`.
+    /// `dispatch`. `scope_data` is the active scope frame's opaque blob, handed
+    /// to the guest as `QueryInput.scope`.
     pub fn dispatch_scoped(
         &self,
         query_id: u64,
         ext_name: &str,
         command: &str,
         query: &str,
+        scope_data: Option<String>,
         registry: &PluginRegistry,
     ) -> Vec<PendingExt> {
         let prev = self.last_query_id.fetch_max(query_id, Ordering::Relaxed);
@@ -204,6 +208,7 @@ impl QueryManager {
             frecency,
             weights,
             String::new(),
+            scope_data,
         );
         pending
     }
@@ -222,6 +227,7 @@ impl QueryManager {
         frecency: Option<Arc<crate::frecency::FrecencyStore>>,
         weights: Arc<std::sync::RwLock<providers::ranking::RankingWeights>>,
         pin_query: String,
+        scope_data: Option<String>,
     ) {
         crate::util::lock(&self.slots).insert(name.clone(), provider.clone());
 
@@ -273,7 +279,8 @@ impl QueryManager {
                 }
             };
 
-            let outcome = provider.run_query(gc, intent, generation, epoch.clone(), sink);
+            let outcome =
+                provider.run_query(gc, intent, generation, epoch.clone(), scope_data, sink);
             // Final flush: buffered partials + the returned final batch.
             let mut tail = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
             match outcome {

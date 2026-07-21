@@ -651,6 +651,21 @@ pub struct ActivateResponse {
     pub set_query: Option<String>,
     /// Reset the selection highlight to the first result (SelectFirst effect).
     pub select_first: bool,
+    /// Push a new scope frame onto the launcher's stack (PushScope effect).
+    pub push_scope: Option<PushScopeResp>,
+    /// Pop one scope frame off the stack (PopScope effect).
+    pub pop_scope: bool,
+}
+
+/// A scope frame to push, mirrored from [`ActivateEffect::PushScope`].
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PushScopeResp {
+    pub command: Option<String>,
+    pub data: Option<String>,
+    pub chip: Option<String>,
+    pub placeholder: Option<String>,
+    pub query: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -716,6 +731,8 @@ fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateRespo
     let mut refresh_results = false;
     let mut set_query: Option<String> = None;
     let mut select_first = false;
+    let mut push_scope: Option<PushScopeResp> = None;
+    let mut pop_scope = false;
     let (mut explicit_hide, mut keep_open) = (false, false);
     for effect in effects {
         match effect {
@@ -769,6 +786,16 @@ fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateRespo
             // Last set_query wins; the frontend forces a re-search after
             // applying it (so an unchanged/empty value still refreshes).
             ActivateEffect::SetQuery { query } => set_query = Some(query),
+            // Scope nav keeps the window open by default (the launcher stays
+            // up to render the new frame).
+            ActivateEffect::PushScope { command, data, chip, placeholder, query } => {
+                push_scope = Some(PushScopeResp { command, data, chip, placeholder, query });
+                keep_open = true;
+            }
+            ActivateEffect::PopScope {} => {
+                pop_scope = true;
+                keep_open = true;
+            }
         }
     }
     if form.is_some() && explicit_hide {
@@ -790,7 +817,16 @@ fn run_activate_effects(id: &str, effects: Vec<ActivateEffect>) -> ActivateRespo
             );
         }
     }
-    ActivateResponse { hide, form, toasts, refresh_results, set_query, select_first }
+    ActivateResponse {
+        hide,
+        form,
+        toasts,
+        refresh_results,
+        set_query,
+        select_first,
+        push_scope,
+        pop_scope,
+    }
 }
 
 /// Extension name from an `ext:<name>:<local>` result id (for log routing).

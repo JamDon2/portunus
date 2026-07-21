@@ -69,6 +69,7 @@ fn search(
     query: String,
     query_id: u64,
     scope: Option<String>,
+    scope_data: Option<String>,
     registry: tauri::State<'_, Registry>,
 ) -> SearchResponse {
     let t = util::profile_search().then(std::time::Instant::now);
@@ -77,16 +78,19 @@ fn search(
         // A Scope command is active: route the whole query to its owner. No
         // root fan-out, no command entries. Extension scopes also dispatch
         // the async `query` tier (streaming), scoped to that one extension.
+        // `scope_data` is the active scope frame's opaque blob (from a
+        // PushScope), forwarded to both tiers.
         Some(scope_id) => {
             let pending = scope_id
                 .strip_prefix("ext:")
                 .and_then(|rest| rest.split_once(":cmd:"))
                 .and_then(|(ext_name, cmd)| {
-                    extensions::query::manager()
-                        .map(|qm| qm.dispatch_scoped(query_id, ext_name, cmd, &query, &reg))
+                    extensions::query::manager().map(|qm| {
+                        qm.dispatch_scoped(query_id, ext_name, cmd, &query, scope_data.clone(), &reg)
+                    })
                 })
                 .unwrap_or_default();
-            (reg.search_scope(scope_id, &query), pending)
+            (reg.search_scope(scope_id, &query, scope_data), pending)
         }
         // Root search. Async tier first: cancels stale workers and spawns new
         // ones, so their wall-clock overlaps the sync fan-out.

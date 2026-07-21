@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Config, SearchResult, SearchResponse, StreamPayload, ClipboardCapabilities, CommandDescriptor, ActivateResponse, ExtensionResult, FormDto, ToastLevel } from "./types";
+import { Config, SearchResult, SearchResponse, StreamPayload, ClipboardCapabilities, CommandDescriptor, ActivateResponse, PushScopeDto, ExtensionResult, FormDto, ToastLevel } from "./types";
 import { commandById } from "./commands/store";
 import ClipboardMode from "./components/clipboard/ClipboardMode";
 import { applyTheme, injectMatugenTheme } from "./theme";
@@ -65,10 +65,19 @@ interface ActiveExtForm {
   form: FormDto;
 }
 
-// Active launcher mode: a Scope command the user entered. Null = root search.
-interface ActiveMode {
+// One frame on the scope stack: a Scope command the user drilled into, plus
+// the opaque per-frame blob that parameterizes its search and the breadcrumb/
+// placeholder overrides carried by the PushScope that created it. An empty
+// stack = root search; each frame is one level deep (list → item's children).
+interface ScopeFrame {
   command: CommandDescriptor;
-  /** Entered via `portunus --clipboard`, so Esc hides the window. */
+  /** Opaque per-frame blob forwarded to the scoped search (PushScope data). */
+  data?: string;
+  /** Breadcrumb segment label override (defaults to command.chip). */
+  chip?: string;
+  /** Input placeholder override (defaults to command.placeholder). */
+  placeholder?: string;
+  /** Entered via `portunus --clipboard`, so exiting the last frame hides. */
   fromFlag?: boolean;
 }
 
@@ -148,14 +157,31 @@ export default function App() {
   // doesn't look frozen during the extension's network I/O.
   const [activatePending, setActivatePending] = useState(false);
 
-  // Single active-mode scalar: the Scope command the user is inside, or null
-  // for root search. UI-takeover scopes (clipboard) swap in their own
-  // component and own input handling; every other scope reuses the normal
-  // results list with the search routed to the command's owner.
-  const [mode, setMode] = useState<ActiveMode | null>(null);
-  const modeRef = useRef<ActiveMode | null>(null);
-  useEffect(() => { modeRef.current = mode; }, [mode]);
-  const isTakeover = (m: ActiveMode | null) => m?.command.route.type === "ui_takeover";
+  // Scope stack: each Scope command the user has drilled into, deepest last.
+  // Empty = root search. Extensions drive native menuing by pushing a frame
+  // (drill into a list item, carrying opaque `data`) and popping it (back).
+  // The top frame is the active scope; `mode` derives it so the many
+  // `mode?.command…` read-sites need no change. UI-takeover scopes (clipboard)
+  // swap in their own component and own input handling; every other scope
+  // reuses the normal results list with the search routed to the frame's owner.
+  const [modeStack, setModeStack] = useState<ScopeFrame[]>([]);
+  const mode = modeStack.length ? modeStack[modeStack.length - 1] : null;
+  // Refs mirroring the stack (and its top) for reads inside effects/listeners.
+  const modeStackRef = useRef<ScopeFrame[]>([]);
+  const modeRef = useRef<ScopeFrame | null>(null);
+  useEffect(() => {
+    modeStackRef.current = modeStack;
+    modeRef.current = modeStack.length ? modeStack[modeStack.length - 1] : null;
+  }, [modeStack]);
+  // Apply a new stack, syncing the refs synchronously so a requery() fired in
+  // the same tick reads the new top frame (the mirror effect above lands only
+  // on the next render).
+  const applyStack = (next: ScopeFrame[]) => {
+    modeStackRef.current = next;
+    modeRef.current = next.length ? next[next.length - 1] : null;
+    setModeStack(next);
+  };
+  const isTakeover = (m: ScopeFrame | null) => m?.command.route.type === "ui_takeover";
   const inClipboard = isTakeover(mode);
   const inContents = mode?.command.id === "cmd:contents";
   // A "browse" scope (min_query_len 0) renders its list the moment it's entered,
@@ -173,7 +199,8 @@ export default function App() {
       capsFetched.current = true;
       invoke<ClipboardCapabilities>("clipboard_capabilities").then(setClipCaps).catch(() => {});
     }
-    setMode({ command, fromFlag: opts.fromFlag });
+    // Entering a scope from root: a fresh single-frame stack (depth 1).
+    applyStack([{ command, fromFlag: opts.fromFlag }]);
     if (opts.seed !== undefined) setQuery(opts.seed);
     setResults([]);
     setResolvedEmpty(false);
@@ -190,17 +217,32 @@ export default function App() {
     if (cmd) enterMode(cmd, { seed });
   };
 
-  // Leaves whatever mode is active. Takeover scopes clear the query (their
-  // filter is mode-local); others keep it so the search re-runs at root.
+  // Backs out one scope level (Esc on an empty query, Backspace, PopScope).
+  // Pops the top frame; if the stack empties we're back at root - takeover
+  // scopes clear the query (their filter is mode-local) and a --clipboard flag
+  // entry hides, everything else keeps the query so root search re-runs. When a
+  // parent frame remains we clear the filter and re-run its scoped search.
   const exitMode = () => {
-    const m = modeRef.current;
-    setMode(null);
+    const stack = modeStackRef.current;
+    if (stack.length === 0) return;
+    const popped = stack[stack.length - 1];
+    const next = stack.slice(0, -1);
+    applyStack(next);
     setResults([]);
     setResolvedEmpty(false);
-    if (isTakeover(m)) {
-      setQuery("");
-      if (m?.fromFlag) { invoke("hide_window"); return; }
+    if (next.length === 0) {
+      if (isTakeover(popped)) {
+        setQuery("");
+        if (popped.fromFlag) { invoke("hide_window"); return; }
+      }
+      inputRef.current?.focus();
+      return;
     }
+    // Popped to a still-active parent frame: clear the filter and re-run its
+    // scoped search (requery reads the now-synced top frame from modeRef).
+    setQuery("");
+    queryRef.current = "";
+    requery();
     inputRef.current?.focus();
   };
 
@@ -236,7 +278,7 @@ export default function App() {
     if (command.route.type === "invoke") {
       const tauriCmd = command.route.command;
       const args = command.route.args ?? {};
-      setMode(null);
+      applyStack([]);
       setQuery("");
       setResults([]);
       invoke(tauriCmd, args).catch(e => console.error(`[command] invoke ${tauriCmd} failed:`, e));
@@ -361,7 +403,7 @@ export default function App() {
     selection.clear();
     // A plain `--show` always opens the clean launcher, never a stale clipboard
     // session. (`--clipboard` uses window-show-query, which re-enters the mode.)
-    setMode(null);
+    applyStack([]);
     setActionPanel(null);
     setExtForm(null);
     setQuery("");
@@ -458,7 +500,8 @@ export default function App() {
       setExtErrors(new Map());
       doneExtsRef.current = new Set();
       const scope = mode?.command.id ?? null;
-      invoke<SearchResponse>("search", { query, queryId, scope }).then(resp => {
+      const scopeData = mode?.data ?? null;
+      invoke<SearchResponse>("search", { query, queryId, scope, scopeData }).then(resp => {
         if (cancelled || resp.query_id !== queryIdRef.current) return;
         setResults(resp.results);
         setPendingExts(new Set(
@@ -682,6 +725,7 @@ export default function App() {
       !!m && m.command.id !== "cmd:contents" && (m.command.min_query_len ?? 1) === 0;
     if (!q.trim() && !browseScope) return;
     const scope = m?.command.id ?? null;
+    const scopeData = m?.data ?? null;
     const queryId = ++queryIdRef.current;
     // Same event-vs-response race as the main search effect: reset done-set
     // at dispatch, filter pending against it. Unlike a keystroke, the query
@@ -702,7 +746,7 @@ export default function App() {
       setExtErrors(new Map());
     }
     doneExtsRef.current = new Set();
-    invoke<SearchResponse>("search", { query: q, queryId, scope }).then(resp => {
+    invoke<SearchResponse>("search", { query: q, queryId, scope, scopeData }).then(resp => {
       if (resp.query_id !== queryIdRef.current) return;
       setResults(resp.results);
       setPendingExts(new Set(
@@ -781,6 +825,43 @@ export default function App() {
     win.show().then(() => win.setFocus()).catch(() => {});
   };
 
+  // Resolves the CommandDescriptor for a PushScope frame from the shared
+  // command catalog (same store mode-entry/runCommand use). `req` is the
+  // activation that produced the effect - its `id` (`ext:<name>:...`) and
+  // `command` give the owning extension/command even at root, where there is
+  // no active scope frame (a playlist matched in root search, then drilled in).
+  //
+  // A null `push.command` drills deeper in the current command: reuse the top
+  // frame's descriptor, else the activated result's own command. A set command
+  // is a bare name resolved within the same extension (`ext:<name>:cmd:<cmd>`),
+  // or a full descriptor id. Returns null when nothing resolves (caller no-ops).
+  const resolvePushFrame = (push: PushScopeDto, req: ExtActivateRequest): ScopeFrame | null => {
+    const top = modeStackRef.current[modeStackRef.current.length - 1] ?? null;
+    // Extension namespace of the context: prefer the active frame, fall back to
+    // the activated result's id (always `ext:<name>:...`).
+    const extName =
+      (top?.command.id.startsWith("ext:") ? top.command.id.split(":")[1] : undefined) ??
+      (req.id.startsWith("ext:") ? req.id.split(":")[1] : undefined);
+    const inExt = (name: string): CommandDescriptor | undefined =>
+      extName ? commandById(`ext:${extName}:cmd:${name}`) : undefined;
+
+    let command: CommandDescriptor | undefined;
+    if (push.command) {
+      command = commandById(push.command) ?? inExt(push.command);
+    } else {
+      // Reuse the current frame's command, else the command that owns the
+      // activated result (the root drill-in case).
+      command = top?.command ?? (req.command ? inExt(req.command) : undefined);
+    }
+    if (!command) return null;
+    return {
+      command,
+      data: push.data ?? undefined,
+      chip: push.chip ?? undefined,
+      placeholder: push.placeholder ?? undefined,
+    };
+  };
+
   // Every extension activation (Enter, action picker, action command, form
   // submit) funnels through here. The window hides optimistically after
   // ACTIVATE_HIDE_MS so dismissal feels instant even when the extension does
@@ -832,6 +913,33 @@ export default function App() {
         selectedIdRef.current = null;
         userMovedRef.current = false;
         setSelectedIndex(0);
+      }
+      // Scope stack nav (native menuing). Both keep the window open (the host
+      // set hide=false), so they slot in ahead of the hide handling below.
+      if (resp.pushScope) {
+        const frame = resolvePushFrame(resp.pushScope, req);
+        if (frame) {
+          // Drill into a new frame: seed its filter, reset the cursor to the
+          // top, and re-run for the new scope (requery reads the synced top).
+          const seed = resp.pushScope.query ?? "";
+          queryRef.current = seed;
+          setQuery(seed);
+          applyStack([...modeStackRef.current, frame]);
+          selectedIdRef.current = null;
+          userMovedRef.current = false;
+          setSelectedIndex(0);
+          requery();
+        } else {
+          console.warn(`[extension] push_scope: could not resolve command "${resp.pushScope.command}"`);
+        }
+      }
+      if (resp.popScope && modeStackRef.current.length > 0) {
+        // Programmatic "back": pop one frame like an Esc pop. exitMode clears
+        // the query and re-runs for the now-top frame (or lands at root).
+        selectedIdRef.current = null;
+        userMovedRef.current = false;
+        setSelectedIndex(0);
+        exitMode();
       }
       if (resp.form) {
         setExtForm({ id: req.id, ext: req.ext, command: req.command, form: resp.form });
@@ -1322,13 +1430,17 @@ export default function App() {
             </svg>
           )}
           <div className="search-input-area">
-            {mode && <span className="search-hint-chip" style={{ marginLeft: 0, marginRight: 10 }}>{mode.command.chip}</span>}
+            {modeStack.length > 0 && (
+              <span className="search-hint-chip" style={{ marginLeft: 0, marginRight: 10 }}>
+                {modeStack.map(f => f.chip ?? f.command.chip).join(" › ")}
+              </span>
+            )}
             <span ref={mirrorRef} className="input-mirror" aria-hidden="true">{query}</span>
             <input
               ref={inputRef}
               className="search-input"
               type="text"
-              placeholder={mode ? (mode.command.placeholder ?? `Search ${mode.command.title.toLowerCase()}…`) : (loading ? "Loading…" : "Search…")}
+              placeholder={mode ? (mode.placeholder ?? mode.command.placeholder ?? `Search ${mode.command.title.toLowerCase()}…`) : (loading ? "Loading…" : "Search…")}
               value={query}
               onChange={e => setQuery(e.target.value)}
               autoFocus
@@ -1346,8 +1458,8 @@ export default function App() {
             capabilities={clipCaps}
             onExit={exitMode}
             onClearQuery={() => setQuery("")}
-            onDeleteTag={() => { setMode(null); setQuery(""); setResults([]); inputRef.current?.focus(); }}
-            onPasted={() => { setMode(null); setQuery(""); setResults([]); }}
+            onDeleteTag={() => { applyStack([]); setQuery(""); setResults([]); inputRef.current?.focus(); }}
+            onPasted={() => { applyStack([]); setQuery(""); setResults([]); }}
           />
         ) : (
         <div className="body">
@@ -1440,7 +1552,7 @@ export default function App() {
               onClick={() => {
                 // Leave any active mode and clear the query so the launcher is
                 // clean when it's next shown over (or instead of) the settings window.
-                setMode(null);
+                applyStack([]);
                 setQuery("");
                 setResults([]);
                 invoke("open_settings_window").catch(e => console.error("[settings] open failed:", e));

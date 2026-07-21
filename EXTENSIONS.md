@@ -42,7 +42,7 @@ arrive enabled. Dropping a folder never runs code.
 ## manifest.toml
 
 ```toml
-api = 5                        # REQUIRED: wire API major; unknown majors are rejected
+api = 6                        # REQUIRED: wire API major; unknown majors are rejected
 name = "emoji"                 # must match the directory name; [a-zA-Z0-9_-] only
 version = "0.2.0"
 description = "Search and copy emoji"
@@ -220,11 +220,28 @@ Inside a scope, your `search` receives the whole typed term (`query` and
 
 | User did | Your `search` gets |
 |---|---|
-| opened "Search Emoji", typed `smi` | `{ "command": "search", "query": "smi", "raw_query": "smi" }` |
+| opened "Search Emoji", typed `smi` | `{ "command": "search", "query": "smi", "raw_query": "smi", "scope": { "depth": 1 } }` |
 | opened "Search Emoji", empty input | `{ "command": "search", "query": "", … }` — return default/popular results (or nothing) |
 
 Scope results rank in the launcher's intent band (above apps, calc and dict)
 because the user explicitly entered your command.
+
+**`scope` context** (on `SearchInput`/`QueryInput`) tells you *where* the call
+comes from. It is `null` for a root-search hit (an `always` command running
+before any scope is entered) and `{ data?, depth }` once the user is inside your
+command's scope. Dispatch on `scope.is_none()` for root vs entered, and on
+`scope.data` — the opaque blob a `push_scope` effect attached to the frame — for
+*which* sub-view to render. This is how the same command serves a list and a
+drilled-in item without a KV side-channel.
+
+**Native menuing** (list → drill in → back): return items from `search`/`query`;
+when the user opens one, answer `activate` with a `push_scope` effect carrying
+that item's id in `data` (and its title as `chip`). The launcher pushes a scope
+frame — showing a breadcrumb chip — and re-queries; your handler reads
+`scope.data` and emits that item's children. Esc / empty-query Backspace pops the
+frame (or emit `pop_scope`). No `set_query`+KV trick, no synthetic back row. The
+`ytm` reference extension's library command works exactly this way; mark a scope
+whose membership swaps wholesale between frames `volatile = true`.
 
 **`always` commands** are the one exception that runs in root search: set
 `always = true` and your `search` runs on *every keystroke* with the raw query,
@@ -393,6 +410,8 @@ launches an OS program):
 | `keep_open` | — | keep the launcher open (toggle-style actions) |
 | `refresh_results` | — | re-run the current query (after delete/toggle/mark-done actions) |
 | `set_query` | `query` | replace the launcher query text (`""` clears it) and re-run the current scope's search — refreshes even when the text is unchanged (e.g. drill-down menus that reset an already-empty box). Implies the window stays open (pair with `keep_open`); ignored when the activation also hides |
+| `push_scope` | `command?`, `data?`, `chip?`, `placeholder?`, `query?` | push a new scope frame for **native menuing** (see below). `command` omitted → another frame of the *current* command (drill-in that differs only by `data`); set → enter another command's scope. `data` is the opaque blob handed back as `scope.data`; `chip`/`placeholder` override the breadcrumb segment and input placeholder; `query` seeds the filter box (`""` clears). Implies the window stays open |
+| `pop_scope` | — | pop one scope frame (native "back"); an empty stack returns to root. Implies the window stays open |
 | `paste` | `text` | copy + synthetic Ctrl+V into the previously focused window; **requires `paste = true` in `[permissions]`**. Clobbers the clipboard; falls back to a "Copied — press Ctrl+V" notification on compositors without the virtual-keyboard protocol (e.g. GNOME) |
 | `spawn_process` | `command`, `args` | ⚠ **sandbox-breaking** — launch an OS program (argv, never a shell), detached and fire-and-forget. `command` must appear verbatim in the `spawn` allowlist in `[permissions]` or the effect is dropped. See [`spawn`](#-spawn--running-os-processes-breaks-the-sandbox) |
 

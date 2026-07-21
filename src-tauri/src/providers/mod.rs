@@ -433,7 +433,8 @@ impl PluginRegistry {
                 let ext = ext.clone();
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let _ = tx.send(ext.search_gated(gc, false));
+                    // Root fan-out: no scope frame, so the guest sees `scope: None`.
+                    let _ = tx.send(ext.search_gated(gc, false, None));
                 });
                 spawned += 1;
             }
@@ -537,7 +538,12 @@ impl PluginRegistry {
     /// descriptor id). Routes to the owning provider/extension; results keep
     /// the provider's own ranking (no frecency/dict-fill - scopes are already
     /// intent-filtered). Unknown ids return empty.
-    pub fn search_scope(&self, command_id: &str, query: &str) -> Vec<SearchResult> {
+    pub fn search_scope(
+        &self,
+        command_id: &str,
+        query: &str,
+        scope_data: Option<String>,
+    ) -> Vec<SearchResult> {
         let commands = self.commands();
         let Some(cmd) = commands.iter().find(|c| c.id == command_id) else {
             return Vec::new();
@@ -554,7 +560,7 @@ impl PluginRegistry {
             command::CommandRoute::Extension { name, command } => match self.extensions.get(name) {
                 Some(ext) if !ext.is_benched() => ext
                     .gate_scoped(command, query)
-                    .map(|gc| ext.search_gated(gc, true))
+                    .map(|gc| ext.search_gated(gc, true, scope_data))
                     .unwrap_or_default(),
                 _ => Vec::new(),
             },

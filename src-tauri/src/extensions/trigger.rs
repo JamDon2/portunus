@@ -81,6 +81,8 @@ mod tests {
             icon: None,
             opens_form: false,
             default_shortcut: None,
+            frecency: true,
+            volatile: false,
         }
     }
 
